@@ -1,13 +1,13 @@
 // The long-run and idle-slot notices: their text, the per-slot CPU sampling that finds a quiet job, and the store
 // of notices already sent, a folder in the state folder.
-import { clockTime } from "./clock.mjs";
-import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
-import { probeProcessCpu } from "./probes.mjs";
-import { psRows } from "./ps.mjs";
-import { jobCpu } from "./proctree.mjs";
 import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { clockTime } from "./clock.mjs";
 import { tempName } from "./files.mjs";
+import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
+import { probeProcessCpu } from "./probes.mjs";
+import { jobCpu } from "./proctree.mjs";
+import { psRows } from "./ps.mjs";
 import { MINUTE } from "./units.mjs";
 
 function heldUpText(waiting, now) {
