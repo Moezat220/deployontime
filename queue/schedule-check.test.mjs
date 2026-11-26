@@ -1,7 +1,7 @@
 // The checks run on made-up jobs. Only the last test starts the real script, with --dry, which reads and never writes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -116,7 +116,7 @@ const readers = (overrides = {}) => ({
 
 test("checkAll: judges each job file in name order, honouring skip rules", () => {
     assert.deepEqual(checkAll(readers()), {
-        error: null,
+        error: null, warnings: [],
         results: [
             { label: LABEL, ok: true, problems: [], log: "/var/log/tasks/cleanup.log" },
             { label: "c-broken.plist", ok: false, problems: ["job file unreadable"], log: null },
@@ -127,12 +127,21 @@ test("checkAll: judges each job file in name order, honouring skip rules", () =>
 });
 
 test("checkAll: reports that the job list could not be read, not every job as unloaded", () => {
-    assert.deepEqual(checkAll(readers({ status: () => null })), { results: [], error: LIST_ERROR });
+    assert.deepEqual(checkAll(readers({ status: () => null })), { results: [], error: LIST_ERROR, warnings: [] });
     assert.equal(LIST_ERROR, "could not read the job list");
 });
 
 test("checkAll: no job folder means no jobs and no error", () => {
-    assert.deepEqual(checkAll(readers({ list: () => { throw new Error("absent"); }, status: assert.fail })), { results: [], error: null });
+    assert.deepEqual(checkAll(readers({ list: () => { throw new Error("absent"); }, status: assert.fail })), { results: [], error: null, warnings: [] });
+});
+
+test("checkAll: a rules file that cannot be used is passed on as a warning, also when the job list fails", () => {
+    const broken = join(tempDir("schedule"), "rules.json");
+    writeFileSync(broken, "{");
+    const withoutRules = readers({ warn: () => {} }), warning = `rules file ignored: ${broken} is not valid JSON`;
+    delete withoutRules.rules;
+    assert.deepEqual(checkAll({ ...withoutRules, rulesFile: broken }).warnings, [warning]);
+    assert.deepEqual(checkAll({ ...withoutRules, rulesFile: broken, status: () => null }), { results: [], error: LIST_ERROR, warnings: [warning] });
 });
 
 test("reportText: null when all jobs are fine, else one line naming the broken ones", () => {
@@ -141,6 +150,22 @@ test("reportText: null when all jobs are fine, else one line naming the broken o
     assert.equal(reportText([fine, fine]), null);
     assert.equal(reportText([fine, { label: "d-mirror", ok: false, problems: ["not loaded in the scheduler", "log file not found"] }, { label: "e-report", ok: false, problems: ["last run exit code 2"] }]),
         "scheduled jobs with problems: 2 of 3; d-mirror: not loaded in the scheduler, log file not found; e-report: last run exit code 2");
+});
+
+test("reportText: warnings come first, and alone they still make a notice", () => {
+    const broken = { label: "e-report", ok: false, problems: ["last run exit code 2"] }, warning = "rules file ignored: /srv/rules.json is not valid JSON";
+    assert.equal(reportText([broken], [warning]), `${warning}; scheduled jobs with problems: 1 of 1; e-report: last run exit code 2`);
+    assert.equal(reportText([], [warning]), warning);
+});
+
+test("main: a broken rules file is named in the notice and in the log, not only on stderr", () => {
+    const home = tempDir("schedule-home"), user = tempDir("schedule-user");
+    writeFileSync(join(home, "schedule-check.json"), "{");
+    const ran = spawnSync(process.execPath, [fileURLToPath(new URL("./schedule-check.mjs", import.meta.url))], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
+    const warning = `rules file ignored: ${join(home, "schedule-check.json")} is not valid JSON`;
+    assert.equal(ran.stderr.includes(warning), true, ran.stderr);
+    assert.equal(readFileSync(join(home, "notify.log"), "utf8").includes("rules file ignored:"), true, "no notice names the rules file");
+    assert.deepEqual(JSON.parse(readFileSync(join(home, "schedule-check.jsonl"), "utf8")).warnings, [warning]);
 });
 
 test("main: runs when the script is started through a symlink", () => {

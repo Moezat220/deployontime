@@ -28,7 +28,43 @@ export function exitPlan({ code = null, signal = null }) {
 export const queueGone = ({ ppid, queuePid, isAlive = alive }) => ppid !== queuePid || !isAlive(queuePid);
 
 /** The line the wrapper sends on file descriptor 3 when the command cannot be started. */
-export const startFailure = (message) => `${JSON.stringify({ startFailed: message })}\n`;
+export const startFailureLine = (message) => `${JSON.stringify({ startFailed: message })}\n`;
+
+/** The message from a start-failure line in the text read from file descriptor 3, or null when there is none.
+ *  Other lines and a line that was cut short are passed over. */
+export function readStartFailure(text) {
+    for (const line of String(text).split("\n")) {
+        try { const sent = JSON.parse(line); if (typeof sent?.startFailed === "string") return sent.startFailed; } catch { /* not a report line */ }
+    }
+    return null;
+}
+
+/** How long the queue keeps reading the report after the wrapper has exited. */
+export const REPORT_DRAIN_MS = 500;
+
+/** Resolves with { code, signal, report } once the wrapper has exited and its report on file descriptor 3 has been
+ *  read. The report is read for at most drainMs after the exit: on systems where the job inherits the descriptor,
+ *  a process the job leaves behind keeps it open, and that must not keep the queue waiting. */
+export function wrapperEnd(child, report, drainMs = REPORT_DRAIN_MS) {
+    return new Promise((resolve) => {
+        let text = "", exit = null, drained = !report, timer = null, settled = false;
+        const settle = () => {
+            if (settled || !exit || !drained) return;
+            settled = true;
+            clearTimeout(timer);
+            report?.destroy();
+            resolve({ ...exit, report: text });
+        };
+        const stopReading = () => { drained = true; settle(); };
+        report?.setEncoding("utf8");
+        report?.on("data", (part) => { text += part; }).on("end", stopReading).on("close", stopReading).on("error", stopReading);
+        child.on("exit", (code, signal) => {
+            exit = { code, signal };
+            timer = setTimeout(stopReading, drainMs);
+            settle();
+        });
+    });
+}
 
 function main() {
     const queuePid = Number(process.argv[2]), [program, ...args] = process.argv.slice(3);
@@ -52,7 +88,7 @@ function main() {
     watch.unref();
 
     job.on("error", (e) => {
-        try { writeSync(3, startFailure(e.message)); } catch { process.stderr.write(`dotime-queue: start failed: exit ${NO_START_EXIT}, ${e.message}\n`); }
+        try { writeSync(3, startFailureLine(e.message)); } catch { process.stderr.write(`dotime-queue: start failed: exit ${NO_START_EXIT}, ${e.message}\n`); }
         process.exit(NO_START_EXIT);
     });
     job.on("exit", (code, signal) => {

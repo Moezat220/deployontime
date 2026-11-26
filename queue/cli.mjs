@@ -13,9 +13,10 @@ import { addWait, append, cmdString, findStamp, gitState, historyWindow, jobEnd,
 import { notify } from "./notify.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { flagError } from "./args.mjs";
+import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./group.mjs";
 
 const MINUTE = 60_000;
-const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: 127, left: 130 };
+const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
 const REPEAT_WAIT_LINE_MS = MINUTE;
 
 export const USAGE = [
@@ -178,11 +179,9 @@ async function cmdRun(args, settings) {
     if (startedAt - waitFrom > 5000) say(`started: ${minutesSince(waitFrom)} min in line`);
     for (const [signal, handler] of whileWaiting) process.off(signal, handler);
     const wrapper = fileURLToPath(new URL("./group.mjs", import.meta.url));
-    // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Only the
-    // wrapper holds it; the job does not inherit it.
+    // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
+    // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const child = spawn(process.execPath, [wrapper, String(process.pid), ...cmd], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
-    let report = "";
-    child.stdio[3]?.setEncoding("utf8").on("data", (text) => { report += text; });
     updateSlot(slot, process.pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* already gone */ } } };
 
@@ -229,10 +228,9 @@ async function cmdRun(args, settings) {
             } catch { /* a notice that fails must not disturb the job */ }
         });
     }
-    // "close" comes after the wrapper has exited and its report pipe is drained.
-    child.on("close", (code, signal) => {
+    wrapperEnd(child, child.stdio[3]).then(({ code, signal, report }) => {
         if (pastLimit) return endTimedOut();
-        const startFailed = startFailure(report);
+        const startFailed = readStartFailure(report);
         if (startFailed !== null) {
             finish("could-not-start", EXIT.noStart, stamps());
             say(`start failed: exit ${EXIT.noStart}, ${startFailed}`);
@@ -250,14 +248,6 @@ async function cmdRun(args, settings) {
         end(EXIT.noStart);
     });
     return result;
-}
-
-/** The wrapper's start-failure message from its report text, or null when it reported none. */
-function startFailure(text) {
-    for (const line of text.split("\n")) {
-        try { const sent = JSON.parse(line); if (typeof sent?.startFailed === "string") return sent.startFailed; } catch { /* not a report line */ }
-    }
-    return null;
 }
 
 /** Runs one subcommand and resolves with its exit code. */

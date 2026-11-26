@@ -11,6 +11,7 @@ import { cleanEnv, isolateProcess, makeRepo, pause, settingEnv, tempDir, track, 
 
 isolateProcess("cli");
 const { historyRow, main, parseRunArgs, statusLines, USAGE } = await import("./cli.mjs");
+const { FLAGS } = await import("./args.mjs");
 const { alive, takeSlot } = await import("./slots.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
@@ -75,8 +76,13 @@ test("main: returns the exit code of each command instead of ending the process"
     assert.equal(await main(["history", "--day", "2040-01-01"]), 0);
 });
 
-test("USAGE: names every subcommand and flag", () => {
-    for (const word of ["run", "status", "passed", "history", "--label", "--max-wait", "--max-run", "--kind", "--after-fix", "--priority", "--match", "--cwd", "--days", "--day"]) assert.equal(USAGE.includes(word), true, word);
+test("USAGE: names every subcommand and flag that FLAGS accepts, and no other flag", () => {
+    for (const [command, { values, switches }] of Object.entries(FLAGS)) {
+        assert.equal(USAGE.includes(`dotime-queue ${command}`), true, command);
+        for (const flag of [...values, ...switches]) assert.equal(new RegExp(`${flag}(?![\\w-])`).test(USAGE), true, flag);
+    }
+    const known = new Set(Object.values(FLAGS).flatMap(({ values, switches }) => [...values, ...switches]));
+    for (const flag of USAGE.match(/--[\w-]+/g)) assert.equal(known.has(flag), true, flag);
 });
 
 test("statusLines: one line per running job, per waiting job and for the gate", () => {
@@ -362,6 +368,10 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     assert.deepEqual([misspelledMatch.code, misspelledMatch.stdout, misspelledMatch.stderr], [2, "", "dotime-queue: unknown option --mach\n"]);
     const misspelledRun = await cli(box, ["run", "--max-runn", "90", "--", NODE, "-e", "console.log('started')"]);
     assert.deepEqual([misspelledRun.code, misspelledRun.stdout, misspelledRun.stderr], [2, "", "dotime-queue: unknown option --max-runn\n"]);
+    const emptyMatch = await cli(box, ["passed", "--match", ""]);
+    assert.deepEqual([emptyMatch.code, emptyMatch.stdout, emptyMatch.stderr], [2, "", "dotime-queue: option --match needs a value\n"]);
+    const labelAsValue = await cli(box, ["run", "--label", "--priority", "--", NODE, "-e", "console.log('started')"]);
+    assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [2, "", "dotime-queue: option --label needs a value\n"]);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
     const statusFlag = await cli(box, ["status", "--all"]);
@@ -383,6 +393,22 @@ test("run: a command that cannot start is journalled as could-not-start and neve
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["could-not-start", 127], ["could-not-start", 127], ["could-not-start", 127]]);
     assert.equal((await cli(box, ["run", "--label", "docs-site: unit tests", "--", NODE, "-e", "process.exit(0)"])).code, 0);
     assert.equal((await cli(box, ["history", "--days", "1"])).stdout.includes("all projects: jobs 4, failed 0,"), true);
+});
+
+test("run: a job that leaves a background process behind ends at once and is journalled as ran", async () => {
+    const box = sandbox(), began = Date.now();
+    const { child } = start(box, ["run", "--label", "docs-site: build", "--", "sh", "-c", "(sleep 3 &); exit 0"]);
+    const code = await new Promise((resolve) => child.on("exit", resolve));
+    assert.equal(code, 0);
+    assert.equal(Date.now() - began < 2000, true, `${Date.now() - began} ms`);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 0]]);
+});
+
+test("run: a corrected command is not refused for a failure of the command before it", async () => {
+    const box = sandbox(), label = ["--label", "shop-api: unit tests"];
+    assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)", "wrong-argument"])).code, 4);
+    for (const attempt of [1, 2]) assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)"])).code, 4, `attempt ${attempt}`);
+    assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)"])).code, 3);
 });
 
 test("run: a job that exits 127 by itself still counts as a failed run", async () => {

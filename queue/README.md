@@ -99,8 +99,10 @@ password, cannot do so.
 Options go in front of the `--`. Everything behind it is the job's command. Keep `--priority` out of agent
 instructions: an agent that uses it every time puts itself in front of everyone else.
 
-An option that is not in this table, an option without its value, or any other word in front of the `--` is
-refused with exit 2, for example `dotime-queue: unknown option --max-runn`. The job does not run. The same holds for
+An option that is not in this table, an option without its value or with an empty value, an option given twice,
+or any other word in front of the `--` is refused with exit 2, for example `dotime-queue: unknown option --max-runn`.
+A word that starts with `--` is never taken as a value: `--label --priority` is refused because `--label` has no
+value. The job does not run. The same holds for
 `status`, `passed` and `history`: each accepts only the options shown for it.
 
 While it waits, `run` prints its position and what holds it, at each change of position and again after each
@@ -125,6 +127,8 @@ Details:
   `start failed:` line and exit 127. It is journalled as `could-not-start`, which counts neither as a failure nor
   towards [Repeated failures](#repeated-failures). A command that starts and then exits 127 by itself, such as a
   shell script that calls a missing program, is an ordinary failed run.
+- `run` ends when the job's main process ends. A process the job started in the background and left running does
+  not keep `run` waiting.
 
 ### `status`
 
@@ -243,7 +247,8 @@ under another label still belong when command, project and folder are all identi
 
 What is compared between the failures and the new run:
 
-- the command line: a new run of the check with another command is let through;
+- the command line: a new run of the check with another command is let through, and two failures count as the same
+  failure twice only when they ran the same command;
 - the commit;
 - uncommitted changes to tracked files, wherever they are, and the list of changed and untracked paths as
   `git status` prints it;
@@ -386,8 +391,9 @@ files in the state folder. Problems go out as one notice;
 { "skip": ["com.example.*"], "okExit": { "com.example.sync": [0, 2] }, "maxLogAgeH": { "com.example.weekly": 200 } }
 ```
 
-A rules file that cannot be read, is not valid JSON or is not one JSON object is ignored with a warning on stderr,
-and the report runs without rules. A missing file simply means no rules.
+A rules file that cannot be read, is not valid JSON or is not one JSON object is ignored, and the report runs
+without rules. The warning goes to stderr, to the front of the notice and into the `warnings` field of the line in
+`schedule-check.jsonl`. A missing file simply means no rules.
 
 ## Notices
 

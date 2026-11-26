@@ -3,12 +3,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { constants as osConstants } from "node:os";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, track } from "./testkit.mjs";
 
 const HOME = isolateProcess("group");
-const { exitPlan, NO_START_EXIT, queueGone, startFailure } = await import("./group.mjs");
+const { exitPlan, NO_START_EXIT, queueGone, readStartFailure, startFailureLine, wrapperEnd } = await import("./group.mjs");
 const WRAPPER = fileURLToPath(new URL("./group.mjs", import.meta.url));
 
 test("exitPlan: a job that exited by itself passes its code on", () => {
@@ -21,7 +23,6 @@ test("exitPlan: a job ended by a signal makes the wrapper die by the same signal
     for (const signal of ["SIGTERM", "SIGINT", "SIGKILL", "SIGPIPE"]) {
         assert.deepEqual(exitPlan({ code: null, signal }), { reraise: signal, orExit: 128 + osConstants.signals[signal] }, signal);
     }
-    assert.deepEqual(exitPlan({ code: null, signal: "SIGPIPE" }).orExit, 128 + osConstants.signals.SIGPIPE);
 });
 
 test("exitPlan: SIGUSR1 is never raised again and ends with the code a shell gives", () => {
@@ -34,9 +35,41 @@ test("queueGone: true once the queue process is no longer the parent or no longe
     assert.equal(queueGone({ ppid: 4100, queuePid: 4100, isAlive: () => false }), true);
 });
 
-test("startFailure: one JSON line that names what went wrong", () => {
-    assert.deepEqual(JSON.parse(startFailure("spawn sample-tool ENOENT")), { startFailed: "spawn sample-tool ENOENT" });
-    assert.equal(startFailure("x").endsWith("\n"), true);
+test("startFailureLine: one JSON line that names what went wrong", () => {
+    assert.deepEqual(JSON.parse(startFailureLine("spawn sample-tool ENOENT")), { startFailed: "spawn sample-tool ENOENT" });
+    assert.equal(startFailureLine("x").endsWith("\n"), true);
+});
+
+test("readStartFailure: reads back what the writer sent, and nothing from other text", () => {
+    assert.equal(readStartFailure(startFailureLine("spawn sample-tool EACCES")), "spawn sample-tool EACCES");
+    assert.equal(readStartFailure(`not json\n{"other":1}\n${startFailureLine("spawn sample-tool ENOENT")}`), "spawn sample-tool ENOENT");
+    assert.equal(readStartFailure(startFailureLine("spawn sample-tool ENOENT").slice(0, 20)), null);
+    for (const text of ["", "\n", "garbage", '{"startFailed": 3}', "null"]) assert.equal(readStartFailure(text), null, text);
+});
+
+const fakeWrapper = () => ({ child: new EventEmitter(), report: new PassThrough() });
+
+test("wrapperEnd: resolves with the exit and the whole report once the report has ended", async () => {
+    const { child, report } = fakeWrapper(), done = wrapperEnd(child, report, 5000);
+    report.write("{\"startFailed\":");
+    child.emit("exit", NO_START_EXIT, null);
+    report.end('"spawn sample-tool ENOENT"}\n');
+    assert.deepEqual(await done, { code: NO_START_EXIT, signal: null, report: startFailureLine("spawn sample-tool ENOENT") });
+});
+
+test("wrapperEnd: a report that never ends delays the result by the drain time only", async () => {
+    const { child, report } = fakeWrapper(), began = Date.now(), done = wrapperEnd(child, report, 60);
+    child.emit("exit", 0, null);
+    assert.deepEqual(await done, { code: 0, signal: null, report: "" });
+    assert.equal(Date.now() - began < 1000, true);
+    assert.equal(report.destroyed, true);
+});
+
+test("wrapperEnd: an error on the report stream ends the wait and is not thrown", async () => {
+    const { child, report } = fakeWrapper(), done = wrapperEnd(child, report, 5000);
+    child.emit("exit", null, "SIGTERM");
+    report.destroy(new Error("sample socket error"));
+    assert.deepEqual(await done, { code: null, signal: "SIGTERM", report: "" });
 });
 
 test("wrapper: a command that cannot start is reported on descriptor 3 and ends with exit 127", async () => {

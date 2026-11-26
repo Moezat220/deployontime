@@ -10,7 +10,7 @@ import { isolateProcess, makeRepo, pause, tempDir, track, until } from "./testki
 const HOME = isolateProcess("limits");
 const {
     addNotice, afterMinutes, cmdStem, codePrint, DEBUG_CMD_RE, DEBUG_LABEL_RE, decideLimit, failStop, idleAlert, jobCpu,
-    killTree, KINDS, kindOf, kindStats, longRunAlert, opt, parseMaxRun, pctl, psRows, slotIdleCheck, slotIdleStep, stemStats,
+    killTree, KINDS, kindOf, kindStats, longRunAlert, opt, parseMaxRun, psRows, slotIdleCheck, slotIdleStep, stemStats,
     treePids, UNLABELLED, UNTRACKED,
 } = await import("./limits.mjs");
 const { alive } = await import("./slots.mjs");
@@ -117,14 +117,6 @@ test("cmdStem: joins the stems of the commands inside sh -c", () => {
 
 test("cmdStem: null for inline code and for an empty command", () => {
     for (const command of ["CI=1", 'bun --eval "0"', 'bash -c ""', undefined, 'tsx -e "void 0"', 'python3 -c "print(1)"', ""]) assert.equal(cmdStem(command), null, String(command));
-});
-
-test("pctl: nearest rank on a sorted copy", () => {
-    const values = [40, 10, 30, 20, 50];
-    assert.deepEqual([0, 0.2, 0.5, 0.75, 0.9, 1].map((p) => pctl(values, p)), [10, 10, 30, 40, 50, 50]);
-    assert.deepEqual(values, [40, 10, 30, 20, 50]);
-    assert.equal(pctl([], 0.5), null);
-    assert.equal(pctl([7], 0.9), 7);
 });
 
 const passed = (runMin, fields = {}) => JSON.stringify({ projectKey: "docs-site", label: "docs-site: build", cmd: "pnpm run build", kind: "build", outcome: "ran", exit: 0, runMin, endedAt: ago(2 * HOUR), ...fields });
@@ -303,12 +295,18 @@ test("failStop: a changed command under the same label is a new attempt, not a t
 });
 
 test("limits: exports no helper that only the tests use", async () => {
-    assert.equal("isDebug" in await import("./limits.mjs"), false);
+    const exported = await import("./limits.mjs");
+    for (const name of ["isDebug", "pctl"]) assert.equal(name in exported, false, name);
 });
 
 test("failStop: allows a third run once the code differs between the two failures", () => {
     assert.deepEqual(verdict([failure(95, { head: "9988776655" }), failure(40)]), { refuse: false });
     assert.deepEqual(verdict([failure(95, { fp: "beef" }), failure(40)]), { refuse: false });
+});
+
+test("failStop: two failures that ran different commands are not the same failure twice", () => {
+    assert.deepEqual(verdict([failure(95, { cmd: "pnpm run test:integration --wrong-flag" }), failure(40)]), { refuse: false });
+    assert.equal(verdict([failure(95, { cmd: null }), failure(40)]).refuse, true);
 });
 
 test("failStop: lets the run through without two fresh failures in a row", () => {

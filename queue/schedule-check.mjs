@@ -71,17 +71,20 @@ export function judge({ label, plist, loaded, exit, logMtime, scriptsMissing }, 
     return { label, ok: problems.length === 0, problems, log };
 }
 
-/** Judges every job file in a folder. Each reading can be replaced, so tests run on made-up jobs.
- *  Returns { results, error }; error is set, and results empty, when the scheduler's job list cannot be read. */
+/** Judges every job file in a folder. Each reading can be replaced, so tests run on made-up jobs. Without rules
+ *  given, they are read from rulesFile. Returns { results, error, warnings }; error is set, and results empty, when
+ *  the scheduler's job list cannot be read; warnings name a rules file that could not be used. */
 export function checkAll({
-    rules = readRules(), now = Date.now(), dir = join(homedir(), "Library", "LaunchAgents"),
+    rules, rulesFile = paths().scheduleRules, warn = warnOnStderr, now = Date.now(), dir = join(homedir(), "Library", "LaunchAgents"),
     list = () => readdirSync(dir), status = probeScheduledJobs, readPlist = probeReadPlist,
     exists = existsSync, mtime = (file) => statSync(file).mtimeMs, tz = timeZone(),
 } = {}) {
+    const warnings = [];
+    if (!rules) rules = readRules(rulesFile, { warn: (text) => { warnings.push(text); warn(text); } });
     let files;
-    try { files = list().filter((name) => name.endsWith(".plist")).sort(); } catch { return { results: [], error: null }; }
+    try { files = list().filter((name) => name.endsWith(".plist")).sort(); } catch { return { results: [], error: null, warnings }; }
     const loadedJobs = status();
-    if (!loadedJobs) return { results: [], error: LIST_ERROR };
+    if (!loadedJobs) return { results: [], error: LIST_ERROR, warnings };
     const results = [];
     for (const name of files) {
         const plist = readPlist(join(dir, name));
@@ -94,28 +97,28 @@ export function checkAll({
         const scriptsMissing = scriptsOf(plist).filter((script) => !exists(script));
         results.push(judge({ label, plist, loaded: !!entry, exit: entry?.exit ?? null, logMtime, scriptsMissing }, rules, now, tz));
     }
-    return { results, error: null };
+    return { results, error: null, warnings };
 }
 
-/** The notice text for the jobs with problems, or null when there are none. */
-export function reportText(results) {
-    const broken = results.filter((r) => !r.ok);
-    if (!broken.length) return null;
-    return `scheduled jobs with problems: ${broken.length} of ${results.length}; ${broken.map((r) => `${r.label}: ${r.problems.join(", ")}`).join("; ")}`;
+/** The notice text: the warnings, then the jobs with problems; null when there is nothing to say. */
+export function reportText(results, warnings = []) {
+    const broken = results.filter((r) => !r.ok), parts = [...warnings];
+    if (broken.length) parts.push(`scheduled jobs with problems: ${broken.length} of ${results.length}; ${broken.map((r) => `${r.label}: ${r.problems.join(", ")}`).join("; ")}`);
+    return parts.length ? parts.join("; ") : null;
 }
 
 async function main() {
     const dry = process.argv.includes("--dry"), asJson = process.argv.includes("--json"), now = Date.now();
-    const { results, error } = checkAll({ now }), text = error ?? reportText(results);
+    const { results, error, warnings } = checkAll({ now }), text = error ? [...warnings, error].join("; ") : reportText(results, warnings);
     if (asJson) console.log(JSON.stringify(error ? { error } : results, null, 1));
-    else if (error) console.log(`schedule-check ${dateTime(now, timeZone())}: ${error}`);
+    else if (error) console.log(`schedule-check ${dateTime(now, timeZone())}: ${text}`);
     else console.log(`schedule-check ${dateTime(now, timeZone())}: jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}${text ? `; ${text}` : ""}`);
     if (!dry) {
         if (text) { try { notify("dotime: scheduled jobs", text); } catch { /* the printed line already says it */ } }
         try {
             const log = paths().scheduleLog;
             mkdirSync(dirname(log), { recursive: true });
-            appendFileSync(log, `${JSON.stringify({ at: new Date(now).toISOString(), error, results })}\n`);
+            appendFileSync(log, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
         } catch { /* the report does not depend on its log */ }
     }
     if (error) process.exitCode = 1;

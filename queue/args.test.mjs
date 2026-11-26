@@ -18,6 +18,28 @@ test("flagError: refuses an unknown or misspelled flag, a stray word and a missi
     assert.equal(flagError(["run", "-p", "--", "make"]), "unknown option -p");
 });
 
+test("flagError: an empty value is refused like a missing one", () => {
+    assert.equal(flagError(["passed", "--match", ""]), "option --match needs a value");
+    assert.equal(flagError(["passed", "--match="]), "option --match needs a value");
+    assert.equal(flagError(["passed", "--cwd="]), "option --cwd needs a value");
+    assert.equal(flagError(["run", "--kind=", "--", "make"]), "option --kind needs a value");
+    assert.equal(flagError(["run", "--label=", "--", "make"]), "option --label needs a value");
+    assert.equal(flagError(["history", "--days", ""]), "option --days needs a value");
+});
+
+test("flagError: a word that looks like a flag is never taken as a value", () => {
+    assert.equal(flagError(["run", "--label", "--priority", "--", "make"]), "option --label needs a value");
+    assert.equal(flagError(["passed", "--match", "--cwd", "/srv/shop-api"]), "option --match needs a value");
+    assert.equal(flagError(["run", "--max-wait", "-1", "--", "make"]), null);
+});
+
+test("flagError: a flag given twice is refused", () => {
+    assert.equal(flagError(["run", "--max-run", "5", "--max-run", "90", "--", "make"]), "option --max-run is given twice");
+    assert.equal(flagError(["run", "--label=a", "--label", "b", "--", "make"]), "option --label is given twice");
+    assert.equal(flagError(["run", "--priority", "--priority", "--", "make"]), "option --priority is given twice");
+    assert.equal(flagError(["history", "--days", "2", "--days=3"]), "option --days is given twice");
+});
+
 test("flagError: run ignores everything behind the --, which belongs to the job", () => {
     assert.equal(flagError(["run", "--label", "shop-api: lint", "--", "pnpm", "lint", "--fix", "--max-runn", "1"]), null);
 });

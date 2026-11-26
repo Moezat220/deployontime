@@ -116,7 +116,6 @@ export function cmdStem(command) {
 
 // ---- statistics over earlier runs ----
 
-export { pctl };
 function passedRuns(lines, { project, now, windowDays }) {
     const oldest = now - windowDays * DAY;
     return parseLines(lines).filter((row) => {
@@ -251,7 +250,7 @@ export function failStop(lines, job, L = limitSettings(), tz = timeZone()) {
     const [last, previous] = finished;
     if (!last || !previous || !failed(last) || !failed(previous)) return { refuse: false };
     if ((job.at ?? Date.now()) - Date.parse(previous.endedAt) > L.failWindowHours * HOUR) return { refuse: false };
-    if (last.head !== previous.head || bothDiffer(last.fp, previous.fp)) return { refuse: false };
+    if (last.head !== previous.head || bothDiffer(last.fp, previous.fp) || bothDiffer(last.cmd, previous.cmd)) return { refuse: false };
     if (last.head !== undefined && last.head !== job.head) return { refuse: false, changed: "commit" };
     if (bothDiffer(last.fp, job.fp)) return { refuse: false, changed: "files" };
     if (bothDiffer(last.cmd, job.cmd)) return { refuse: false, changed: "command" };
