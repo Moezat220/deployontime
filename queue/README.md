@@ -147,6 +147,9 @@ Prints the taken slots, each running job with its limit and time left, the waiti
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
 with nothing after it does the same.
 
+`status` only reads the state folder and never changes it. The file of a job that has ended is still left out of
+what it prints, but the file itself stays until a waiting `run` or the reaper removes it.
+
 ### `passed`
 
 ```
@@ -516,7 +519,7 @@ Environment variables:
 | File | Content |
 | --- | --- |
 | `config.json` | Settings. Optional. |
-| `slots/`, `line/` | One small file per running and per waiting job. Files of ended processes are removed. |
+| `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
 | `journal.jsonl` | One line per job. |
 | `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
