@@ -4,7 +4,9 @@
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadSettings, paths } from "./settings.mjs";
-import { runTool } from "./probes.mjs";
+import { probeProcessAges } from "./probes.mjs";
+import { parseElapsed } from "./ps.mjs";
+import { alive } from "./proctree.mjs";
 import { readJson, tempName, writeJsonAtomic } from "./files.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -15,21 +17,8 @@ const BORN = Math.round(Date.now() - process.uptime() * 1000);
 const SAME_START_MS = 5000;
 const bornOf = (pid) => (pid === process.pid ? { born: BORN } : {});
 
-/** Seconds each listed process has run, from `ps -o pid=,etime=` ([[dd-]hh:]mm:ss). A pid ps does not list is left out. */
-export function parseElapsed(text) {
-    const ages = new Map();
-    for (const line of String(text ?? "").split("\n")) {
-        const m = line.trim().match(/^(\d+)\s+(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
-        if (m) ages.set(Number(m[1]), ((Number(m[2] ?? 0) * 24 + Number(m[3] ?? 0)) * 60 + Number(m[4])) * 60 + Number(m[5]));
-    }
-    return ages;
-}
-export const processAges = (pids) => (pids.length ? parseElapsed(runTool("ps", ["-o", "pid=,etime=", "-p", pids.join(",")])) : new Map());
-
-export function alive(pid) {
-    // EPERM: the process exists but belongs to another user.
-    try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
-}
+/** Seconds each of the given processes has run, by pid. */
+const processAges = (pids) => parseElapsed(probeProcessAges(pids));
 const isEntryName = (name) => name.endsWith(".json");
 function makeDirs(dirs) {
     mkdirSync(dirs.slots, { recursive: true });

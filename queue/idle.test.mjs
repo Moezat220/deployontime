@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { idleText, isServer, psSeconds, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
+import { idleText, isServer, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 const MINUTE = 60_000, PATTERN = DEFAULTS.reaper.serverPattern;
@@ -83,12 +83,4 @@ test("slotIdleVerdict: accepts a sample that is a few seconds short of the windo
 test("idleText: use and time span in one phrase", () => {
     assert.equal(idleText({ usedS: 3.5, minutes: 22 }), "3.5 s of CPU in 22 min");
     assert.equal(idleText({ usedS: 0, minutes: 10 }), "0.0 s of CPU in 10 min");
-});
-
-test("psSeconds: converts every `ps` time layout", () => {
-    assert.equal(psSeconds("0:07.25"), 7.25);
-    assert.equal(psSeconds("41:30"), 2490);
-    assert.equal(psSeconds("03:00:10"), 10_810);
-    assert.equal(psSeconds("5-00:00:30"), 5 * 86_400 + 30);
-    assert.equal(psSeconds(" 1:00 "), 60);
 });

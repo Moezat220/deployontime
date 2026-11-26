@@ -1,0 +1,113 @@
+// Process trees and signals: which processes make up a job, and how a job or a process group is told to stop.
+// Every walk over a process table and every group signal of the queue goes through here.
+import { probeProcessTree } from "./probes.mjs";
+import { psRows } from "./ps.mjs";
+
+// The longest chain of parents followed, so a damaged table can never keep a walk going.
+const MAX_DEPTH = 64;
+
+/** True while a process with this pid exists. EPERM: it exists but belongs to another user. */
+export function alive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) { return e.code === "EPERM"; }
+}
+
+/** An index over process rows ({ pid, ppid }): byPid and children (parent pid to child pids). Build it once to walk
+ *  a large table many times; every walk below also takes the rows themselves. */
+export function treeIndex(rows) {
+    const byPid = new Map();
+    const children = new Map();
+    for (const row of rows) {
+        byPid.set(row.pid, row);
+        (children.get(row.ppid) ?? children.set(row.ppid, []).get(row.ppid)).push(row.pid);
+    }
+    return { byPid, children };
+}
+const indexOf = (table) => (table instanceof Array ? treeIndex(table) : table);
+
+/** The root pids and every process below them by parent pid, as a Set. */
+export function descendants(table, rootPids) {
+    const { children } = indexOf(table);
+    const found = new Set(rootPids);
+    const todo = [...found];
+    while (todo.length) {
+        for (const child of children.get(todo.pop()) ?? []) {
+            if (found.has(child)) continue;
+            found.add(child);
+            todo.push(child);
+        }
+    }
+    return found;
+}
+
+/** The row of pid and the rows of its parents, nearest first. Stops at a pid missing from the table, at a pid seen
+ *  before, and after MAX_DEPTH rows. */
+export function ancestors(table, pid) {
+    const { byPid } = indexOf(table);
+    const chain = [];
+    const seen = new Set();
+    for (let row = byPid.get(pid); row && !seen.has(row.pid) && chain.length < MAX_DEPTH; row = byPid.get(row.ppid)) {
+        seen.add(row.pid);
+        chain.push(row);
+    }
+    return chain;
+}
+
+// The pids of a job: its group members, then everything below them by parent pid, which also catches children
+// that started a group of their own.
+const jobPids = (leader, rows) => descendants(rows, [leader, ...rows.filter((row) => row.pgid === leader).map((row) => row.pid)]);
+
+/** The pids of a job, from the given `ps` text or a fresh listing. */
+export function treePids(leader, ps = null) {
+    return [...jobPids(leader, psRows(ps ?? probeProcessTree()))];
+}
+
+/** Returns null for a holder whose leader process is not listed, else the CPU seconds of all its processes. */
+export function jobCpu(holder, rows) {
+    const leader = holder.pgid ?? holder.pid;
+    if (!rows.some((row) => row.pid === leader)) return null;
+    const pids = jobPids(leader, rows);
+    return Math.round(rows.reduce((sum, row) => sum + (pids.has(row.pid) ? row.cpu : 0), 0) * 100) / 100;
+}
+
+const sendSignal = (pid, signal) => process.kill(pid, signal);
+
+/** Sends a signal to a whole process group. Returns { sent: true }, or { sent: false, code } with the error code:
+ *  ESRCH when the group is gone, EPERM when it belongs to another user. */
+export function signalGroup(pgid, signal, kill = sendSignal) {
+    try {
+        kill(-pgid, signal);
+        return { sent: true };
+    } catch (e) { return { sent: false, code: e.code ?? String(e.message) }; }
+}
+
+/** Signals a job: the group as a whole first, then each process of the job. Returns the pids it signalled. */
+export function killTree(leader, signal, ps = null) {
+    const pids = treePids(leader, ps);
+    signalGroup(leader, signal);
+    for (const pid of pids) {
+        try { process.kill(pid, signal); } catch { /* already gone */ }
+    }
+    return pids;
+}
+
+/** Sends TERM to a process group, waits graceMs, then sends KILL to the listed processes that are still there.
+ *  Returns { stopped: true }, or { stopped: false, why } when a signal was refused. A group that is already gone
+ *  counts as stopped. */
+export async function stopGroup(pgid, procs, { graceMs, isAlive = alive, kill = sendSignal }) {
+    const term = signalGroup(pgid, "SIGTERM", kill);
+    if (!term.sent && term.code !== "ESRCH") return { stopped: false, why: `TERM refused (${term.code})` };
+    await new Promise((done) => setTimeout(done, graceMs));
+    const refused = [];
+    for (const proc of procs) {
+        if (!isAlive(proc.pid)) continue;
+        try {
+            kill(proc.pid, "SIGKILL");
+        } catch (e) {
+            if (e.code !== "ESRCH") refused.push(`${proc.pid} (${e.code ?? e.message})`);
+        }
+    }
+    return refused.length ? { stopped: false, why: `KILL refused for pid ${refused.join(", ")}` } : { stopped: true };
+}

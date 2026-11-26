@@ -8,8 +8,10 @@ import { isSandbox, loadSettings, paths, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
 import { git } from "./git.mjs";
-import { psSeconds, sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
-import { probeProcessCpu, probeProcessTree } from "./probes.mjs";
+import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
+import { probeProcessCpu } from "./probes.mjs";
+import { psRows } from "./ps.mjs";
+import { jobCpu } from "./proctree.mjs";
 import { pctl } from "./stats.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { DAY, HOUR, MINUTE, oneDecimal } from "./units.mjs";
@@ -334,45 +336,4 @@ export function addNotice(key, entry, file = paths().notices) {
         writeJsonAtomic(file, all, 1);
         return true;
     } catch { return false; }
-}
-
-// ---- process trees ----
-
-/** Parses `ps -o pid=,ppid=,pgid=[,time=]` text into [{ pid, ppid, pgid, cpu }]; cpu is 0 without a time column. */
-export function psRows(text) {
-    const rows = [];
-    for (const line of String(text ?? "").split("\n")) {
-        const [pid, ppid, pgid, time] = line.trim().split(/\s+/);
-        if (![pid, ppid, pgid].every((x) => /^\d+$/.test(x ?? ""))) continue;
-        rows.push({ pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), cpu: time ? psSeconds(time) : 0 });
-    }
-    return rows;
-}
-// Group members first, then descendants by parent pid, which also catches children that changed group.
-function jobPids(leader, rows) {
-    const pids = new Set([leader]);
-    for (const row of rows) if (row.pgid === leader) pids.add(row.pid);
-    for (let grew = true; grew;) {
-        grew = false;
-        for (const row of rows) if (pids.has(row.ppid) && !pids.has(row.pid)) { pids.add(row.pid); grew = true; }
-    }
-    return pids;
-}
-/** The pids of a job, from the given `ps` text or a fresh listing. */
-export function treePids(leader, ps = null) {
-    return [...jobPids(leader, psRows(ps ?? probeProcessTree()))];
-}
-/** Returns null for a holder whose leader process is not listed, else the CPU seconds of all its processes. */
-export function jobCpu(holder, rows) {
-    const leader = holder.pgid ?? holder.pid;
-    if (!rows.some((row) => row.pid === leader)) return null;
-    const pids = jobPids(leader, rows);
-    return Math.round(rows.reduce((sum, row) => sum + (pids.has(row.pid) ? row.cpu : 0), 0) * 100) / 100;
-}
-/** Returns the pids it signalled: the group as a whole first, then each process of the job. */
-export function killTree(leader, signal, ps = null) {
-    const pids = treePids(leader, ps);
-    try { process.kill(-leader, signal); } catch { /* no such group */ }
-    for (const pid of pids) { try { process.kill(pid, signal); } catch { /* already gone */ } }
-    return pids;
 }

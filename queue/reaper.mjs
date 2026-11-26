@@ -5,8 +5,10 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { isMainModule, loadSettings, paths } from "./settings.mjs";
-import { alive, snapshot } from "./slots.mjs";
-import { idleText, isServer, psSeconds, sampleKeepMs, serverIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
+import { snapshot } from "./slots.mjs";
+import { idleText, isServer, sampleKeepMs, serverIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
+import { parseProcessTable } from "./ps.mjs";
+import { ancestors, descendants, stopGroup } from "./proctree.mjs";
 import { slotIdleCheck } from "./limits.mjs";
 import { strayRuns } from "./stray.mjs";
 import { readHealth } from "./health.mjs";
@@ -19,15 +21,6 @@ import { probeGroupOf, probeLoad, probeProcessCpu, probeProcessTable, probeSwapP
 const REPEAT = { stray: HOUR, overload: HOUR, lowDisk: 6 * HOUR };
 const OVERLOAD_RUNS = 2;
 
-/** Parses `ps -Ao pid=,ppid=,pgid=,etime=,time=,pcpu=,rss=,command=` text into rows; age in ms, cpu in seconds, rss in KB. */
-export function parseProcessTable(text) {
-    const rows = [];
-    for (const line of String(text ?? "").split("\n")) {
-        const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(.*)$/);
-        if (m) rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], age: psSeconds(m[4]) * 1000, cpu: psSeconds(m[5]), pcpu: +m[6], rss: +m[7], cmd: m[8] });
-    }
-    return rows;
-}
 /** Returns a Map from process group id to its rows. */
 export function groupRows(rows) {
     const groups = new Map();
@@ -40,16 +33,6 @@ export function shortCommand(command) {
     return [basename(program), arg?.startsWith("/") ? basename(arg) : arg].filter(Boolean).join(" ");
 }
 
-/** Sends TERM to a process group, waits, then sends KILL to the processes that are still there. */
-export async function stopGroup(pgid, procs, { graceMs = loadSettings().limits.killGraceMs, isAlive = alive } = {}) {
-    try { process.kill(-pgid, "SIGTERM"); } catch { /* no such group */ }
-    await new Promise((done) => setTimeout(done, graceMs));
-    for (const proc of procs) {
-        if (!isAlive(proc.pid)) continue;
-        try { process.kill(proc.pid, "SIGKILL"); } catch { /* already gone */ }
-    }
-}
-
 // Programs that only start a script: a dev server's group may hold these above the server.
 // The program itself must be the launcher (or the script node runs, as pnpm and yarn appear): a folder named npm
 // further along a command line does not count.
@@ -57,12 +40,9 @@ const LAUNCHER_RE = /^(\S*\/)?(npm|npx|pnpm|yarn|bun)(\s|$)|^(\S*\/)?node \S*\/(
 /** True when every process in the group is the server, a process it started, or a process on the line above it that
  *  is a launcher or itself names a dev server (isServerCmd). */
 export function serverOnly(procs, server, isServerCmd = () => false) {
-    const byPid = new Map(procs.map((p) => [p.pid, p])), line = new Set([server.pid]);
-    for (let grew = true; grew;) {
-        grew = false;
-        for (const p of procs) if (!line.has(p.pid) && line.has(p.ppid)) { line.add(p.pid); grew = true; }
-    }
-    for (let p = byPid.get(server.ppid); p && !line.has(p.pid); p = byPid.get(p.ppid)) {
+    const line = descendants(procs, [server.pid]);
+    for (const p of ancestors(procs, server.ppid)) {
+        if (line.has(p.pid)) break;
         if (!LAUNCHER_RE.test(p.cmd) && !isServerCmd(p.cmd)) return false;
         line.add(p.pid);
     }
@@ -74,10 +54,11 @@ export function serverOnly(procs, server, isServerCmd = () => false) {
 export async function reap({
     rows, holders = [], queue = [], state = {}, now = Date.now(), dry = false, settings = loadSettings(),
     health = { freePct: null, diskGB: null }, load = 0, cores = 1, swapPct = 0, myPgid = null,
-    notify = () => {}, stop = stopGroup, cpuPs = () => "",
+    notify = () => {}, stop = null, cpuPs = () => "",
 }) {
+    const stopIdle = stop ?? ((pgid, procs) => stopGroup(pgid, procs, { graceMs: settings.limits.killGraceMs }));
     const next = { samples: {}, streak: 0, lastOverload: 0, ...state };
-    const lines = [], stopped = [], R = settings.reaper, groups = groupRows(rows);
+    const lines = [], stopped = [], failedStops = [], R = settings.reaper, groups = groupRows(rows);
     const isDevServer = (command) => isServer(command, R.serverPattern);
     let keep;
     try { keep = new RegExp(R.keepPattern); } catch { keep = null; }
@@ -105,8 +86,17 @@ export async function reap({
             continue;
         }
         const memoryMB = Math.round(procs.reduce((sum, p) => sum + (p.rss || 0), 0) / 1024);
-        stopped.push(`${name} (process group ${pgid}, ${idleText(verdict)}, ${memoryMB} MB of memory)`);
-        if (!dry) { await stop(pgid, procs); delete next.samples[pgid]; }
+        const what = `${name} (process group ${pgid}, ${idleText(verdict)}, ${memoryMB} MB of memory)`;
+        if (!dry) {
+            const result = await stopIdle(pgid, procs);
+            if (result?.stopped === false) {
+                failedStops.push(what);
+                lines.push(`stop failed: idle dev server ${what}, ${result.why}`);
+                continue;
+            }
+            delete next.samples[pgid];
+        }
+        stopped.push(what);
     }
     for (const pgid of Object.keys(next.samples)) if (!groups.has(Number(pgid))) delete next.samples[pgid];
     if (stopped.length) {
@@ -160,7 +150,7 @@ export async function reap({
         if (!dry) { notify("dotime: disk space low", text); next.lastLowDisk = now; }
     }
 
-    if (!stopped.length && !overloaded) lines.push(`quiet: dev-server groups under watch ${watched}, ${Math.round(swapPct)}% of swap in use, load ${load.toFixed(1)}`);
+    if (!stopped.length && !failedStops.length && !overloaded) lines.push(`quiet: dev-server groups under watch ${watched}, ${Math.round(swapPct)}% of swap in use, load ${load.toFixed(1)}`);
     return { state: next, lines, stopped };
 }
 

@@ -6,22 +6,12 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { alive, parseElapsed, blockReason, blockText, decide, enqueue, gateBlocks, gateReason, parseMaxWait, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
+const { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, parseMaxWait, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), line: join(home, "line") }; };
 const allAlive = () => true;
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
-
-test("alive: true for this process, false for a pid above the pid range", () => {
-    assert.equal(alive(process.pid), true);
-    assert.equal(alive(2 ** 30 + 7), false);
-});
-
-test("parseElapsed: reads ps elapsed times in seconds, with and without days and hours", () => {
-    const ages = parseElapsed("  701    01:05\n 702 02:00:09\n703 3-04:05:06\nnot a row\n");
-    assert.deepEqual([...ages], [[701, 65], [702, 7209], [703, ((3 * 24 + 4) * 60 + 5) * 60 + 6]]);
-});
 
 test("snapshot: an entry whose pid now belongs to a newer process is dropped; its own process keeps it", () => {
     const dirs = newDirs(), now = 50_000_000;

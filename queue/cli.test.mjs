@@ -12,7 +12,8 @@ import { cleanEnv, isolateProcess, makeRepo, pause, settingEnv, tempDir, track, 
 isolateProcess("cli");
 const { historyRow, main, parseRunArgs, statusLines, USAGE } = await import("./cli.mjs");
 const { FLAGS } = await import("./args.mjs");
-const { alive, takeSlot } = await import("./slots.mjs");
+const { takeSlot } = await import("./slots.mjs");
+const { alive } = await import("./proctree.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url)), NODE = process.execPath, MINUTE = 60_000;

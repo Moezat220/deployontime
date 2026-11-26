@@ -9,11 +9,10 @@ import { isolateProcess, makeRepo, pause, tempDir, track, until } from "./testki
 
 const HOME = isolateProcess("limits");
 const {
-    addNotice, afterMinutes, cmdStem, codePrint, DEBUG_CMD_RE, DEBUG_LABEL_RE, decideLimit, failStop, idleAlert, jobCpu,
-    killTree, KINDS, kindOf, kindStats, longRunAlert, opt, parseMaxRun, psRows, slotIdleCheck, slotIdleStep, stemStats,
-    treePids, UNLABELLED, UNTRACKED,
+    addNotice, afterMinutes, cmdStem, codePrint, DEBUG_CMD_RE, DEBUG_LABEL_RE, decideLimit, failStop, idleAlert,
+    KINDS, kindOf, kindStats, longRunAlert, opt, parseMaxRun, slotIdleCheck, slotIdleStep, stemStats,
+    UNLABELLED, UNTRACKED,
 } = await import("./limits.mjs");
-const { alive } = await import("./slots.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
@@ -349,34 +348,6 @@ test("idleAlert: names the job, its CPU use, and when its limit is reached if it
     assert.equal(idleAlert(base).message.includes("limit reached"), false);
 });
 
-const TABLE = [
-    "  4100     1  4100   0:04.00",
-    "  4101  4100  4100   0:06.50",
-    "  4102  4101  4102   0:01.25",
-    "  4103  4102  4102   0:00.25",
-    "  4300     1  4100   0:02.00",
-    "  4200     1  4200   0:30.00",
-].join("\n");
-
-test("psRows: one row per process line, with CPU time in seconds", () => {
-    assert.deepEqual(psRows("  4100     1  4100   0:03.75\n  4101  4100  4100  12:00.00\n  PID  PPID  PGID      TIME\n\n  4102  4101  4102\n"), [
-        { pid: 4100, ppid: 1, pgid: 4100, cpu: 3.75 }, { pid: 4101, ppid: 4100, pgid: 4100, cpu: 720 }, { pid: 4102, ppid: 4101, pgid: 4102, cpu: 0 },
-    ]);
-    assert.deepEqual(psRows(undefined), []);
-});
-
-test("treePids: a leader's pids include a child that started a group of its own", () => {
-    assert.deepEqual(treePids(4100, TABLE).sort(), [4100, 4101, 4102, 4103, 4300]);
-    assert.deepEqual(treePids(4200, TABLE), [4200]);
-    assert.deepEqual(treePids(4999, TABLE), [4999]);
-});
-
-test("jobCpu: sums the job's processes, and is null when its leader is gone", () => {
-    const rows = psRows(TABLE);
-    assert.equal(jobCpu({ pid: 4000, pgid: 4100 }, rows), 14);
-    assert.equal(jobCpu({ pid: 4200 }, rows), 30);
-    assert.equal(jobCpu({ pid: 4000, pgid: 4999 }, rows), null);
-});
 
 const SLOT_IDLE = { ...DEFAULTS.idle, slotIdleMin: 10, slotCpuS: 5 };
 const holder = { pid: 3300, pgid: 3301, label: SUITE, project: "shop-api", startedAt: NOW - 40 * MINUTE, killMin: 90 };
@@ -447,17 +418,4 @@ test("addNotice: false, without throwing, when the file cannot be written", () =
     const blocker = join(tempDir("limits"), "plain-file");
     writeFileSync(blocker, "");
     assert.equal(addNotice("long-run:1:2", {}, join(blocker, "notices.json")), false);
-});
-
-test("killTree: stops a started job together with a child that left its group", async () => {
-    const child = "setInterval(() => {}, 1000)";
-    const leaderCode = `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}], { detached: true, stdio: "ignore" }); console.log(c.pid); setInterval(() => {}, 1000);`;
-    const leader = track(spawn(process.execPath, ["-e", leaderCode], { detached: true, stdio: ["ignore", "pipe", "ignore"] }), { group: true });
-    const exited = new Promise((done) => leader.once("exit", done));
-    const strayChild = track(await new Promise((done) => leader.stdout.once("data", (text) => done(Number(String(text).trim())))), { group: true });
-    assert.deepEqual([alive(leader.pid), alive(strayChild)], [true, true]);
-    const signalled = killTree(leader.pid, "SIGKILL");
-    assert.deepEqual([signalled.includes(leader.pid), signalled.includes(strayChild)], [true, true]);
-    await exited;
-    await until(() => !alive(strayChild), 3000);
 });

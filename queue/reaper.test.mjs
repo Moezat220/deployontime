@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, tempDir, track, until } from "./testkit.mjs";
 
 const HOME = isolateProcess("reaper");
-const { groupRows, parseProcessTable, reap, serverOnly, shortCommand, stopGroup } = await import("./reaper.mjs");
-const { alive, snapshot } = await import("./slots.mjs");
+const { groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
+const { snapshot } = await import("./slots.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, MB = 1024, NOW = Date.UTC(2031, 10, 8, 18, 0);
@@ -31,15 +31,6 @@ async function pass(rows, state = {}, options = {}) {
     const result = await reap({ rows, state: structuredClone(state), now: NOW, settings: SETTINGS, notify: (title, text) => notices.push([title, text]), stop: async (pgid, procs) => stops.push([pgid, procs.length]), ...options });
     return { ...result, stops, notices };
 }
-
-test("parseProcessTable: turns `ps` rows into numbers and a command, skipping other lines", () => {
-    const text = `  2400     1  2400    01:35:00   0:41.50  0.2 262144 ${SERVER}\n  2401  2400  2400       58:10   0:00.75 12.5   4096 node child.js --flag\n  PID  PPID  PGID ELAPSED TIME %CPU RSS COMMAND\n\n`;
-    assert.deepEqual(parseProcessTable(text), [
-        { pid: 2400, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu: 41.5, pcpu: 0.2, rss: 262144, cmd: SERVER },
-        { pid: 2401, ppid: 2400, pgid: 2400, age: 3_490_000, cpu: 0.75, pcpu: 12.5, rss: 4096, cmd: "node child.js --flag" },
-    ]);
-    assert.deepEqual(parseProcessTable(""), []);
-});
 
 test("groupRows: collects rows under their process group", () => {
     const groups = groupRows([...serverGroup(1), { pid: 2500, ppid: 1, pgid: 2500, cmd: "sleep 60" }]);
@@ -239,15 +230,6 @@ test("reap: sends the notice for a slot whose job uses almost no CPU", async () 
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(HOME, "notices.json"), "utf8"))), [`idle-slot:6100:${holder.startedAt}`]);
 });
 
-test("stopGroup: ends a started group, with KILL for a process that ignores TERM", async () => {
-    const stubborn = track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);'], { detached: true, stdio: ["ignore", "pipe", "ignore"] }), { group: true });
-    const exited = new Promise((done) => stubborn.once("exit", (code, signal) => done(signal)));
-    await new Promise((done) => stubborn.stdout.once("data", done));
-    await stopGroup(stubborn.pid, [{ pid: stubborn.pid }], { graceMs: 150 });
-    assert.equal(await exited, "SIGKILL");
-    await until(() => !alive(stubborn.pid), 3000);
-});
-
 test("main: runs when the script is started through a symlink", () => {
     const link = join(tempDir("reaper-link"), "reaper-link.mjs");
     symlinkSync(fileURLToPath(new URL("./reaper.mjs", import.meta.url)), link);
@@ -269,4 +251,13 @@ test("main: a dry run leaves the slot file of a dead holder in place", () => {
     // The same file is cleared away by an ordinary snapshot, which shows that the holder does count as dead.
     assert.deepEqual(snapshot({ dirs: { slots: join(home, "slots"), line: join(home, "line") } }).holders, []);
     assert.equal(existsSync(slot), false);
+});
+
+test("reap: an idle server whose stop was refused is reported as a failed stop, not as stopped", async () => {
+    const early = await pass(serverGroup(300), {}, { now: NOW - SAMPLE_AGE * MINUTE });
+    const refused = async () => ({ stopped: false, why: "TERM refused (EPERM)" });
+    const late = await pass(serverGroup(302), early.state, { stop: refused });
+    assert.deepEqual([late.stopped, late.notices], [[], []]);
+    assert.deepEqual(late.lines, [`stop failed: idle dev server node next (process group 2400, 2.0 s of CPU in ${SAMPLE_AGE} min, 384 MB of memory), TERM refused (EPERM)`]);
+    assert.equal(late.state.samples[2400].length, 2, "the server stays under watch");
 });

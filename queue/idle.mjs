@@ -55,10 +55,3 @@ export function slotIdleVerdict({ startedAt, samples, now }, idle = loadSettings
     const usedS = Math.round((newest.cpu - older.cpu) * 10) / 10, minutes = Math.round((now - older.t) / MINUTE);
     return usedS < idle.slotCpuS ? { idle: true, state: "idle", usedS, minutes, since: older.t } : { idle: false, state: "active", usedS, minutes };
 }
-
-/** A `ps` time value, "[[days-]hours:]minutes:seconds", in seconds. */
-export function psSeconds(value) {
-    const text = String(value).trim(), dash = text.indexOf("-");
-    const days = dash < 0 ? 0 : Number(text.slice(0, dash));
-    return text.slice(dash + 1).split(":").map(Number).reduce((total, part) => total * 60 + part, 0) + days * 86_400;
-}

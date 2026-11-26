@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { isMainModule, loadSettings } from "./settings.mjs";
-import { alive } from "./slots.mjs";
+import { alive, signalGroup } from "./proctree.mjs";
 
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"];
 export const NO_START_EXIT = 127;
@@ -71,7 +71,8 @@ function main() {
     // The queue process has already reported any setting that does not fit.
     const { orphanCheckMs, killGraceMs } = loadSettings(process.env, { warn: () => {} }).limits;
     const ignore = () => {};
-    const signalGroup = (signal) => { try { process.kill(-process.pid, signal); } catch { /* group already gone */ } };
+    // A group that is already gone needs no signal.
+    const signalOwnGroup = (signal) => signalGroup(process.pid, signal);
 
     // With default handlers the wrapper would die before the job and lose its exit status.
     for (const signal of FORWARDED) process.on(signal, ignore);
@@ -82,8 +83,8 @@ function main() {
         if (!queueGone({ ppid: process.ppid, queuePid })) return;
         clearInterval(watch);
         orphaned = true;
-        signalGroup("SIGTERM");
-        setTimeout(() => signalGroup("SIGKILL"), killGraceMs);
+        signalOwnGroup("SIGTERM");
+        setTimeout(() => signalOwnGroup("SIGKILL"), killGraceMs);
     }, orphanCheckMs);
     watch.unref();
 
@@ -92,7 +93,7 @@ function main() {
         process.exit(NO_START_EXIT);
     });
     job.on("exit", (code, signal) => {
-        if (orphaned) signalGroup("SIGKILL");
+        if (orphaned) signalOwnGroup("SIGKILL");
         const plan = exitPlan({ code, signal });
         if (!plan.reraise) process.exit(plan.exit);
         for (const name of FORWARDED) process.off(name, ignore);

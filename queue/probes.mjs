@@ -54,6 +54,8 @@ export const probePowerText = () => runTool("pmset", ["-g", "batt"], 1500);
 export const probeProcessTable = () => runTool("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,time=,pcpu=,rss=,command="], 10_000);
 export const probeProcessCpu = () => runTool("ps", ["-S", "-Ao", "pid=,ppid=,pgid=,time="], 10_000);
 export const probeProcessTree = () => runTool("ps", ["-Ao", "pid=,ppid=,pgid="]);
+/** `ps -o pid=,etime=` for the given pids; empty text for none. */
+export const probeProcessAges = (pids) => (pids.length ? runTool("ps", ["-o", "pid=,etime=", "-p", pids.join(",")]) : "");
 export function probeGroupOf(pid) {
     const pgid = Number(runTool("ps", ["-o", "pgid=", "-p", String(pid)], 3000).trim());
     return Number.isInteger(pgid) && pgid > 0 ? pgid : null;

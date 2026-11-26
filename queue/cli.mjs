@@ -8,7 +8,8 @@ import { isMainModule, loadSettings, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, parseMaxWait, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } from "./slots.mjs";
 import { healthVerdict, readHealth } from "./health.mjs";
-import { addNotice, afterMinutes, cmdStem, codePrint, decideLimit, failStop, killTree, kindOf, kindStats, longRunAlert, MAX_TIMER_MS, opt, parseMaxRun, stemStats, UNLABELLED } from "./limits.mjs";
+import { killTree, signalGroup } from "./proctree.mjs";
+import { addNotice, afterMinutes, cmdStem, codePrint, decideLimit, failStop, kindOf, kindStats, longRunAlert, MAX_TIMER_MS, opt, parseMaxRun, stemStats, UNLABELLED } from "./limits.mjs";
 import { gitState } from "./git.mjs";
 import { addWait, append, cmdString, findStamp, historyWindow, jobEnd, readLines, record, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
@@ -184,7 +185,10 @@ async function cmdRun(args, settings) {
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const child = spawn(process.execPath, [wrapper, String(process.pid), ...cmd], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
     updateSlot(slot, process.pid, { pgid: child.pid, startedAt });
-    const signalJob = (signal) => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* already gone */ } } };
+    const signalJob = (signal) => {
+        if (signalGroup(child.pid, signal).sent) return;
+        try { child.kill(signal); } catch { /* already gone */ }
+    };
 
     // INT, TERM and HUP go on to the job; the first one received is kept for the journal.
     let received = null, receivedAt = null;
