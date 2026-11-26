@@ -18,10 +18,12 @@ export function readOnlyGit(env = process.env) {
 }
 
 /** The output of `git -C <cwd> <args>`, or null when git is missing, fails, or runs out of time or buffer.
- *  opts: timeout in ms (10 s), maxBuffer in bytes (Node's default), encoding "utf8" or "buffer". */
-export function git(cwd, args, { timeout = 10_000, maxBuffer = undefined, encoding = "utf8" } = {}) {
+ *  opts: timeout in ms (10 s), maxBuffer in bytes, encoding "utf8" or "buffer". Without maxBuffer the key is left
+ *  out, so Node's default of 1 MB applies: a maxBuffer of undefined would mean no limit at all. */
+export function git(cwd, args, { timeout = 10_000, maxBuffer, encoding = "utf8" } = {}) {
+    const options = { encoding, timeout, ...(maxBuffer === undefined ? {} : { maxBuffer }), env: readOnlyGit() };
     try {
-        const ran = spawnSync("git", ["-C", cwd, ...args], { encoding, timeout, maxBuffer, env: readOnlyGit() });
+        const ran = spawnSync("git", ["-C", cwd, ...args], options);
         return ran.status === 0 ? ran.stdout : null;
     } catch { return null; }
 }

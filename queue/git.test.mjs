@@ -17,6 +17,13 @@ test("git: the output as text or bytes, and null when git fails", () => {
     assert.equal(git(repo, ["status", "--porcelain"], { timeout: 1 }), null, "a call that runs out of time");
 });
 
+test("git: output above 1 MB gives null unless a larger maxBuffer is given", () => {
+    const big = "0123456789abcdef\n".repeat(80_000);
+    const repo = makeRepo(join(tempDir("git-big"), "media-site"), { "big.txt": big });
+    assert.equal(git(repo, ["show", "HEAD:big.txt"]), null, "the default cap of 1 MB, as gitState uses it");
+    assert.equal(git(repo, ["show", "HEAD:big.txt"], { maxBuffer: 4 * 1024 * 1024 }), big);
+});
+
 test("repoName: the repository folder, the main one for a linked worktree, null outside git", () => {
     const root = tempDir("git"), repo = makeRepo(join(root, "docs-site"), { "pages/intro.md": "# intro\n" });
     assert.equal(repoName(join(repo, "pages")), "docs-site");
