@@ -57,7 +57,10 @@ export function ancestors(table, pid) {
 
 // The pids of a job: its group members, then everything below them by parent pid, which also catches children
 // that started a group of their own.
-const jobPids = (leader, rows) => descendants(rows, [leader, ...rows.filter((row) => row.pgid === leader).map((row) => row.pid)]);
+function jobPids(leader, rows) {
+    const members = rows.filter((row) => row.pgid === leader).map((row) => row.pid);
+    return descendants(rows, [leader, ...members]);
+}
 
 /** The pids of a job, from the given `ps` text or a fresh listing. */
 export function treePids(leader, ps = null) {

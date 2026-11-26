@@ -29,8 +29,10 @@ export function strayRuns(rows, { holders = [], minMB = STRAY.minMB, minProcs = 
     const found = [];
     for (const root of roots.values()) {
         const tree = [...descendants(index, [root.pid])].map((pid) => index.byPid.get(pid));
-        const tests = tree.filter(isTestProcess), rssMB = Math.round(tests.reduce((sum, p) => sum + (p.rss || 0), 0) / 1024);
-        if ((rssMB >= minMB && tests.length >= 2) || tests.length >= minProcs) found.push({ rootPid: root.pid, procs: tests.length, rssMB, cmd: root.cmd });
+        const tests = tree.filter(isTestProcess);
+        const rssMB = Math.round(tests.reduce((sum, p) => sum + (p.rss || 0), 0) / 1024);
+        const large = (rssMB >= minMB && tests.length >= 2) || tests.length >= minProcs;
+        if (large) found.push({ rootPid: root.pid, procs: tests.length, rssMB, cmd: root.cmd });
     }
     return found.sort((a, b) => b.rssMB - a.rssMB);
 }

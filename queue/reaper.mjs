@@ -72,7 +72,8 @@ export async function checkIdleServers(ctx, state) {
             continue;
         }
         watched++;
-        const protectedProc = (p) => TEST_RUN_RE.test(p.cmd) || slotPids.has(p.pid) || slotPids.has(p.pgid) || !!keep?.test(p.cmd);
+        const inSlot = (p) => slotPids.has(p.pid) || slotPids.has(p.pgid);
+        const protectedProc = (p) => TEST_RUN_RE.test(p.cmd) || inSlot(p) || !!keep?.test(p.cmd);
         const exempt = procs.some(protectedProc);
         const cpu = procs.reduce((sum, p) => sum + p.cpu, 0);
         const ageMs = Math.max(...procs.map((p) => p.age));
@@ -81,11 +82,13 @@ export async function checkIdleServers(ctx, state) {
         const name = shortCommand(server.cmd);
         if (dry) {
             const age = Math.round(ageMs / MINUTE);
-            lines.push(`server group ${pgid}: ${name}, ${age} min old, ${cpu.toFixed(0)} s of CPU so far, state ${verdict.state}`);
+            const facts = `${age} min old, ${cpu.toFixed(0)} s of CPU so far, state ${verdict.state}`;
+            lines.push(`server group ${pgid}: ${name}, ${facts}`);
         }
         if (!verdict.idle) continue;
         if (!serverOnly(procs, server, isDevServer)) { // stopping the group would stop that program too
-            lines.push(`idle dev server ${name} (process group ${pgid}) shares its group with another program: left running`);
+            const shared = "shares its group with another program: left running";
+            lines.push(`idle dev server ${name} (process group ${pgid}) ${shared}`);
             continue;
         }
         const memoryMB = Math.round(procs.reduce((sum, p) => sum + (p.rss || 0), 0) / 1024);
@@ -135,7 +138,8 @@ export function checkIdleSlots(ctx, state) {
     const { holders, queue, now, dry, notify, record, cpuPs, settings, tz } = ctx;
     try {
         const checked = slotIdleCheck({
-            holders, waiting: queue, state: state.slotIdle ?? {}, now, dry, notify, record, ps: cpuPs, idle: settings.idle, tz,
+            holders, waiting: queue, state: state.slotIdle ?? {}, now, dry, notify, record, ps: cpuPs,
+            idle: settings.idle, tz,
         });
         return { state: { slotIdle: checked.state }, lines: checked.lines };
     } catch (e) {
@@ -252,7 +256,10 @@ async function main() {
     });
     for (const line of run.lines) console.log(`${new Date(now).toISOString()} reaper: ${line}`);
     if (dry) {
-        if (!existsSync(stateFile)) console.log("reaper: dry run without saved samples, idle servers show only after real runs have covered one idle window");
+        if (!existsSync(stateFile)) {
+            console.log("reaper: dry run without saved samples, idle servers show only after real runs have covered "
+                + "one idle window");
+        }
         return;
     }
     writeJsonAtomic(stateFile, run.state);

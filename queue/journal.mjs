@@ -46,7 +46,9 @@ export const isFailedRun = (row) => row.outcome === "ran" && row.exit !== 0 && !
 
 const isoOrNull = (ms) => (ms ? new Date(ms).toISOString() : null);
 /** Builds a journal line. outcome: ran, stopped, timed-out, refused, gave-up, left or could-not-start. */
-export function record({ label, project, cwd, priority, queuedAt, startedAt, endedAt, outcome, exit, tally, cmd, head, clean, extra }) {
+export function record(job) {
+    const { label, project, cwd, priority, queuedAt, startedAt, endedAt, outcome, exit, tally } = job;
+    const { cmd, head, clean, extra } = job;
     return {
         v: 1, label, project, projectKey: jobProject({ label, project, cwd }), cwd, priority: !!priority,
         queuedAt: isoOrNull(queuedAt), startedAt: isoOrNull(startedAt), endedAt: isoOrNull(endedAt),
@@ -82,29 +84,46 @@ export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
     const ended = (row) => dateTime(Date.parse(row.endedAt), tz);
     if (!runs.length) return none(`no finished run on record, ${scope}`);
     const onCommit = runs.filter((row) => row.head === folder.head);
-    if (!onCommit.length) return none(`commit differs, folder at ${shortId(folder.head)}, newest run at ${shortId(runs[0].head)} (ended ${ended(runs[0])}), ${scope}`);
+    if (!onCommit.length) {
+        const newest = `newest run at ${shortId(runs[0].head)} (ended ${ended(runs[0])})`;
+        return none(`commit differs, folder at ${shortId(folder.head)}, ${newest}, ${scope}`);
+    }
     const run = onCommit.find((row) => row.clean === true);
     if (!run) return none(`every run at ${shortId(folder.head)} began with uncommitted changes, ${scope}`);
-    if (run.exit !== 0) return none(`newest clean run failed, "${run.label}", exit ${run.exit}, commit ${shortId(run.head)}, ended ${ended(run)}`);
+    if (run.exit !== 0) {
+        const facts = `exit ${run.exit}, commit ${shortId(run.head)}, ended ${ended(run)}`;
+        return none(`newest clean run failed, "${run.label}", ${facts}`);
+    }
     const ago = Math.max(0, Math.round((at - Date.parse(run.endedAt)) / MINUTE));
-    return { stamp: run, text: `stamp: commit ${shortId(run.head)}, passed ${ago} min ago by "${run.label}", command ${run.cmd ?? "not recorded"}, run time ${run.runMin} min, tree clean at start, finished ${ended(run)}` };
+    const text = `stamp: commit ${shortId(run.head)}, passed ${ago} min ago by "${run.label}", `
+        + `command ${run.cmd ?? "not recorded"}, run time ${run.runMin} min, tree clean at start, `
+        + `finished ${ended(run)}`;
+    return { stamp: run, text };
 }
 
 /** The time range `history` covers. Returns { from, to, title }. day picks one calendar day; otherwise the range is the
  *  last `days` calendar days up to now, both counted in the zone. */
 export function historyWindow({ day = null, days = 7, now = Date.now(), tz }) {
-    if (day) return { from: dayStart(day, tz), to: Math.min(now, dayStart(shiftDay(day, 1), tz)), title: `${day}, zone ${tz}` };
-    const count = Math.max(1, Math.ceil(days)), today = dayOf(now, tz), first = shiftDay(today, 1 - count);
-    return { from: dayStart(first, tz), to: now, title: count === 1 ? `${today} so far, zone ${tz}` : `${first} through ${today} (${count} days), zone ${tz}` };
+    if (day) {
+        const nextDay = dayStart(shiftDay(day, 1), tz);
+        return { from: dayStart(day, tz), to: Math.min(now, nextDay), title: `${day}, zone ${tz}` };
+    }
+    const count = Math.max(1, Math.ceil(days));
+    const today = dayOf(now, tz);
+    const first = shiftDay(today, 1 - count);
+    const title = count === 1 ? `${today} so far, zone ${tz}` : `${first} through ${today} (${count} days), zone ${tz}`;
+    return { from: dayStart(first, tz), to: now, title };
 }
 
 const interval = (from, to, cap) => (Number.isFinite(from) && Number.isFinite(to) ? [from, Math.min(to, cap)] : null);
 function waitInterval(row, cap) {
-    const from = Date.parse(row.queuedAt), to = Date.parse(row.startedAt ?? row.endedAt);
+    const from = Date.parse(row.queuedAt);
+    const to = Date.parse(row.startedAt ?? row.endedAt);
     return interval(from, Number.isFinite(to) ? to : from + (row.waitMin ?? 0) * MINUTE, cap);
 }
 function runInterval(row, cap) {
-    const from = Date.parse(row.startedAt), to = Date.parse(row.endedAt);
+    const from = Date.parse(row.startedAt);
+    const to = Date.parse(row.endedAt);
     return interval(from, Number.isFinite(to) ? to : from + (row.runMin ?? 0) * MINUTE, cap);
 }
 /** A sweep over wait and run intervals. waitWallMin: time with one or more jobs waiting, overlaps merged.
@@ -114,7 +133,11 @@ export function clockMinutes(waits, runs = []) {
     for (const w of waits) if (w && w[1] > w[0]) edges.push([w[0], 1, 0], [w[1], -1, 0]);
     for (const r of runs) if (r && r[1] > r[0]) edges.push([r[0], 0, 1], [r[1], 0, -1]);
     edges.sort((a, b) => a[0] - b[0]);
-    let waiting = 0, running = 0, previous = 0, wall = 0, blocked = 0;
+    let waiting = 0;
+    let running = 0;
+    let previous = 0;
+    let wall = 0;
+    let blocked = 0;
     for (const [t, waitStep, runStep] of edges) {
         if (waiting > 0) { wall += t - previous; if (running === 0) blocked += t - previous; }
         waiting += waitStep; running += runStep; previous = t;
@@ -123,21 +146,33 @@ export function clockMinutes(waits, runs = []) {
 }
 
 function totals(rows, until) {
-    const waits = rows.map((row) => row.waitMin), waitBy = {};
-    for (const row of rows) for (const [gate, min] of Object.entries(row.waitBy ?? {})) waitBy[gate] = oneDecimal((waitBy[gate] ?? 0) + min);
+    const waits = rows.map((row) => row.waitMin);
+    const waitBy = {};
+    for (const row of rows) {
+        for (const [gate, min] of Object.entries(row.waitBy ?? {})) {
+            waitBy[gate] = oneDecimal((waitBy[gate] ?? 0) + min);
+        }
+    }
     const count = (test) => rows.filter(test).length;
     return {
-        jobs: rows.length, waited: count((row) => row.waitMin >= 1), waitMinTotal: oneDecimal(waits.reduce((a, b) => a + b, 0)),
+        jobs: rows.length,
+        waited: count((row) => row.waitMin >= 1),
+        waitMinTotal: oneDecimal(waits.reduce((a, b) => a + b, 0)),
         ...clockMinutes(rows.map((row) => waitInterval(row, until)), rows.map((row) => runInterval(row, until))),
-        waitMedian: pctl(waits, 0.5) ?? 0, waitP90: pctl(waits, 0.9) ?? 0, runMinTotal: oneDecimal(rows.reduce((sum, row) => sum + (row.runMin ?? 0), 0)),
+        waitMedian: pctl(waits, 0.5) ?? 0,
+        waitP90: pctl(waits, 0.9) ?? 0,
+        runMinTotal: oneDecimal(rows.reduce((sum, row) => sum + (row.runMin ?? 0), 0)),
         gaveUp: count((row) => row.outcome === "gave-up"), failed: count(isFailedRun), stopped: count(isStopped),
-        timedOut: count((row) => row.outcome === "timed-out"), refused: count((row) => row.outcome === "refused"), waitBy,
+        timedOut: count((row) => row.outcome === "timed-out"),
+        refused: count((row) => row.outcome === "refused"),
+        waitBy,
     };
 }
 /** Returns { all, byProject } for jobs whose queue time lies in [since, until); the project that waited longest
  *  comes first. */
 export function summarize(lines, since = 0, until = Infinity) {
-    const rows = parseLines(lines).filter((row) => Date.parse(row.queuedAt) >= since && Date.parse(row.queuedAt) < until);
+    const inRange = (row) => Date.parse(row.queuedAt) >= since && Date.parse(row.queuedAt) < until;
+    const rows = parseLines(lines).filter(inRange);
     const groups = new Map();
     for (const row of rows) {
         const name = lineProject(row);

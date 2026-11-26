@@ -23,15 +23,20 @@ function addUntracked(hash, cwd, ignoreDirs) {
         hash.update("untracked-unknown");
         return;
     }
-    const files = listed.split("\0").filter((name) => name && !SKIPPED_UNTRACKED_RE.test(name)).sort().slice(0, UNTRACKED.maxFiles);
+    const counted = (name) => name && !SKIPPED_UNTRACKED_RE.test(name);
+    const files = listed.split("\0").filter(counted).sort().slice(0, UNTRACKED.maxFiles);
     let bytesRead = 0;
     for (const name of files) {
         try {
-            const path = join(top, name), info = statSync(path);
+            const path = join(top, name);
+            const info = statSync(path);
             if (!info.isFile()) continue;
             hash.update(`\0${name}\0`);
-            if (info.size <= UNTRACKED.maxFileBytes && bytesRead + info.size <= UNTRACKED.maxTotalBytes) { hash.update(readFileSync(path)); bytesRead += info.size; }
-            else hash.update(`${info.size}:${info.mtimeMs}`);
+            const whole = info.size <= UNTRACKED.maxFileBytes && bytesRead + info.size <= UNTRACKED.maxTotalBytes;
+            if (whole) {
+                hash.update(readFileSync(path));
+                bytesRead += info.size;
+            } else hash.update(`${info.size}:${info.mtimeMs}`);
         } catch { /* the file went away */ }
     }
 }
@@ -49,7 +54,8 @@ export function fingerprint(cwd, command, ignoreDirs) {
     } catch { hash.update("git-unknown"); }
     for (const arg of command) {
         try {
-            const path = arg.startsWith("/") ? arg : join(cwd, arg), info = statSync(path);
+            const path = arg.startsWith("/") ? arg : join(cwd, arg);
+            const info = statSync(path);
             if (info.isFile() && info.size < SCRIPT_MAX_BYTES) hash.update(readFileSync(path));
         } catch { /* not a file */ }
     }

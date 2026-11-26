@@ -6,17 +6,22 @@ import { readJson, writeJsonAtomic } from "./files.mjs";
 /** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
  *  the health settings. */
 export function healthVerdict({ load, cores, freePct, diskGB, battery = null }, limits) {
-    const blocks = [], loadCap = cores * limits.loadPerCore;
-    if (load > loadCap) blocks.push({ gate: "load", text: `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed` });
+    const blocks = [];
+    const loadCap = cores * limits.loadPerCore;
+    if (load > loadCap) {
+        blocks.push({ gate: "load", text: `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed` });
+    }
     if (freePct != null && freePct < limits.minFreeMemPct) {
         blocks.push({ gate: "memory", text: `memory too low: ${freePct}% free, ${limits.minFreeMemPct}% needed` });
     }
     if (diskGB != null && diskGB < limits.minFreeDiskGB) {
-        blocks.push({ gate: "disk", text: `disk too low: ${diskGB.toFixed(1)} GB free, ${limits.minFreeDiskGB} GB needed` });
+        const text = `disk too low: ${diskGB.toFixed(1)} GB free, ${limits.minFreeDiskGB} GB needed`;
+        blocks.push({ gate: "disk", text });
     }
     if (battery?.onBattery === true && Number.isFinite(battery.pct) && battery.pct <= limits.minBatteryPct) {
         const supply = battery.plugged ? "plugged in but still draining" : "not plugged in";
-        blocks.push({ gate: "battery", text: `battery too low: ${battery.pct}% left, more than ${limits.minBatteryPct}% needed, ${supply}` });
+        const text = `battery too low: ${battery.pct}% left, more than ${limits.minBatteryPct}% needed, ${supply}`;
+        blocks.push({ gate: "battery", text });
     }
     return { ok: blocks.length === 0, blocks };
 }
@@ -32,7 +37,8 @@ export function parsePower(text) {
     };
 }
 
-/** Returns { onBattery: true | false | null, plugged }. A plugged-in computer that still loses charge counts as on battery. */
+/** Returns { onBattery: true | false | null, plugged }. A plugged-in computer that still loses charge counts as on
+ *  battery. */
 export function powerState(power) {
     if (power?.ac === false) return { onBattery: true, plugged: false };
     if (power?.ac !== true) return { onBattery: null, plugged: false };
@@ -42,7 +48,8 @@ export function powerState(power) {
 /** The battery reading for the gate, or null when it is unknown. */
 export function readBattery(probe = probePowerText) {
     try {
-        const power = parsePower(probe()), state = powerState(power);
+        const power = parsePower(probe());
+        const state = powerState(power);
         if (state.onBattery == null || power.pct == null) return null;
         return { onBattery: state.onBattery, pct: power.pct, plugged: state.plugged };
     } catch { return null; }
@@ -50,7 +57,9 @@ export function readBattery(probe = probePowerText) {
 
 /** The current reading: { load, cores, freePct, diskGB, battery }. probes replaces single readings. */
 export function readHealth({ probes = {} } = {}) {
-    const read = { load: probeLoad, memory: probeMemoryFreePct, disk: probeDiskFreeGB, battery: readBattery, ...probes };
+    const read = {
+        load: probeLoad, memory: probeMemoryFreePct, disk: probeDiskFreeGB, battery: readBattery, ...probes,
+    };
     return { ...read.load(), freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
 }
 

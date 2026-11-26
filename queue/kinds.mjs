@@ -56,7 +56,10 @@ function stemOfWords(words) {
         return parts.filter(Boolean).join(" && ") || null;
     }
     if (INLINE_CODE_FLAGS.has(args[0])) return null;
-    if (PACKAGE_MANAGERS.has(program)) return [program, ...args.slice(0, args[0] === "run" || args[0] === "exec" ? 2 : 1)].join(" ");
+    if (PACKAGE_MANAGERS.has(program)) {
+        const words = args[0] === "run" || args[0] === "exec" ? 2 : 1;
+        return [program, ...args.slice(0, words)].join(" ");
+    }
     if (TOOL_RUNNERS.has(program)) {
         if (INTERPRETERS.has(args[0])) return [program, args[0], ...args.slice(1, 2).map(baseName)].join(" ");
         return [program, ...args.slice(0, 1), ...args.slice(1, 2).filter(isPlainWord)].join(" ");

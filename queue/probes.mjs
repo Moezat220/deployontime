@@ -42,7 +42,8 @@ export const probeDiskFreeGB = (path = "/") => parseDf(runTool("df", ["-k", path
 export function parseSwap(text) {
     const found = String(text ?? "").match(/total = ([\d.]+)M\s+used = ([\d.]+)M/);
     if (!found) return 0;
-    const total = Number(found[1]), used = Number(found[2]);
+    const total = Number(found[1]);
+    const used = Number(found[2]);
     return total > 0 ? (used / total) * 100 : 0;
 }
 export const probeSwapPct = () => parseSwap(runTool("sysctl", ["-n", "vm.swapusage"]));
@@ -51,11 +52,15 @@ export const probePowerText = () => runTool("pmset", ["-g", "batt"], 1500);
 
 // Three views of the process table: full rows for the reaper, CPU time including finished children, and a cheap
 // pid/parent/group listing.
-export const probeProcessTable = () => runTool("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,time=,pcpu=,rss=,command="], 10_000);
+const TABLE_COLUMNS = "pid=,ppid=,pgid=,etime=,time=,pcpu=,rss=,command=";
+export const probeProcessTable = () => runTool("ps", ["-Ao", TABLE_COLUMNS], 10_000);
 export const probeProcessCpu = () => runTool("ps", ["-S", "-Ao", "pid=,ppid=,pgid=,time="], 10_000);
 export const probeProcessTree = () => runTool("ps", ["-Ao", "pid=,ppid=,pgid="]);
 /** `ps -o pid=,etime=` for the given pids; empty text for none. */
-export const probeProcessAges = (pids) => (pids.length ? runTool("ps", ["-o", "pid=,etime=", "-p", pids.join(",")]) : "");
+export const probeProcessAges = (pids) => {
+    if (!pids.length) return "";
+    return runTool("ps", ["-o", "pid=,etime=", "-p", pids.join(",")]);
+};
 export function probeGroupOf(pid) {
     const pgid = Number(runTool("ps", ["-o", "pgid=", "-p", String(pid)], 3000).trim());
     return Number.isInteger(pgid) && pgid > 0 ? pgid : null;
@@ -64,8 +69,12 @@ export function probeGroupOf(pid) {
 /** Shows a desktop notice. The texts travel as script arguments, so they are never run as script code. */
 export function showDesktopNotice(title, message, { run = spawnSync, platform = process.platform } = {}) {
     if (platform !== "darwin") return false;
-    const script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run"];
-    try { return run("osascript", [...script, title, message], { stdio: "ignore", timeout: 10_000 }).status === 0; } catch { return false; }
+    const script = [
+        "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run",
+    ];
+    try {
+        return run("osascript", [...script, title, message], { stdio: "ignore", timeout: 10_000 }).status === 0;
+    } catch { return false; }
 }
 
 /** Parses `launchctl list` output into a Map from label to { pid, exit }. */
@@ -73,7 +82,8 @@ export function parseLaunchctlList(text) {
     const jobs = new Map();
     for (const row of String(text ?? "").split("\n").slice(1)) {
         const [pid, status, label] = row.split("\t");
-        if (label) jobs.set(label, { pid: pid === "-" ? null : Number(pid), exit: status === "-" ? null : Number(status) });
+        if (!label) continue;
+        jobs.set(label, { pid: pid === "-" ? null : Number(pid), exit: status === "-" ? null : Number(status) });
     }
     return jobs;
 }

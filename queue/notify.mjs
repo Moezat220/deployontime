@@ -14,22 +14,28 @@ const homeRe = () => {
 
 /** One line of printable text with the home folder shortened to ~, cut to a length. */
 export function cleanText(text, maxLength) {
-    const home = homeRe(), raw = String(text ?? "");
-    return (home ? raw.replace(home, "~") : raw).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
+    const home = homeRe();
+    const raw = String(text ?? "");
+    const shortened = home ? raw.replace(home, "~") : raw;
+    return shortened.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 /** Runs the notify command in a shell. The texts are handed over as environment variables, not as shell code. */
 export function runNotifyCommand(command, title, message, env = process.env) {
     try {
-        const ran = spawnSync("/bin/sh", ["-c", command], { env: { ...env, DOTIME_TITLE: title, DOTIME_MESSAGE: message }, stdio: "ignore", timeout: 15_000 });
+        const withTexts = { ...env, DOTIME_TITLE: title, DOTIME_MESSAGE: message };
+        const ran = spawnSync("/bin/sh", ["-c", command], { env: withTexts, stdio: "ignore", timeout: 15_000 });
         return ran.status === 0;
     } catch { return false; }
 }
 
 /** Returns { logged, desktop, command }; command is null when no command is set. env selects the channels; logFile
  *  is the notify.log of the state folder. */
-export function notify(title, message, { env, logFile, desktop = showDesktopNotice, command = runNotifyCommand, now = Date.now() }) {
-    const head = cleanText(title, 80), body = cleanText(message, 900), sent = { logged: false, desktop: false, command: null };
+export function notify(title, message, channels) {
+    const { env, logFile, desktop = showDesktopNotice, command = runNotifyCommand, now = Date.now() } = channels;
+    const head = cleanText(title, 80);
+    const body = cleanText(message, 900);
+    const sent = { logged: false, desktop: false, command: null };
     // A log line that cannot be written does not stop the other channels.
     sent.logged = appendLine(logFile, `${new Date(now).toISOString()}\t${head}\t${body}\n`);
     if (env.DOTIME_NOTIFY === "log") return sent;

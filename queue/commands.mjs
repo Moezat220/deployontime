@@ -20,7 +20,10 @@ export const TEST_RUN_RE = /\bvitest (--)?run\b|\bnode --test\b|playwright test|
 /** Processes of a large test run outside the queue: test runners and their workers, by the names they show in the
  *  process table. `node --test` is left out on purpose: the files it runs appear as plain `node <file>` processes
  *  that name no test tool, so the size of such a run cannot be read from the table. */
-export const STRAY_TEST_RE = /jest-worker|\/jest(\.js)?(\s|$)|\bjest\s|\bvitest(\.mjs)?(\s|$)|vitest\/dist|playwright test|@playwright\/test/;
+export const STRAY_TEST_RE = new RegExp([
+    "jest-worker", "\\/jest(\\.js)?(\\s|$)", "\\bjest\\s", "\\bvitest(\\.mjs)?(\\s|$)", "vitest\\/dist",
+    "playwright test", "@playwright\\/test",
+].join("|"));
 
 /** Programs that only start a script, so a dev server's process group may hold them above the server: a package
  *  manager or runner (also as the script node runs, as pnpm and yarn appear), or a shell with `-c`. The program

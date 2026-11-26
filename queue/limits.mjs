@@ -10,20 +10,23 @@ function passedRuns(lines, { project, now, windowDays }) {
     const oldest = now - windowDays * DAY;
     return parseLines(lines).filter((row) => {
         const ended = Date.parse(row.endedAt);
-        return lineProject(row) === project && row.outcome === "ran" && row.exit === 0 && ended >= oldest && ended <= now;
+        const inWindow = ended >= oldest && ended <= now;
+        return lineProject(row) === project && row.outcome === "ran" && row.exit === 0 && inWindow;
     });
 }
 const runTimes = (rows) => rows.map((row) => row.runMin ?? 0);
 /** Returns { n, p75, p90 } in minutes, over passed runs of one kind in one project. */
 export function kindStats(lines, { project, kind, now = Date.now(), windowDays }) {
-    const times = runTimes(passedRuns(lines, { project, now, windowDays }).filter((row) => (row.kind ?? kindOf(row.label, row.cmd)) === kind));
+    const ofKind = (row) => (row.kind ?? kindOf(row.label, row.cmd)) === kind;
+    const times = runTimes(passedRuns(lines, { project, now, windowDays }).filter(ofKind));
     return { n: times.length, p75: pctl(times, 0.75), p90: pctl(times, 0.9) };
 }
 /** Returns { n, p75, p90, max, stem } in minutes, over passed runs with one command stem in one project. */
 export function stemStats(lines, { project, stem, now = Date.now(), windowDays }) {
     if (!stem) return { n: 0, stem: null };
     const times = runTimes(passedRuns(lines, { project, now, windowDays }).filter((row) => cmdStem(row.cmd) === stem));
-    return { n: times.length, p75: pctl(times, 0.75), p90: pctl(times, 0.9), max: times.length ? Math.max(...times) : null, stem };
+    const max = times.length ? Math.max(...times) : null;
+    return { n: times.length, p75: pctl(times, 0.75), p90: pctl(times, 0.9), max, stem };
 }
 
 /** Picks the run limit and the long-run mark for a job. Returns { limitMin, basis, longRunMin, longRunBasis,
@@ -55,7 +58,8 @@ export function decideLimit(job, limitSettings) {
     }
     const markFrom = (s, what) => `${longRunFactor} times the p75 of ${s.p75} min over ${s.n} passed runs of ${what}`;
     let longRunMin = measured ? Math.max(floorMin, oneDecimal(source.p75 * longRunFactor)) : longRunUnmeasuredMin;
-    let longRunBasis = measured ? markFrom(source, subject) : `the ${longRunUnmeasuredMin} min setting for jobs without history`;
+    const unmeasured = `the ${longRunUnmeasuredMin} min setting for jobs without history`;
+    let longRunBasis = measured ? markFrom(source, subject) : unmeasured;
     // A command with only a few runs cannot set the limit, but it may raise one that its own runs already exceed.
     if (!ownHistory && stem?.n > 0) {
         const fromLongest = oneDecimal(stem.max * p90Factor);

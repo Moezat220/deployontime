@@ -82,9 +82,13 @@ export function enqueue(pid, label, priority, dirs, now = Date.now()) {
 export function takeSlot(pid, label, max, meta, dirs) {
     makeDirs(dirs);
     for (let n = 0; n < max; n++) {
-        const slot = join(dirs.slots, `slot-${n}.json`), temp = tempName(slot);
+        const slot = join(dirs.slots, `slot-${n}.json`);
+        const temp = tempName(slot);
         writeFileSync(temp, JSON.stringify({ pid, label, at: Date.now(), ...meta, ...bornOf(pid) }));
-        try { linkSync(temp, slot); return slot; } catch { /* another process holds this slot */ } finally { rmSync(temp, { force: true }); }
+        try {
+            linkSync(temp, slot);
+            return slot;
+        } catch { /* another process holds this slot */ } finally { rmSync(temp, { force: true }); }
     }
     return null;
 }

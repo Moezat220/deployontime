@@ -36,11 +36,14 @@ export function serverIdleVerdict({ ageMs, samples, now, exempt }, idle, samplin
     const windowMs = idle.serverIdleMin * MINUTE;
     if (exempt) return { idle: false, state: "protected" };
     if (ageMs < windowMs) return { idle: false, state: "new" };
-    const usable = sinceReset(samples), newest = usable.at(-1);
+    const usable = sinceReset(samples);
+    const newest = usable.at(-1);
     const older = usable.find((s) => now - s.t >= windowMs && now - s.t < windowMs + sampling.bandMin * MINUTE);
     if (!older || !newest) return { idle: false, state: usable.length < samples.length ? "restarted" : "sampling" };
-    const usedS = newest.cpu - older.cpu, minutes = Math.round((now - older.t) / MINUTE);
-    return usedS < idle.serverCpuS ? { idle: true, state: "idle", usedS, minutes } : { idle: false, state: "active", usedS, minutes };
+    const usedS = newest.cpu - older.cpu;
+    const minutes = Math.round((now - older.t) / MINUTE);
+    if (usedS < idle.serverCpuS) return { idle: true, state: "idle", usedS, minutes };
+    return { idle: false, state: "active", usedS, minutes };
 }
 
 /** The same question for a job in a slot. Returns { idle, state, usedS?, minutes?, since? } with state new, sampling,
@@ -48,9 +51,14 @@ export function serverIdleVerdict({ ageMs, samples, now, exempt }, idle, samplin
 export function slotIdleVerdict({ startedAt, samples, now }, idle, sampling = SAMPLING) {
     const windowMs = idle.slotIdleMin * MINUTE;
     if (now - startedAt < windowMs) return { idle: false, state: "new" };
-    const usable = sinceReset(samples), newest = usable.at(-1);
+    const usable = sinceReset(samples);
+    const newest = usable.at(-1);
     const older = usable.findLast((s) => now - s.t >= windowMs - sampling.toleranceMs);
-    if (!older || !newest || older === newest) return { idle: false, state: usable.length < samples.length ? "restarted" : "sampling" };
-    const usedS = Math.round((newest.cpu - older.cpu) * 10) / 10, minutes = Math.round((now - older.t) / MINUTE);
-    return usedS < idle.slotCpuS ? { idle: true, state: "idle", usedS, minutes, since: older.t } : { idle: false, state: "active", usedS, minutes };
+    if (!older || !newest || older === newest) {
+        return { idle: false, state: usable.length < samples.length ? "restarted" : "sampling" };
+    }
+    const usedS = Math.round((newest.cpu - older.cpu) * 10) / 10;
+    const minutes = Math.round((now - older.t) / MINUTE);
+    if (usedS < idle.slotCpuS) return { idle: true, state: "idle", usedS, minutes, since: older.t };
+    return { idle: false, state: "active", usedS, minutes };
 }

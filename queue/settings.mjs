@@ -19,10 +19,16 @@ export const DEFAULTS = Object.freeze({
     idle: { serverIdleMin: 30, serverCpuS: 10, slotIdleMin: 10, slotCpuS: 5 },
     reaper: {
         overloadPerCore: 2.0, overloadSwapPct: 80, overloadMemPct: 10, overloadDiskGB: 5, lowDiskGB: 20,
-        serverPattern: "\\bvite(\\s(?!build\\b)|$)|\\bvitest\\b|\\bnext dev\\b|\\bwrangler dev\\b|webpack(-dev-server| serve)|\\bnodemon\\b",
+        serverPattern: [
+            "\\bvite(\\s(?!build\\b)|$)", "\\bvitest\\b", "\\bnext dev\\b", "\\bwrangler dev\\b",
+            "webpack(-dev-server| serve)", "\\bnodemon\\b",
+        ].join("|"),
         keepPattern: "/Applications/|LaunchAgents",
     },
-    outputDirs: ["node_modules", "dist", "build", "out", "coverage", ".cache", ".next", ".turbo", ".wrangler", ".vercel", "test-results", "playwright-report"],
+    outputDirs: [
+        "node_modules", "dist", "build", "out", "coverage", ".cache", ".next", ".turbo", ".wrangler", ".vercel",
+        "test-results", "playwright-report",
+    ],
 });
 
 const MAX_MS = 2 ** 31 - 1; // the longest wait one timer can hold
@@ -83,11 +89,13 @@ const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 function misfit(name, fallback, value) {
     if (typeof fallback === "number") {
         const [fits, needs] = NUMBER_RULES[name] ?? from0;
-        if (name.endsWith("Ms") && value > MAX_MS) return `${needs} and at most ${MAX_MS}`; // a longer timer would fire at once
+        // A longer timer would fire at once.
+        if (name.endsWith("Ms") && value > MAX_MS) return `${needs} and at most ${MAX_MS}`;
         return typeof value === "number" && Number.isFinite(value) && fits(value) ? null : needs;
     }
     if (Array.isArray(fallback)) {
-        return Array.isArray(value) && value.every((x) => typeof x === "string" && x !== "" && !x.includes("/")) ? null : "a list of folder names";
+        const folderName = (x) => typeof x === "string" && x !== "" && !x.includes("/");
+        return Array.isArray(value) && value.every(folderName) ? null : "a list of folder names";
     }
     if (typeof value !== "string" || value === "") return "a regular expression as text";
     try { new RegExp(value); return null; } catch { return "a valid regular expression"; }
@@ -95,17 +103,23 @@ function misfit(name, fallback, value) {
 function overlay(defaults, given, prefix, warn) {
     const out = {};
     for (const [key, fallback] of Object.entries(defaults)) {
-        const name = prefix + key, value = given[key];
+        const name = prefix + key;
+        const value = given[key];
         if (isPlain(fallback)) {
             if (value !== undefined && !isPlain(value)) warn(`setting ignored: ${name} needs an object, defaults kept`);
             out[key] = overlay(fallback, isPlain(value) ? value : {}, `${name}.`, warn);
             continue;
         }
         const needs = value === undefined ? null : misfit(name, fallback, value);
-        if (needs) warn(`setting ignored: ${name} is ${JSON.stringify(value)}, needs ${needs}, default ${JSON.stringify(fallback)} kept`);
+        if (needs) {
+            const kept = `default ${JSON.stringify(fallback)} kept`;
+            warn(`setting ignored: ${name} is ${JSON.stringify(value)}, needs ${needs}, ${kept}`);
+        }
         out[key] = structuredClone(value === undefined || needs ? fallback : value);
     }
-    for (const key of Object.keys(given)) if (!(key in defaults)) warn(`setting ignored: ${prefix}${key} is not a known setting`);
+    for (const key of Object.keys(given)) {
+        if (!(key in defaults)) warn(`setting ignored: ${prefix}${key} is not a known setting`);
+    }
     return out;
 }
 

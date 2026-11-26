@@ -1,6 +1,6 @@
 // Checks on the shape of the code itself. Settings, file locations and the time zone are read in the entry points
 // only (the modules that end by running main() when started as a script), and handed down from there: a library
-// function that read them by itself would read config.json again on every call.
+// function that read them by itself would read config.json again on every call. Lines stay short enough to read.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -35,4 +35,12 @@ test("layout: importing every module reads no config file", () => {
     const ran = spawnSync(process.execPath, ["--input-type=module", "-e", imports], { env: cleanEnv(home), encoding: "utf8", timeout: 60_000 });
     assert.equal(ran.status, 0, ran.stderr);
     assert.equal(ran.stderr, "");
+});
+
+test("layout: no production line is longer than 160 characters", () => {
+    const long = [];
+    for (const name of PRODUCTION) {
+        source(name).split("\n").forEach((line, i) => { if (line.length > 160) long.push(`${name}:${i + 1} (${line.length})`); });
+    }
+    assert.deepEqual(long, []);
 });

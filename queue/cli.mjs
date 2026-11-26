@@ -20,7 +20,8 @@ import { MINUTE } from "./units.mjs";
 export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
     for (const h of holders) {
-        const began = h.startedAt ?? h.at, ranMin = (now - began) / MINUTE;
+        const began = h.startedAt ?? h.at;
+        const ranMin = (now - began) / MINUTE;
         const facts = [`pid ${h.pid}`];
         if (h.kind) facts.push(`kind ${h.kind}`);
         facts.push(`${minutesSince(began, now)} min so far`);
@@ -33,7 +34,10 @@ export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
         }
         lines.push(`running "${h.label}": ${facts.join(", ")}`);
     }
-    queue.forEach((q, i) => lines.push(`waiting ${i + 1} "${q.label}": pid ${q.pid}, ${minutesSince(q.at, now)} min so far${q.priority ? ", priority" : ""}`));
+    queue.forEach((q, i) => {
+        const priority = q.priority ? ", priority" : "";
+        lines.push(`waiting ${i + 1} "${q.label}": pid ${q.pid}, ${minutesSince(q.at, now)} min so far${priority}`);
+    });
     lines.push(gate ? `gate: shut; ${gate}` : "gate: open");
     return lines;
 }
@@ -41,8 +45,10 @@ export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
 /** One line of `history` for a project's totals. */
 export function historyRow(name, t) {
     const gates = Object.entries(t.waitBy).map(([gate, min]) => `${gate} ${min} min`).join(", ") || "nothing";
-    return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, refused ${t.refused}, gave up ${t.gaveUp}; `
-        + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, clock with no job running ${t.blockedOnlyMin} min, `
+    return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, `
+        + `refused ${t.refused}, gave up ${t.gaveUp}; `
+        + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, `
+        + `clock with no job running ${t.blockedOnlyMin} min, `
         + `median ${t.waitMedian} min, p90 ${t.waitP90} min; held by: ${gates}`;
 }
 
@@ -58,19 +64,28 @@ export function cmdStatus({ settings, files }, { readHealth: read = readHealth, 
 
 function cmdPassed(args, { files, tz }) {
     const dir = opt(args, "--cwd") || process.cwd();
-    const found = findStamp(readLines(files.journal), { project: folderProject(dir), ...gitState(dir) }, opt(args, "--match") || "", { tz });
+    const folder = { project: folderProject(dir), ...gitState(dir) };
+    const found = findStamp(readLines(files.journal), folder, opt(args, "--match") || "", { tz });
     console.log(found.text);
     return found.stamp ? 0 : 1;
 }
 
 function cmdHistory(args, { files, tz }) {
-    const day = opt(args, "--day"), daysText = opt(args, "--days");
-    if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day)) { say("--day: needs a date as YYYY-MM-DD"); return EXIT.usage; }
-    if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) { say("--days: needs a whole number of days, 1 or more"); return EXIT.usage; }
+    const day = opt(args, "--day");
+    const daysText = opt(args, "--days");
+    if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        say("--day: needs a date as YYYY-MM-DD");
+        return EXIT.usage;
+    }
+    if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) {
+        say("--days: needs a whole number of days, 1 or more");
+        return EXIT.usage;
+    }
     const range = historyWindow({ day, days: daysText === undefined ? 7 : Number(daysText), tz });
     const { all, byProject } = summarize(readLines(files.journal), range.from, range.to);
     console.log(`history: ${range.title}, jobs ${all.jobs}`);
-    if (all.jobs) for (const [name, t] of [["all projects", all], ...Object.entries(byProject)]) console.log(historyRow(name, t));
+    if (!all.jobs) return 0;
+    for (const [name, t] of [["all projects", all], ...Object.entries(byProject)]) console.log(historyRow(name, t));
     return 0;
 }
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Wrapper that the queue starts in a new process group: `node job-wrapper.mjs <queue pid> <command> [args]`. Because the
-// job and everything it starts share that group, one signal reaches all of it. The wrapper ends the way the job
-// ended, and it stops the group when the queue process that started it is gone. When the command cannot be started
-// at all, the wrapper says so on file descriptor 3 if the queue opened one, so the queue can tell that apart from a
-// job that ran and exited 127.
+// Wrapper that the queue starts in a new process group: `node job-wrapper.mjs <queue pid> <command> [args]`.
+// Because the job and everything it starts share that group, one signal reaches all of it. The wrapper ends the way
+// the job ended, and it stops the group when the queue process that started it is gone. When the command cannot be
+// started at all, the wrapper says so on file descriptor 3 if the queue opened one, so the queue can tell that apart
+// from a job that ran and exited 127.
 import { spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { constants as osConstants } from "node:os";
@@ -34,7 +34,9 @@ export const startFailureLine = (message) => `${JSON.stringify({ startFailed: me
  *  Other lines and a line that was cut short are passed over. */
 export function readStartFailure(text) {
     for (const line of String(text).split("\n")) {
-        try { const sent = JSON.parse(line); if (typeof sent?.startFailed === "string") return sent.startFailed; } catch { /* not a report line */ }
+        let sent;
+        try { sent = JSON.parse(line); } catch { continue; /* not a report line */ }
+        if (typeof sent?.startFailed === "string") return sent.startFailed;
     }
     return null;
 }
@@ -47,7 +49,11 @@ export const REPORT_DRAIN_MS = 500;
  *  a process the job leaves behind keeps it open, and that must not keep the queue waiting. */
 export function wrapperEnd(child, report, drainMs = REPORT_DRAIN_MS) {
     return new Promise((resolve) => {
-        let text = "", exit = null, drained = !report, timer = null, settled = false;
+        let text = "";
+        let exit = null;
+        let drained = !report;
+        let timer = null;
+        let settled = false;
         const settle = () => {
             if (settled || !exit || !drained) return;
             settled = true;
@@ -57,7 +63,8 @@ export function wrapperEnd(child, report, drainMs = REPORT_DRAIN_MS) {
         };
         const stopReading = () => { drained = true; settle(); };
         report?.setEncoding("utf8");
-        report?.on("data", (part) => { text += part; }).on("end", stopReading).on("close", stopReading).on("error", stopReading);
+        report?.on("data", (part) => { text += part; });
+        for (const event of ["end", "close", "error"]) report?.on(event, stopReading);
         child.on("exit", (code, signal) => {
             exit = { code, signal };
             timer = setTimeout(stopReading, drainMs);
@@ -89,7 +96,11 @@ function main() {
     watch.unref();
 
     job.on("error", (e) => {
-        try { writeSync(3, startFailureLine(e.message)); } catch { process.stderr.write(`dotime-queue: start failed: exit ${NO_START_EXIT}, ${e.message}\n`); }
+        try {
+            writeSync(3, startFailureLine(e.message));
+        } catch {
+            process.stderr.write(`dotime-queue: start failed: exit ${NO_START_EXIT}, ${e.message}\n`);
+        }
         process.exit(NO_START_EXIT);
     });
     job.on("exit", (code, signal) => {

@@ -219,7 +219,8 @@ export function runJob(job, slot, deps) {
         }
         const exit = code ?? (signal ? 1 : 0);
         const how = jobEnd({ code, signal, received });
-        const stopped = how.signal ? { signal: how.signal, stoppedAt: new Date(receivedAt ?? deps.now()).toISOString() } : {};
+        const stoppedAt = new Date(receivedAt ?? deps.now()).toISOString();
+        const stopped = how.signal ? { signal: how.signal, stoppedAt } : {};
         journal.finish(how.outcome, exit, { ...stamps(), ...stopped });
         if (how.signal) {
             say(`stopped: signal ${how.signal}, ${minutesSince(startedAt, deps.now())} min run, `
@@ -293,7 +294,9 @@ export async function runCommand(args, ctx, deps) {
     const before = gitState(cwd);
     const print = fingerprint(cwd, cmd, settings.outputDirs);
     const request = { label, command, kind: parsed.kind, maxRun, priority, afterFix, project, cwd, queuedAt, tz };
-    const plan = planJob({ ...request, head: before.head, fingerprint: print }, settings, parseLines(readLines(files.journal)));
+    // The journal is read and parsed once for the whole plan.
+    const rows = parseLines(readLines(files.journal));
+    const plan = planJob({ ...request, head: before.head, fingerprint: print }, settings, rows);
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details: plan.details, file: files.journal, now: deps.now,
     });
@@ -303,7 +306,9 @@ export async function runCommand(args, ctx, deps) {
         say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}`);
         return EXIT.refused;
     }
-    if (plan.afterFixUsed) say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
+    if (plan.afterFixUsed) {
+        say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
+    }
 
     // Wait in line. INT and TERM wake the wait, which then returns, so the one exit path in main() ends the process.
     const pid = process.pid;
@@ -346,7 +351,10 @@ export async function runCommand(args, ctx, deps) {
             return EXIT.gaveUp;
         }
         rmSync(ticket, { force: true });
-        const job = { pid, label, project, cwd, cmd, priority, kind, limit, waitFrom: waited.waitFrom, settings, files, tz, journal };
+        const job = {
+            pid, label, project, cwd, cmd, priority, kind, limit, waitFrom: waited.waitFrom,
+            settings, files, tz, journal,
+        };
         return await runJob(job, slot, deps);
     } finally {
         leaveLine();

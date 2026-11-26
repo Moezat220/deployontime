@@ -16,7 +16,8 @@ import { DAY, HOUR, MINUTE } from "./units.mjs";
 export const LIST_ERROR = "could not read the job list";
 
 const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`);
-/** The rules file as an object: { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }.
+/** The rules file as an object:
+ *  { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }.
  *  A missing file means no rules. A file that cannot be read or is not one JSON object is reported through warn
  *  and also means no rules. */
 export function readRules(file, { warn = warnOnStderr } = {}) {
@@ -26,7 +27,10 @@ export function readRules(file, { warn = warnOnStderr } = {}) {
         ? `rules file ignored: ${file} is not valid JSON`
         : `rules file ignored: ${file} could not be read (${code})`));
     if (rules === missing) return none;
-    if (!rules || typeof rules !== "object" || Array.isArray(rules)) { warn(`rules file ignored: ${file} needs one JSON object`); return none; }
+    if (!rules || typeof rules !== "object" || Array.isArray(rules)) {
+        warn(`rules file ignored: ${file} needs one JSON object`);
+        return none;
+    }
     return rules;
 }
 
@@ -49,10 +53,12 @@ export function maxLogAgeMs(plist) {
     return 26 * HOUR;
 }
 
+const SCRIPT_RE = /\.(mjs|cjs|js|ts|sh|zsh|py)$/;
 /** The script files among a job's arguments: absolute paths with a script extension. */
 export function scriptsOf(plist) {
     const args = plist.ProgramArguments ?? [plist.Program];
-    return args.filter((arg) => typeof arg === "string" && arg.startsWith("/") && /\.(mjs|cjs|js|ts|sh|zsh|py)$/.test(arg));
+    const isScript = (arg) => typeof arg === "string" && arg.startsWith("/") && SCRIPT_RE.test(arg);
+    return args.filter(isScript);
 }
 
 /** Judges one job from the facts gathered about it. Returns { label, ok, problems, log }. */
@@ -61,7 +67,9 @@ export function judge({ label, plist, loaded, exit, logMtime, scriptsMissing }, 
     if (!loaded) problems.push("not loaded in the scheduler");
     if (scriptsMissing.length) problems.push(`script not found: ${scriptsMissing.join(", ")}`);
     const accepted = rules.okExit?.[label] ?? [0];
-    if (loaded && exit != null && !accepted.includes(exit)) problems.push(exit < 0 ? `last run ended by signal ${-exit}` : `last run exit code ${exit}`);
+    if (loaded && exit != null && !accepted.includes(exit)) {
+        problems.push(exit < 0 ? `last run ended by signal ${-exit}` : `last run exit code ${exit}`);
+    }
     const ageRules = rules.maxLogAgeH ?? {};
     const maxAge = label in ageRules ? (ageRules[label] == null ? null : ageRules[label] * HOUR) : maxLogAgeMs(plist);
     const log = plist.StandardErrorPath ?? plist.StandardOutPath ?? null;
@@ -83,28 +91,39 @@ export function checkAll({
     const warnings = [];
     if (!rules) rules = readRules(rulesFile, { warn: (text) => { warnings.push(text); warn(text); } });
     let files;
-    try { files = list().filter((name) => name.endsWith(".plist")).sort(); } catch { return { results: [], error: null, warnings }; }
+    try {
+        files = list().filter((name) => name.endsWith(".plist")).sort();
+    } catch { return { results: [], error: null, warnings }; }
     const loadedJobs = status();
     if (!loadedJobs) return { results: [], error: LIST_ERROR, warnings };
     const results = [];
     for (const name of files) {
         const plist = readPlist(join(dir, name));
-        if (!plist) { results.push({ label: name, ok: false, problems: ["job file unreadable"], log: null }); continue; }
+        if (!plist) {
+            results.push({ label: name, ok: false, problems: ["job file unreadable"], log: null });
+            continue;
+        }
         const label = plist.Label ?? name.replace(/\.plist$/, "");
         if ((rules.skip ?? []).some((pattern) => globMatch(pattern, label))) continue;
-        const entry = loadedJobs.get(label), log = plist.StandardErrorPath ?? plist.StandardOutPath;
+        const entry = loadedJobs.get(label);
+        const log = plist.StandardErrorPath ?? plist.StandardOutPath;
         let logMtime = null;
         try { if (log) logMtime = mtime(log); } catch { /* no log file */ }
         const scriptsMissing = scriptsOf(plist).filter((script) => !exists(script));
-        results.push(judge({ label, plist, loaded: !!entry, exit: entry?.exit ?? null, logMtime, scriptsMissing }, rules, now, tz));
+        const facts = { label, plist, loaded: !!entry, exit: entry?.exit ?? null, logMtime, scriptsMissing };
+        results.push(judge(facts, rules, now, tz));
     }
     return { results, error: null, warnings };
 }
 
 /** The notice text: the warnings, then the jobs with problems; null when there is nothing to say. */
 export function reportText(results, warnings = []) {
-    const broken = results.filter((r) => !r.ok), parts = [...warnings];
-    if (broken.length) parts.push(`scheduled jobs with problems: ${broken.length} of ${results.length}; ${broken.map((r) => `${r.label}: ${r.problems.join(", ")}`).join("; ")}`);
+    const broken = results.filter((r) => !r.ok);
+    const parts = [...warnings];
+    if (broken.length) {
+        const each = broken.map((r) => `${r.label}: ${r.problems.join(", ")}`).join("; ");
+        parts.push(`scheduled jobs with problems: ${broken.length} of ${results.length}; ${each}`);
+    }
     return parts.length ? parts.join("; ") : null;
 }
 
@@ -118,16 +137,25 @@ async function main() {
     const dry = process.argv.includes("--dry");
     const asJson = process.argv.includes("--json");
     const now = Date.now();
-    const files = paths(), tz = timeZone();
+    const files = paths();
+    const tz = timeZone();
     const { results, error, warnings } = checkAll({ now, rulesFile: files.scheduleRules, tz });
     const text = error ? [...warnings, error].join("; ") : reportText(results, warnings);
     if (asJson) console.log(JSON.stringify(error ? { error } : results, null, 1));
     else if (error) console.log(`schedule-check ${dateTime(now, tz)}: ${text}`);
-    else console.log(`schedule-check ${dateTime(now, tz)}: jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}${text ? `; ${text}` : ""}`);
+    else {
+        const counts = `jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}`;
+        console.log(`schedule-check ${dateTime(now, tz)}: ${counts}${text ? `; ${text}` : ""}`);
+    }
     if (!dry) {
-        if (text) { try { notify("dotime: scheduled jobs", text, { env: process.env, logFile: files.notifyLog }); } catch { /* the printed line already says it */ } }
+        if (text) {
+            try {
+                notify("dotime: scheduled jobs", text, { env: process.env, logFile: files.notifyLog });
+            } catch { /* the printed line already says it */ }
+        }
         // The report does not depend on its log: a line that cannot be written is left out.
-        appendLine(files.scheduleLog, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
+        const line = { at: new Date(now).toISOString(), error, warnings, results };
+        appendLine(files.scheduleLog, `${JSON.stringify(line)}\n`);
     }
     if (error) process.exitCode = 1;
 }
