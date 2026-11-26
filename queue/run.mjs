@@ -1,8 +1,11 @@
 // The `run` command, in three steps: planJob decides the limit and whether the job is refused, waitForSlot waits in
 // line until a slot is taken, and runJob runs the job in its own process group under the limit. runCommand chains
-// them and returns the exit code; it never ends the process itself. The clock, the health reading, git, signals,
-// timers, process starts and signals sent to them, notifications and stored notices all come in through deps, so tests
-// can drive each step. The slot and line files are read and written directly, in the folders named by files.
+// them and returns the exit code; it never ends the process itself. These come in through deps, so tests can drive
+// each step: the clock, sleeping and timers, the health reading, the commit read at the start of a job, the current
+// folder, starting the job, signals sent to it and signals received, messages, notifications and stored notices.
+// The rest is done directly: the slot, line and journal files in the folders named by files, the git calls for the
+// project name and the code fingerprint, the process table read by snapshot and killTree, and this process's own
+// pid and node binary.
 import { spawn as spawnProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
