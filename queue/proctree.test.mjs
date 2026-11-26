@@ -42,10 +42,23 @@ test("killTree: stops a started job together with a child that left its group", 
     const exited = new Promise((done) => leader.once("exit", done));
     const strayChild = track(await new Promise((done) => leader.stdout.once("data", (text) => done(Number(String(text).trim())))), { group: true });
     assert.deepEqual([alive(leader.pid), alive(strayChild)], [true, true]);
-    const signalled = killTree(leader.pid, "SIGKILL");
-    assert.deepEqual([signalled.includes(leader.pid), signalled.includes(strayChild)], [true, true]);
+    const { pids: signalled, refused } = killTree(leader.pid, "SIGKILL");
+    assert.deepEqual([signalled.includes(leader.pid), signalled.includes(strayChild), refused], [true, true, []]);
     await exited;
     await until(() => !alive(strayChild), 3000);
+});
+
+test("killTree: names each refused signal, and passes over processes that are gone", () => {
+    const sent = [];
+    const kill = (pid, signal) => {
+        sent.push([pid, signal]);
+        const code = { [-4100]: "EPERM", 4102: "EPERM", 4103: "ESRCH" }[pid];
+        if (code) throw Object.assign(new Error("signal refused"), { code });
+    };
+    const result = killTree(4100, "SIGTERM", { ps: TABLE, kill });
+    assert.deepEqual(result.refused, ["group 4100 (EPERM)", "pid 4102 (EPERM)"]);
+    assert.deepEqual(sent.map(([pid]) => pid).sort(), [-4100, 4100, 4101, 4102, 4103, 4300].sort());
+    assert.deepEqual(killTree(4200, "SIGKILL", { ps: TABLE, kill: () => {} }), { pids: [4200], refused: [] });
 });
 
 test("stopGroup: ends a started group, with KILL for a process that ignores TERM", async () => {

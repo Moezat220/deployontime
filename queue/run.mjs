@@ -119,8 +119,10 @@ export async function waitForSlot(job, deps) {
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
  *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal }, where journal is the writer from
- *  journalWriter(). deps: { now, spawn, say, after, notify, signals }: after(minutes, fn) is the long timer, signals
- *  the process whose INT, TERM, HUP and exit events are watched. Every handler it adds is removed at the end. */
+ *  journalWriter(). deps: { now, spawn, say, after, later, kill, notify, signals }: after(minutes, fn) is the long
+ *  timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, and signals is the process whose INT, TERM,
+ *  HUP and exit events are watched. Every handler it adds is removed at the end. A run limit whose last KILL is
+ *  refused is reported, and journalled with stopFailed, as a stop that failed. */
 export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
     const killGraceMs = settings.limits.killGraceMs;
@@ -136,7 +138,7 @@ export function runJob(job, slot, deps) {
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
-        if (signalGroup(child.pid, signal).sent) return;
+        if (signalGroup(child.pid, signal, deps.kill).sent) return;
         try { child.kill(signal); } catch { /* already gone */ }
     };
 
@@ -172,11 +174,16 @@ export function runJob(job, slot, deps) {
         ...(longRunAt ? { longRunAt: new Date(longRunAt).toISOString() } : {}),
         ...(warnedAt ? { warnedAt: new Date(warnedAt).toISOString() } : {}),
     });
+    const killJob = (signal) => killTree(child.pid, signal, { kill: deps.kill });
+    // The last KILL decides: a process it cannot signal is still there, so the stop failed. A TERM refused earlier
+    // to a process that has ended since does not count.
     const endTimedOut = () => {
         if (ended) return;
-        killTree(child.pid, "SIGKILL");
-        journal.finish("timed-out", EXIT.timedOut, stamps());
-        say(`timed out: exit ${EXIT.timedOut}, stopped after ${limit.killMin} min; hint: the kind was taken as `
+        const refused = killJob("SIGKILL").refused;
+        const why = refused.length ? `KILL refused for ${refused.join(", ")}` : null;
+        journal.finish("timed-out", EXIT.timedOut, { ...stamps(), ...(why ? { stopFailed: why } : {}) });
+        const how = why ? `stop failed after ${limit.killMin} min, ${why}` : `stopped after ${limit.killMin} min`;
+        say(`timed out: exit ${EXIT.timedOut}, ${how}; hint: the kind was taken as `
             + `${job.kind} (--kind <name> overrides it), and --max-run <min> sets the limit directly`);
         end(EXIT.timedOut);
     };
@@ -184,10 +191,10 @@ export function runJob(job, slot, deps) {
         pastLimit = true;
         say(`run limit: stopping "${label}", KILL follows TERM after ${killGraceMs / 1000} s; ran ${limit.killMin} min `
             + `against a limit of ${limit.limitMin} min, set by ${limit.basis}`);
-        killTree(child.pid, "SIGTERM");
-        setTimeout(() => killTree(child.pid, "SIGKILL"), killGraceMs).unref();
+        killJob("SIGTERM");
+        deps.later(killGraceMs, () => killJob("SIGKILL"));
         // Backstop for a wrapper that never exits.
-        setTimeout(endTimedOut, Math.min(killGraceMs + 5000, MAX_TIMER_MS)).unref();
+        deps.later(Math.min(killGraceMs + 5000, MAX_TIMER_MS), endTimedOut);
     });
     if (job.priority) {
         deps.after(limit.limitMin, () => {
@@ -272,6 +279,8 @@ export function realDeps({ readHealth, notify, after }) {
         say: (text) => process.stderr.write(`dotime-queue: ${text}\n`),
         usage: (text) => process.stderr.write(`${text}\n`),
         after,
+        later: (ms, fn) => setTimeout(fn, ms).unref(),
+        kill: (pid, signal) => process.kill(pid, signal),
         notify,
         signals: process,
     };

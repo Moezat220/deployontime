@@ -86,14 +86,22 @@ export function signalGroup(pgid, signal, kill = sendSignal) {
     } catch (e) { return { sent: false, code: e.code ?? String(e.message) }; }
 }
 
-/** Signals a job: the group as a whole first, then each process of the job. Returns the pids it signalled. */
-export function killTree(leader, signal, ps = null) {
+/** Signals a job: the group as a whole first, then each process of the job. A group or process that is gone
+ *  already is passed over. Returns { pids, refused }: the pids it signalled, and one text for each signal that was
+ *  refused, such as "pid 4101 (EPERM)". opts: ps, the `ps` text to walk instead of a fresh listing; kill. */
+export function killTree(leader, signal, { ps = null, kill = sendSignal } = {}) {
     const pids = treePids(leader, ps);
-    signalGroup(leader, signal);
+    const refused = [];
+    const group = signalGroup(leader, signal, kill);
+    if (!group.sent && group.code !== "ESRCH") refused.push(`group ${leader} (${group.code})`);
     for (const pid of pids) {
-        try { process.kill(pid, signal); } catch { /* already gone */ }
+        try {
+            kill(pid, signal);
+        } catch (e) {
+            if (e.code !== "ESRCH") refused.push(`pid ${pid} (${e.code ?? e.message})`);
+        }
     }
-    return pids;
+    return { pids, refused };
 }
 
 /** Sends TERM to a process group, waits graceMs, then sends KILL to the listed processes that are still there.

@@ -68,6 +68,7 @@ function makeDeps(box, overrides = {}) {
         now: Date.now, sleep: (ms) => new Promise((done) => setTimeout(done, ms)), readHealth: () => CALM,
         spawn: (program, args, options) => track(spawn(program, args, { ...options, stdio: ["ignore", "ignore", "ignore", "pipe"] }), { group: true }),
         say: (text) => said.push(text), usage: (text) => said.push(text), after: clock.after,
+        later: (ms, fn) => setTimeout(fn, ms).unref(), kill: (pid, signal) => process.kill(pid, signal),
         notify: (title, message) => notify(title, message, { env: { DOTIME_NOTIFY: "log" }, logFile: box.ctx.files.notifyLog }),
         signals, ...overrides,
     };
@@ -224,6 +225,32 @@ test("run: exit 124 at the run limit stops the whole process group", async () =>
     assert.equal(d.said.some((line) => line.startsWith("timed out: exit 124, stopped after 3 min; hint: ")), true);
     await until(() => !alive(jobChild), 3000);
     assert.deepEqual([journal(box).map((line) => [line.outcome, line.exit]), slots(box)], [[["timed-out", 124]], []]);
+});
+
+test("run: a run-limit stop whose KILL is refused is reported and journalled as a failed stop", async () => {
+    const box = sandbox(), pidFile = join(box.work, "job.pid"), timers = [];
+    const refuse = (pid, signal) => {
+        if (signal === 0) return process.kill(pid, 0);
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    };
+    const d = makeDeps(box, { later: (ms, fn) => timers.push({ ms, fn }), kill: refuse });
+    const args = ["run", "--label", "shop-api: e2e", "--max-run", "2", "--", NODE, "-e", savePid(pidFile)];
+    const run = settle(runCommand(args, box.ctx, d.deps));
+    await until(() => existsSync(pidFile));
+    const job = pidIn(pidFile);
+    assert.deepEqual(d.clock.advanceTo(2), [2]);
+    assert.deepEqual(timers.map((t) => t.ms), [250, 5250], "the KILL after the grace, then the backstop");
+    timers[0].fn();
+    assert.equal(alive(job), true);
+    timers[1].fn();
+    assert.equal(await run.result, 124);
+    const refused = /^KILL refused for group \d+ \(EPERM\), pid \d+ \(EPERM\)/;
+    const said = d.said.find((line) => line.startsWith("timed out: "));
+    assert.equal(said.startsWith("timed out: exit 124, stop failed after 2 min, KILL refused for group "), true, said);
+    const [line] = journal(box);
+    assert.deepEqual([line.outcome, line.exit, refused.test(line.stopFailed)], ["timed-out", 124, true]);
+    process.kill(job, "SIGKILL");
+    await until(() => !alive(job), 3000);
 });
 
 test("run: with --priority the limit only warns, and the stop comes at double the limit", async () => {

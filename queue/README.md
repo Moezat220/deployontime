@@ -228,7 +228,10 @@ can pull the learned limit of the full suite down; if that happens, give the ful
 
 A job that reaches its limit ends `run` with exit 124. Before that, its whole process group receives TERM and,
 `limits.killGraceMs` (10 seconds) later, KILL. With `--priority` the stop moves out to `limits.priorityGrace` (2)
-times the limit, and reaching the limit itself only prints a warning.
+times the limit, and reaching the limit itself only prints a warning. When the last KILL is refused, for example
+for a process that runs as another user, the job is still there: `run` then prints `timed out: exit 124, stop failed
+after N min, KILL refused for pid ... (EPERM)` instead of `stopped after N min`, and the journal line gets
+`stopFailed` with the same reason. The slot is freed either way, because `run` itself ends.
 
 **Long-run notice.** A job that runs much longer than usual gets one notice and keeps running. `run` prints it,
 and it goes out as a [notice](#notices): to `notify.log`, as a desktop notice, and into `notices/`. The mark
@@ -516,8 +519,8 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
 `waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
 `limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
-`afterFix`, `signal`, `stoppedAt`, `longRunAt` or `warnedAt`. Copies of the queue that share a state folder all read
-the same fields, so a field keeps its name; a new field is only ever added.
+`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt` or `warnedAt`. Copies of the queue that share a state
+folder all read the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
 the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no
