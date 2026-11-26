@@ -37,4 +37,6 @@ npm test
 
 ## License
 
+Copyright (C) 2026 Moezat220
+
 [AGPL-3.0-only](LICENSE)
