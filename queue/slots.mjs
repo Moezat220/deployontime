@@ -124,13 +124,3 @@ export function blockReason({ holders, health, ahead = 0 }, max = loadSettings()
 export function shouldGiveUp({ startedAt, now, maxWaitMin }) {
     return maxWaitMin > 0 && now - startedAt >= maxWaitMin * MINUTE;
 }
-
-/** Reads --max-wait from the flags in front of "--". Returns minutes, the fallback when absent, null when not a valid number. */
-export function parseMaxWait(args, fallback = loadSettings().maxWaitMin) {
-    const cut = args.indexOf("--"), flags = cut < 0 ? args : args.slice(0, cut);
-    const joined = flags.find((a) => a.startsWith("--max-wait=")), at = flags.indexOf("--max-wait");
-    const raw = joined ? joined.slice("--max-wait=".length) : at >= 0 ? flags[at + 1] ?? "" : undefined;
-    if (raw === undefined) return fallback;
-    const minutes = Number(raw);
-    return raw !== "" && Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
-}

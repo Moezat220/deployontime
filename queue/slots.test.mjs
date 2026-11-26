@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, parseMaxWait, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
+const { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), line: join(home, "line") }; };
@@ -199,22 +199,4 @@ test("shouldGiveUp: true from the limit on, never with a limit of 0", () => {
     assert.equal(shouldGiveUp({ startedAt, now: startedAt + 45 * MINUTE, maxWaitMin: 45 }), true);
     assert.equal(shouldGiveUp({ startedAt, now: startedAt + 30_000, maxWaitMin: 0.5 }), true);
     assert.equal(shouldGiveUp({ startedAt, now: startedAt + 10_000 * MINUTE, maxWaitMin: 0 }), false);
-});
-
-test("parseMaxWait: leaves a flag alone when it belongs to the job's command", () => {
-    assert.equal(parseMaxWait(["run", "--label", "shop-api: lint", "--", "pnpm", "lint", "--max-wait=2"], 45), 45);
-});
-
-test("parseMaxWait: null when the value is missing or is not a number of 0 or more", () => {
-    for (const flags of [["--max-wait="], ["--max-wait", "ten"], ["--max-wait"], ["--max-wait=-0.5"], ["--max-wait", "NaN"]]) {
-        assert.equal(parseMaxWait(["run", ...flags, "--", "pnpm", "lint"], 45), null, flags.join(" "));
-    }
-});
-
-test("parseMaxWait: takes the minutes from either spelling, and the fallback without the flag", () => {
-    assert.equal(parseMaxWait(["run", "--max-wait=8", "--", "pnpm", "lint"], 45), 8);
-    assert.equal(parseMaxWait(["run", "--priority", "--max-wait", "0", "--", "pnpm", "lint"], 45), 0);
-    assert.equal(parseMaxWait(["run", "--max-wait", "0.25", "--", "pnpm", "lint"], 45), 0.25);
-    assert.equal(parseMaxWait(["run", "--", "pnpm", "lint"], 45), 45);
-    assert.equal(parseMaxWait(["history"], 45), 45);
 });

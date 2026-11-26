@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, makeRepo, pause, settingEnv, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("cli");
-const { historyRow, main, parseRunArgs, statusLines, USAGE } = await import("./cli.mjs");
-const { FLAGS } = await import("./args.mjs");
+const { historyRow, main, statusLines } = await import("./cli.mjs");
+const { USAGE } = await import("./args.mjs");
 const { takeSlot } = await import("./slots.mjs");
 const { alive } = await import("./proctree.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
@@ -46,44 +46,11 @@ const pidIn = (file) => Number(readFileSync(file, "utf8"));
 
 // ---- functions ----
 
-test("parseRunArgs: reads every flag in front of the -- and the command behind it", () => {
-    const args = ["run", "--priority", "--label", "  mobile-app: store upload ", "--max-wait=7", "--max-run", "40", "--kind", "deploy", "--after-fix", " rotated the signing key ", "--", "make", "upload", "--priority", "--label", "inner"];
-    assert.deepEqual(parseRunArgs(args, DEFAULTS), { label: "mobile-app: store upload", cmd: ["make", "upload", "--priority", "--label", "inner"], priority: true, maxWait: 7, maxRun: 40, kind: "deploy", afterFix: "rotated the signing key" });
-});
-
-test("parseRunArgs: fills in defaults for flags that are left out", () => {
-    assert.deepEqual(parseRunArgs(["run", "--", "make"], { ...DEFAULTS, maxWaitMin: 25 }), { label: "unnamed", cmd: ["make"], priority: false, maxWait: 25, maxRun: null, kind: undefined, afterFix: null });
-});
-
-test("parseRunArgs: the usage text for a missing command, a short message for a bad number", () => {
-    for (const args of [["run"], ["run", "--label", "docs-site: build"], ["run", "--label", "docs-site: build", "--"], ["start", "--", "make"], []]) assert.equal(parseRunArgs(args, DEFAULTS).error, USAGE);
-    assert.equal(parseRunArgs(["run", "--max-wait", "-1", "--", "make"], DEFAULTS).error, "--max-wait wants a number of minutes, 0 or more; 0 means no limit");
-    assert.equal(parseRunArgs(["run", "--max-run=0", "--", "make"], DEFAULTS).error, "--max-run wants a positive number of minutes");
-});
-
-test("parseRunArgs: refuses a flag that run does not know, and a flag without its value", () => {
-    assert.equal(parseRunArgs(["run", "--max-runn", "90", "--", "make"], DEFAULTS).error, "unknown option --max-runn");
-    assert.equal(parseRunArgs(["run", "--label=docs-site: build", "--prio", "--", "make", "--prio"], DEFAULTS).error, "unknown option --prio");
-    assert.equal(parseRunArgs(["run", "--label", "docs-site: build", "stray", "--", "make"], DEFAULTS).error, 'unexpected word "stray"');
-    assert.equal(parseRunArgs(["run", "--priority=yes", "--", "make"], DEFAULTS).error, "option --priority takes no value");
-    assert.equal(parseRunArgs(["run", "--kind", "--", "make"], DEFAULTS).error, "option --kind needs a value");
-    assert.equal(parseRunArgs(["run", "--label", "docs-site: build", "--", "make", "--unknown-to-the-queue"], DEFAULTS).error, undefined);
-});
-
 test("main: returns the exit code of each command instead of ending the process", async () => {
     assert.equal(await main(["run", "--label", "docs-site: build"]), 2);
     assert.equal(await main(["history", "--days", "abc"]), 2);
     assert.equal(await main(["passed", "--mach", "lint"]), 2);
     assert.equal(await main(["history", "--day", "2040-01-01"]), 0);
-});
-
-test("USAGE: names every subcommand and flag that FLAGS accepts, and no other flag", () => {
-    for (const [command, { values, switches }] of Object.entries(FLAGS)) {
-        assert.equal(USAGE.includes(`dotime-queue ${command}`), true, command);
-        for (const flag of [...values, ...switches]) assert.equal(new RegExp(`${flag}(?![\\w-])`).test(USAGE), true, flag);
-    }
-    const known = new Set(Object.values(FLAGS).flatMap(({ values, switches }) => [...values, ...switches]));
-    for (const flag of USAGE.match(/--[\w-]+/g)) assert.equal(known.has(flag), true, flag);
 });
 
 test("statusLines: one line per running job, per waiting job and for the gate", () => {
@@ -372,7 +339,7 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     const emptyMatch = await cli(box, ["passed", "--match", ""]);
     assert.deepEqual([emptyMatch.code, emptyMatch.stdout, emptyMatch.stderr], [2, "", "dotime-queue: option --match needs a value\n"]);
     const labelAsValue = await cli(box, ["run", "--label", "--priority", "--", NODE, "-e", "console.log('started')"]);
-    assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [2, "", "dotime-queue: option --label needs a value\n"]);
+    assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [2, "", 'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority\n']);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
     const statusFlag = await cli(box, ["status", "--all"]);

@@ -10,7 +10,7 @@ import { idleText, isServer, sampleKeepMs, serverIdleVerdict } from "./idle.mjs"
 import { LAUNCHER_RE, TEST_RUN_RE } from "./commands.mjs";
 import { parseProcessTable } from "./ps.mjs";
 import { ancestors, descendants, stopGroup } from "./proctree.mjs";
-import { slotIdleCheck } from "./limits.mjs";
+import { slotIdleCheck } from "./notices.mjs";
 import { strayRuns } from "./stray.mjs";
 import { readHealth } from "./health.mjs";
 import { notify as sendNotice } from "./notify.mjs";

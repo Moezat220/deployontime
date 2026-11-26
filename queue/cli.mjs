@@ -6,50 +6,25 @@ import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isMainModule, loadSettings, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
-import { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, parseMaxWait, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } from "./slots.mjs";
+import { blockReason, blockText, decide, enqueue, gateBlocks, gateReason, releaseSlot, shouldGiveUp, snapshot, takeSlot, updateSlot } from "./slots.mjs";
 import { healthVerdict, readHealth } from "./health.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
-import { addNotice, afterMinutes, cmdStem, codePrint, decideLimit, failStop, kindOf, kindStats, longRunAlert, MAX_TIMER_MS, opt, parseMaxRun, stemStats, UNLABELLED } from "./limits.mjs";
+import { afterMinutes, MAX_TIMER_MS } from "./timer.mjs";
+import { cmdStem, kindOf } from "./kinds.mjs";
+import { decideLimit, kindStats, stemStats } from "./limits.mjs";
+import { fingerprint } from "./fingerprint.mjs";
+import { failStop } from "./failstop.mjs";
+import { addNotice, longRunAlert } from "./notices.mjs";
 import { gitState } from "./git.mjs";
 import { addWait, append, cmdString, findStamp, historyWindow, jobEnd, readLines, record, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
 import { folderProject, jobProject } from "./project.mjs";
-import { flagError } from "./args.mjs";
+import { flagError, opt, parseRunArgs, USAGE } from "./args.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./group.mjs";
 import { MINUTE } from "./units.mjs";
 
 const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
 const REPEAT_WAIT_LINE_MS = MINUTE;
-
-export const USAGE = [
-    "dotime-queue: one shared queue for heavy jobs on this computer",
-    "",
-    '  dotime-queue run --label "<project>: <task>" [options] -- <command> [args]',
-    "      --max-wait <min>     leave the line after this many minutes (0: wait without limit)",
-    "      --max-run <min>      run limit for this job",
-    "      --kind <name>        job kind, in place of the guessed one",
-    '      --after-fix "<note>" run a check that failed twice on unchanged code',
-    "      --priority           join the line at the front",
-    "  dotime-queue status",
-    "  dotime-queue passed [--match <text>] [--cwd <dir>]",
-    "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
-].join("\n");
-
-/** Returns { label, cmd, priority, maxWait, maxRun, kind, afterFix }, or { error } with the text to print. */
-export function parseRunArgs(args, settings = loadSettings()) {
-    const cut = args.indexOf("--");
-    if (args[0] !== "run" || cut < 0 || cut === args.length - 1) return { error: USAGE };
-    const badFlag = flagError(args);
-    if (badFlag) return { error: badFlag };
-    const maxWait = parseMaxWait(args, settings.maxWaitMin);
-    if (maxWait === null) return { error: "--max-wait wants a number of minutes, 0 or more; 0 means no limit" };
-    const maxRun = parseMaxRun(args);
-    if (Number.isNaN(maxRun)) return { error: "--max-run wants a positive number of minutes" };
-    return {
-        label: opt(args, "--label")?.trim() || UNLABELLED, cmd: args.slice(cut + 1), priority: args.slice(0, cut).includes("--priority"),
-        maxWait, maxRun, kind: opt(args, "--kind"), afterFix: opt(args, "--after-fix")?.trim() || null,
-    };
-}
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". */
 export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
@@ -120,7 +95,7 @@ async function cmdRun(args, settings) {
     const past = readLines(), kind = kindOf(label, command, parsed.kind), stem = cmdStem(command);
     const window = { project, now: queuedAt, windowDays: L.windowDays };
     const limit = decideLimit({ maxRun, kind, stats: kindStats(past, { ...window, kind }), stem: stemStats(past, { ...window, stem }), priority }, L);
-    const before = { ...gitState(cwd), fp: codePrint(cwd, cmd, settings.outputDirs) };
+    const before = { ...gitState(cwd), fp: fingerprint(cwd, cmd, settings.outputDirs) };
     const details = { kind, ...(stem ? { stem } : {}), limitMin: limit.limitMin, limitBasis: limit.basis, fp: before.fp, ...(afterFix ? { afterFix } : {}) };
     let slot = null, startedAt = null, written = false, commit = { head: null, clean: null };
     const finish = (outcome, exit, more = {}) => {

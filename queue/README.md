@@ -101,9 +101,10 @@ instructions: an agent that uses it every time puts itself in front of everyone 
 
 An option that is not in this table, an option without its value or with an empty value, an option given twice,
 or any other word in front of the `--` is refused with exit 2, for example `dotime-queue: unknown option --max-runn`.
-A word that starts with `--` is never taken as a value: `--label --priority` is refused because `--label` has no
-value. The job does not run. The same holds for
-`status`, `passed` and `history`: each accepts only the options shown for it.
+A word that starts with `--` is not taken as the value of the option in front of it: `--label --priority` is refused
+because `--label` has no value. To give such a value, join it to the option with `=`: `--label=--priority`. The
+refusal message says so. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
+only the options shown for it.
 
 While it waits, `run` prints its position and what holds it, at each change of position and again after each
 minute of waiting.
