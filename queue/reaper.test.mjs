@@ -276,3 +276,10 @@ test("reap checks: each one returns only the state keys it owns", async () => {
     assert.deepEqual(Object.keys(checkOverload(ctx, state).state), ["streak", "lastOverload"]);
     assert.deepEqual(checkLowDisk(ctx, state), { state: { lastLowDisk: NOW }, lines: [`disk low: 3.0 GB free, notice level ${SETTINGS.reaper.lowDiskGB} GB`] });
 });
+
+test("main: an option it does not know is refused with exit 2, and nothing runs", () => {
+    const home = tempDir("reaper-home"), script = fileURLToPath(new URL("./reaper.mjs", import.meta.url));
+    const ran = spawnSync(process.execPath, [script, "--dry", "--verbose"], { env: cleanEnv(home), encoding: "utf8", timeout: 60_000 });
+    assert.deepEqual([ran.status, ran.stdout, ran.stderr], [2, "", "reaper: unknown option --verbose; usage: reaper.mjs [--dry]\n"]);
+    assert.deepEqual(readdirSync(home), []);
+});

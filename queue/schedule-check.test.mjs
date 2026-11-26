@@ -183,3 +183,11 @@ test("main: runs when the script is started through a symlink", () => {
     assert.equal(ran.status === 1, ran.stdout.includes(LIST_ERROR), "exit code and report disagree");
     assert.deepEqual(readdirSync(home), [], "--dry wrote to the state folder");
 });
+
+test("main: an option it does not know is refused with exit 2, and nothing runs", () => {
+    const home = tempDir("schedule-home"), user = tempDir("schedule-user");
+    const script = fileURLToPath(new URL("./schedule-check.mjs", import.meta.url));
+    const ran = spawnSync(process.execPath, [script, "--json", "--dryrun"], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
+    assert.deepEqual([ran.status, ran.stdout, ran.stderr], [2, "", "schedule-check: unknown option --dryrun; usage: schedule-check.mjs [--dry] [--json]\n"]);
+    assert.deepEqual(readdirSync(home), []);
+});

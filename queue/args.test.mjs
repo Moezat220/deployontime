@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FLAGS, flagError, opt, parseMaxRun, parseMaxWait, parseRunArgs, USAGE } from "./args.mjs";
+import { FLAGS, flagError, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRunArgs, USAGE } from "./args.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 test("flagError: accepts each subcommand's own flags in both spellings", () => {
@@ -126,4 +126,11 @@ test("USAGE: names every subcommand and flag that FLAGS accepts, and no other fl
     }
     const known = new Set(Object.values(FLAGS).flatMap(({ values, switches }) => [...values, ...switches]));
     for (const flag of USAGE.match(/--[\w-]+/g)) assert.equal(known.has(flag), true, flag);
+});
+
+test("flagError: the scripts beside the queue accept their own switches and nothing else", () => {
+    assert.equal(flagError(["reaper", "--dry"], SCRIPT_FLAGS), null);
+    assert.equal(flagError(["schedule-check", "--json", "--dry"], SCRIPT_FLAGS), null);
+    assert.equal(flagError(["reaper", "--dryy"], SCRIPT_FLAGS), "unknown option --dryy");
+    assert.equal(flagError(["schedule-check", "--json=yes"], SCRIPT_FLAGS), "option --json takes no value");
 });

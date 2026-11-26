@@ -10,6 +10,7 @@ import { dateTime } from "./clock.mjs";
 import { notify } from "./notify.mjs";
 import { probeReadPlist, probeScheduledJobs } from "./probes.mjs";
 import { appendLine, readJson } from "./files.mjs";
+import { flagError, SCRIPT_FLAGS, USAGE_EXIT } from "./args.mjs";
 import { DAY, HOUR, MINUTE } from "./units.mjs";
 
 export const LIST_ERROR = "could not read the job list";
@@ -108,7 +109,15 @@ export function reportText(results, warnings = []) {
 }
 
 async function main() {
-    const dry = process.argv.includes("--dry"), asJson = process.argv.includes("--json"), now = Date.now();
+    const badFlag = flagError(["schedule-check", ...process.argv.slice(2)], SCRIPT_FLAGS);
+    if (badFlag) {
+        process.stderr.write(`schedule-check: ${badFlag}; usage: schedule-check.mjs [--dry] [--json]\n`);
+        process.exitCode = USAGE_EXIT;
+        return;
+    }
+    const dry = process.argv.includes("--dry");
+    const asJson = process.argv.includes("--json");
+    const now = Date.now();
     const files = paths(), tz = timeZone();
     const { results, error, warnings } = checkAll({ now, rulesFile: files.scheduleRules, tz });
     const text = error ? [...warnings, error].join("; ") : reportText(results, warnings);

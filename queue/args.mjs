@@ -28,12 +28,21 @@ export const FLAGS = Object.freeze({
     history: { values: ["--days", "--day"], switches: [] },
 });
 
+/** The flags of the two scripts that run beside the queue, which take switches only. */
+export const SCRIPT_FLAGS = Object.freeze({
+    "reaper": { values: [], switches: ["--dry"] },
+    "schedule-check": { values: [], switches: ["--dry", "--json"] },
+});
+
+/** The usage exit code, the same for dotime-queue and the scripts. */
+export const USAGE_EXIT = 2;
+
 /** null when every word fits the subcommand's flags, else the message to print. args[0] is the subcommand; for
  *  `run` only the words in front of "--" are looked at. A value may not be empty, and no flag may be given twice.
  *  A value that starts with "--" is taken only in the --name=value spelling: in the other one it is read as the
  *  next flag, and the message says how to write it. */
-export function flagError(args) {
-    const allowed = FLAGS[args[0]];
+export function flagError(args, table = FLAGS) {
+    const allowed = table[args[0]];
     if (!allowed) return null;
     const cut = args.indexOf("--");
     const words = args.slice(1, args[0] === "run" && cut >= 0 ? cut : args.length);

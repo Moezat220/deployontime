@@ -11,6 +11,7 @@ import { LAUNCHER_RE, TEST_RUN_RE } from "./commands.mjs";
 import { parseProcessTable } from "./ps.mjs";
 import { ancestors, descendants, stopGroup } from "./proctree.mjs";
 import { addNotice, slotIdleCheck } from "./notices.mjs";
+import { flagError, SCRIPT_FLAGS, USAGE_EXIT } from "./args.mjs";
 import { strayRuns } from "./stray.mjs";
 import { readHealth } from "./health.mjs";
 import { notify as sendNotice } from "./notify.mjs";
@@ -228,6 +229,12 @@ export async function reap({
 }
 
 async function main() {
+    const badFlag = flagError(["reaper", ...process.argv.slice(2)], SCRIPT_FLAGS);
+    if (badFlag) {
+        process.stderr.write(`reaper: ${badFlag}; usage: reaper.mjs [--dry]\n`);
+        process.exitCode = USAGE_EXIT;
+        return;
+    }
     const dry = process.argv.includes("--dry");
     const now = Date.now();
     const settings = loadSettings();
