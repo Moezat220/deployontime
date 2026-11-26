@@ -222,10 +222,13 @@ test("main: runs when the script is started through a symlink", () => {
     assert.deepEqual(readdirSync(home), [], "--dry wrote to the state folder");
 });
 
-test("main: an option it does not know is refused with exit 2, and nothing runs", () => {
+test("main: an option it does not know, or one given twice, is refused with exit 2, and nothing runs", () => {
     const home = tempDir("schedule-home"), user = tempDir("schedule-user");
     const script = fileURLToPath(new URL("./schedule-check.mjs", import.meta.url));
     const ran = spawnSync(process.execPath, [script, "--json", "--dryrun"], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
     assert.deepEqual([ran.status, ran.stdout, ran.stderr], [2, "", "schedule-check: unknown option --dryrun; usage: schedule-check.mjs [--dry] [--json]\n"]);
+    const twice = spawnSync(process.execPath, [script, "--dry", "--dry"], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
+    const usage = "usage: schedule-check.mjs [--dry] [--json]";
+    assert.deepEqual([twice.status, twice.stdout, twice.stderr], [2, "", `schedule-check: option --dry is given twice; ${usage}\n`]);
     assert.deepEqual(readdirSync(home), []);
 });

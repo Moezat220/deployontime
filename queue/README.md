@@ -326,8 +326,8 @@ node queue/reaper.mjs --dry    # print what a run would do, change nothing
 ```
 
 The reaper is optional. It runs only if you schedule it, and the queue works without it. It exits 0 after a run,
-also a dry one, and 1 when the run fails. An option other than `--dry` is refused with exit 2, and then nothing
-runs.
+also a dry one, and 1 when the run fails. An option other than `--dry`, or `--dry` given twice, is refused with
+exit 2, and then nothing runs, as for an option given twice to `run`.
 
 **When it runs, it can stop idle dev servers anywhere on this computer**, also ones you started yourself and not
 through the queue, in any project. It stops nothing else. To protect a server, add a part of its command line to
@@ -399,7 +399,7 @@ An optional extra, separate from the queue: a health report on your own schedule
 accepted, scripts present, log as recent as the schedule implies. It changes no job; it only adds to its own log
 files in the state folder. Problems go out as one notice;
 `--dry` only prints. It exits 1 when it cannot read the job list from `launchctl`, and 2, without running, for an
-option other than `--dry` and `--json`. Optional rules in
+option other than `--dry` and `--json` or for one of them given twice, as for an option given twice to `run`. Optional rules in
 `$DOTIME_HOME/schedule-check.json`, where `skip` leaves jobs out:
 
 ```json
