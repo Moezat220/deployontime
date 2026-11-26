@@ -4,7 +4,6 @@
 import { TEST_RUN_RE } from "./commands.mjs";
 import { MINUTE } from "./units.mjs";
 
-
 /** A test for dev-server commands, from the reaper.serverPattern setting, compiled once: (command) => boolean. A
  *  one-shot test command is never a server. A pattern that does not compile matches nothing. */
 export function serverTest(pattern) {
