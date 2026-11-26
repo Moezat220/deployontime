@@ -1,7 +1,8 @@
 // The `run` command, in three steps: planJob decides the limit and whether the job is refused, waitForSlot waits in
 // line until a slot is taken, and runJob runs the job in its own process group under the limit. runCommand chains
-// them and returns the exit code; it never ends the process itself. Everything that touches the clock, the health
-// reading, signals, timers, notices or process starts comes in through deps, so tests can drive each step.
+// them and returns the exit code; it never ends the process itself. The clock, the health reading, git, signals,
+// timers, process starts and signals sent to them, notifications and stored notices all come in through deps, so tests
+// can drive each step. The slot and line files are read and written directly, in the folders named by files.
 import { spawn as spawnProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -10,13 +11,13 @@ import { minutesSince } from "./clock.mjs";
 import { failStop } from "./failstop.mjs";
 import { fingerprint } from "./fingerprint.mjs";
 import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate.mjs";
-import { gitState } from "./git.mjs";
+import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
 import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } from "./journal.mjs";
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
-import { addNotice, longRunAlert } from "./notices.mjs";
+import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
@@ -120,16 +121,17 @@ export async function waitForSlot(job, deps) {
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
  *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal }, where journal is the writer from
- *  journalWriter(). deps: { now, spawn, say, after, later, kill, notify, signals }: after(minutes, fn) is the long
- *  timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, and signals is the process whose INT, TERM,
- *  HUP and exit events are watched. Every handler it adds is removed at the end. A run limit whose last KILL is
+ *  journalWriter(). deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes,
+ *  fn) is the long timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, addNotice(key, entry, file)
+ *  stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT, TERM, HUP and exit events
+ *  are watched. Every handler it adds is removed at the end. A run limit whose last KILL is
  *  refused is reported, and journalled with stopFailed, as a stop that failed. */
 export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
     const killGraceMs = settings.limits.killGraceMs;
     const { say, signals } = deps;
     // The commit is read at this point because it is what a pass stamp will vouch for.
-    const commit = gitState(job.cwd);
+    const commit = deps.gitState(job.cwd);
     const startedAt = deps.now();
     journal.note({ commit, startedAt });
     if (startedAt - job.waitFrom > 5000) say(`started: ${minutesSince(job.waitFrom, startedAt)} min in line`);
@@ -215,7 +217,7 @@ export function runJob(job, slot, deps) {
                 });
                 say(alert.message);
                 deps.notify(alert.title, alert.message);
-                addNotice(alert.key, alert.entry, files.notices);
+                deps.addNotice(alert.key, alert.entry, files.notices);
             } catch { /* a notice that fails must not disturb the job */ }
         });
     }
@@ -283,6 +285,8 @@ export function realDeps({ readHealth, notify, after }) {
         later: (ms, fn) => setTimeout(fn, ms).unref(),
         kill: (pid, signal) => process.kill(pid, signal),
         notify,
+        addNotice: storeNotice,
+        gitState: readGitState,
         signals: process,
     };
 }
@@ -303,7 +307,7 @@ export async function runCommand(args, ctx, deps) {
     const folder = folderProject(cwd);
     const command = cmdString(cmd);
     const project = jobProject({ label, project: folder, cwd });
-    const before = gitState(cwd);
+    const before = deps.gitState(cwd);
     const print = fingerprint(cwd, cmd, settings.outputDirs);
     const request = { label, command, kind: parsed.kind, maxRun, priority, afterFix, project, cwd, queuedAt, tz };
     // The journal is read and parsed once for the whole plan.

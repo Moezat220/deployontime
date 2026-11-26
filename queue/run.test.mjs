@@ -10,12 +10,14 @@ import { spawn } from "node:child_process";
 import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("run");
-const { EXIT, journalWriter, planJob, runCommand, runJob, waitForSlot } = await import("./run.mjs");
+const { EXIT, journalWriter, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
 const { cmdStatus } = await import("./cli.mjs");
 const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takeSlot } = await import("./slots.mjs");
 const { notify } = await import("./notify.mjs");
+const { addNotice } = await import("./notices.mjs");
+const { gitState } = await import("./git.mjs");
 
 const NODE = process.execPath, MINUTE = 60_000;
 const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
@@ -82,7 +84,7 @@ function makeDeps(box, overrides = {}) {
         say: (text) => said.push(text), usage: (text) => said.push(text), after: clock.after,
         later: (ms, fn) => setTimeout(fn, ms).unref(), kill: (pid, signal) => process.kill(pid, signal),
         notify: (title, message) => notify(title, message, { env: { DOTIME_NOTIFY: "log" }, logFile: box.ctx.files.notifyLog }),
-        signals, ...overrides,
+        addNotice, gitState, signals, ...overrides,
     };
     return { said, clock, signals, deps };
 }
@@ -170,6 +172,13 @@ test("waitForSlot: leaves the line when a signal asks for it", async () => {
     const sleep = async (ms) => { await clock.sleep(ms); leaving = "SIGTERM"; };
     const got = await waitForSlot(waiter(box), { now: clock.now, sleep, readHealth: () => CALM, say: () => {}, leaving: () => leaving });
     assert.deepEqual(got, { left: "SIGTERM", tally: { slots: 60 } });
+});
+
+// ---- realDeps ----
+
+test("realDeps: the real command reads git and stores notices through the same deps the tests replace", () => {
+    const real = realDeps({ readHealth: () => CALM, notify: () => {}, after: () => null });
+    assert.deepEqual([real.gitState, real.addNotice, real.signals], [gitState, addNotice, process]);
 });
 
 // ---- journalWriter ----
