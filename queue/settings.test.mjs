@@ -31,7 +31,7 @@ test("paths: every file lies inside the state folder", () => {
     const dir = tempDir("settings"), all = paths({ DOTIME_HOME: dir });
     assert.equal(all.home, dir);
     assert.equal(all.journal, join(dir, "journal.jsonl"));
-    assert.equal(all.notices, join(dir, "notices.json"));
+    assert.equal(all.notices, join(dir, "notices"));
     assert.equal(Object.values(all).every((p) => p === dir || p.startsWith(dir + sep)), true);
 });
 

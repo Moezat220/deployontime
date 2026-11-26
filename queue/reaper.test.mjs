@@ -10,7 +10,7 @@ import { cleanEnv, isolateProcess, tempDir, track, until } from "./testkit.mjs";
 const HOME = isolateProcess("reaper");
 const { checkIdleServers, checkIdleSlots, checkLowDisk, checkOverload, checkStrayRuns, groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
 const { snapshot } = await import("./slots.mjs");
-const { addNotice } = await import("./notices.mjs");
+const { addNotice, readNotices } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, MB = 1024, NOW = Date.UTC(2031, 10, 8, 18, 0);
@@ -29,7 +29,7 @@ const SAMPLE_AGE = SETTINGS.idle.serverIdleMin + 2;
 const sampledBefore = (cpu, minutesAgo = SAMPLE_AGE) => ({ samples: { 2400: [{ t: NOW - minutesAgo * MINUTE, cpu }] } });
 async function pass(rows, state = {}, options = {}) {
     const stops = [], notices = [];
-    const result = await reap({ rows, state: structuredClone(state), now: NOW, settings: SETTINGS, tz: "UTC", record: (key, entry) => addNotice(key, entry, join(HOME, "notices.json")), notify: (title, text) => notices.push([title, text]), stop: async (pgid, procs) => stops.push([pgid, procs.length]), ...options });
+    const result = await reap({ rows, state: structuredClone(state), now: NOW, settings: SETTINGS, tz: "UTC", record: (key, entry) => addNotice(key, entry, join(HOME, "notices")), notify: (title, text) => notices.push([title, text]), stop: async (pgid, procs) => stops.push([pgid, procs.length]), ...options });
     return { ...result, stops, notices };
 }
 
@@ -228,7 +228,7 @@ test("reap: sends the notice for a slot whose job uses almost no CPU", async () 
     assert.deepEqual(run.notices.map(([title]) => title), ["dotime: slot held by a quiet job"]);
     assert.equal(run.notices[0][1].includes(', holding up "docs-site: build" (4 min), '), true);
     assert.equal(run.state.slotIdle[`6100:${holder.startedAt}`].told, true);
-    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(HOME, "notices.json"), "utf8"))), [`idle-slot:6100:${holder.startedAt}`]);
+    assert.deepEqual(Object.keys(readNotices(join(HOME, "notices"))), [`idle-slot:6100:${holder.startedAt}`]);
 });
 
 test("main: runs when the script is started through a symlink", () => {

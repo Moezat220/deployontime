@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import fs, { readdirSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("notices");
-const { addNotice, idleAlert, longRunAlert, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
+const { addNotice, idleAlert, longRunAlert, readNotices, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
@@ -90,13 +91,41 @@ test("slotIdleCheck: does not list processes when no slot is taken", () => {
 });
 
 test("addNotice: stores an entry once per key", () => {
-    const file = join(tempDir("limits"), "deep", "notices.json");
-    assert.deepEqual([addNotice("long-run:1:2", { minutes: 22 }, file), addNotice("long-run:1:2", { minutes: 44 }, file), addNotice("idle-slot:1:2", { minutes: 12 }, file)], [true, false, true]);
-    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { "long-run:1:2": { minutes: 22 }, "idle-slot:1:2": { minutes: 12 } });
+    const dir = join(tempDir("limits"), "deep", "notices");
+    assert.deepEqual([addNotice("long-run:1:2", { minutes: 22 }, dir), addNotice("long-run:1:2", { minutes: 44 }, dir), addNotice("idle-slot:1:2", { minutes: 12 }, dir)], [true, false, true]);
+    assert.deepEqual(readNotices(dir), { "long-run:1:2": { minutes: 22 }, "idle-slot:1:2": { minutes: 12 } });
+    assert.deepEqual(readdirSync(dir).sort(), ["idle-slot%3A1%3A2.json", "long-run%3A1%3A2.json"]);
 });
 
 test("addNotice: false, without throwing, when the file cannot be written", () => {
     const blocker = join(tempDir("limits"), "plain-file");
     writeFileSync(blocker, "");
-    assert.equal(addNotice("long-run:1:2", {}, join(blocker, "notices.json")), false);
+    assert.equal(addNotice("long-run:1:2", {}, join(blocker, "notices")), false);
+});
+
+test("addNotice: a second process that stores a notice in the middle of a write loses neither one", () => {
+    const dir = join(tempDir("notices"), "notices"), realWrite = fs.writeFileSync;
+    let interrupted = 0;
+    fs.writeFileSync = (...args) => {
+        realWrite(...args);
+        if (interrupted++ === 0) addNotice("idle-slot:5160:2", { minutes: 12 }, dir);
+    };
+    syncBuiltinESMExports();
+    try {
+        assert.equal(addNotice("long-run:6340:1", { minutes: 22 }, dir), true);
+    } finally {
+        fs.writeFileSync = realWrite;
+        syncBuiltinESMExports();
+    }
+    assert.equal(interrupted, 2);
+    assert.deepEqual(Object.keys(readNotices(dir)).sort(), ["idle-slot:5160:2", "long-run:6340:1"]);
+});
+
+test("readNotices: a broken notice file is named and left out, the others are kept", () => {
+    const dir = join(tempDir("notices"), "notices"), seen = [];
+    addNotice("long-run:6340:1", { minutes: 22 }, dir);
+    writeFileSync(join(dir, "idle-slot%3A5160%3A2.json"), "{");
+    assert.deepEqual(readNotices(dir, (text) => seen.push(text)), { "long-run:6340:1": { minutes: 22 } });
+    assert.deepEqual(seen, [`notice ignored: ${join(dir, "idle-slot%3A5160%3A2.json")} is not valid JSON`]);
+    assert.deepEqual(readNotices(join(dir, "absent")), {});
 });

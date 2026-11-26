@@ -16,6 +16,7 @@ const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takeSlot } = await import("./slots.mjs");
 const { notify } = await import("./notify.mjs");
+const { readNotices } = await import("./notices.mjs");
 
 const NODE = process.execPath, MINUTE = 60_000;
 const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
@@ -249,7 +250,7 @@ test("run: the long-run notice fires once", async () => {
     assert.equal(d.said.some((line) => line.startsWith('long run: "docs-site: build" of project docs-site, pid ')), true);
     const logged = readFileSync(box.ctx.files.notifyLog, "utf8").split("\n").filter(Boolean);
     assert.deepEqual(logged.map((line) => line.split("\t")[1]), ["dotime: job running long"]);
-    const stored = Object.values(JSON.parse(readFileSync(box.ctx.files.notices, "utf8")));
+    const stored = Object.values(readNotices(box.ctx.files.notices));
     assert.deepEqual(stored.map((entry) => [entry.type, entry.label, entry.waiting]), [["long-run", "docs-site: build", []]]);
     assert.equal(typeof journal(box)[0].longRunAt, "string");
 });

@@ -54,7 +54,7 @@ export function paths(env = process.env) {
         slots: join(home, "slots"),
         waitingLine: join(home, "line"),
         journal: join(home, "journal.jsonl"),
-        notices: join(home, "notices.json"),
+        notices: join(home, "notices"),
         notifyLog: join(home, "notify.log"),
         reaperState: join(home, "reaper-state.json"),
         healthCache: join(home, "health.json"),

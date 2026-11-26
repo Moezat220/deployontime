@@ -229,7 +229,7 @@ A job that reaches its limit ends `run` with exit 124. Before that, its whole pr
 times the limit, and reaching the limit itself only prints a warning.
 
 **Long-run notice.** A job that runs much longer than usual gets one notice and keeps running. `run` prints it,
-and it goes out as a [notice](#notices): to `notify.log`, as a desktop notice, and into `notices.json`. The mark
+and it goes out as a [notice](#notices): to `notify.log`, as a desktop notice, and into `notices/`. The mark
 is `limits.longRunFactor` (2) times the 75th percentile of the same runs (at least `limits.floorMin`), or
 `limits.longRunUnmeasuredMin` (20 minutes) when there are fewer than 5 of them. A command with a few passed runs of
 its own raises the mark to 2 times their 75th percentile, when that is more. No notice is sent when the mark is not
@@ -407,8 +407,9 @@ the notice is also handed to that command through `/bin/sh`, with the texts in t
 export DOTIME_NOTIFY_CMD='printf "%s: %s\n" "$DOTIME_TITLE" "$DOTIME_MESSAGE" >> "$HOME/queue-notices.txt"'
 ```
 
-`DOTIME_NOTIFY=log` keeps only the log line. Long-run and idle-slot notices are also stored in
-`$DOTIME_HOME/notices.json`, one entry per job, as a record you can look through.
+`DOTIME_NOTIFY=log` keeps only the log line. Long-run and idle-slot notices are also stored in the folder
+`$DOTIME_HOME/notices/`, one JSON file per notice, as a record you can look through. Each job gets at most one of
+each, also when several processes send notices at the same time.
 
 ## Settings
 
@@ -498,7 +499,7 @@ Environment variables:
 | `config.json` | Settings. Optional. |
 | `slots/`, `line/` | One small file per running and per waiting job. Files of ended processes are removed. |
 | `journal.jsonl` | One line per job. |
-| `notices.json` | Long-run and idle-slot notices. |
+| `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
 | `health.json` | The last health reading of a waiting job, which other waiting jobs reuse for up to `pollMs`. |
