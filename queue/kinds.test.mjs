@@ -1,7 +1,9 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cmdStem, DEBUG_CMD_RE, DEBUG_LABEL_RE, KINDS, kindOf } from "./kinds.mjs";
+import { cmdStem, DEBUG_CMD_RE, DEBUG_LABEL_RE, KINDS, kindOf, UNLABELLED } from "./kinds.mjs";
+import { parseRunArgs } from "./args.mjs";
+import { DEFAULTS } from "./settings.mjs";
 
 const isDebug = (label, command) => kindOf(label, command) === "debug";
 
@@ -76,4 +78,9 @@ test("cmdStem: joins the stems of the commands inside sh -c", () => {
 test("cmdStem: null for inline code and for an empty command", () => {
     for (const command of ["CI=1", 'bun --eval "0"', 'bash -c ""', undefined, 'tsx -e "void 0"', 'python3 -c "print(1)"', ""])
         assert.equal(cmdStem(command), null, String(command));
+});
+
+test("UNLABELLED: the label of a job run without --label", () => {
+    assert.equal(UNLABELLED, "unnamed");
+    assert.equal(parseRunArgs(["run", "--", "make"], DEFAULTS).label, UNLABELLED);
 });

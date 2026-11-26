@@ -4,7 +4,7 @@ import { isolateProcess } from "./testkit.mjs";
 
 isolateProcess("failstop");
 const { failStop } = await import("./failstop.mjs");
-const { UNLABELLED } = await import("./args.mjs");
+const { UNLABELLED } = await import("./kinds.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000;

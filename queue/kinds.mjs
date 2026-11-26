@@ -3,6 +3,9 @@
 import { SHELLS, TEST_KIND_RE } from "./commands.mjs";
 import { labelTask } from "./project.mjs";
 
+/** The label a job gets when --label is missing. The repeated-failure stop never takes two such jobs for one check. */
+export const UNLABELLED = "unnamed";
+
 const DEBUG_WORDS = "debug|repro|bisect|probe";
 export const DEBUG_LABEL_RE = new RegExp(`\\b(${DEBUG_WORDS})\\b|\\?`, "i");
 // In a command the word must not be followed by "=", so setting a DEBUG variable does not make a debug job.

@@ -1,9 +1,7 @@
 // The command line of dotime-queue: the flags each subcommand accepts, reading their values, and the usage text.
 // Anything else on the command line, in front of the `--` for `run`, is refused with a usage error, so a misspelled
 // flag never changes what a command does without a word.
-
-/** The label a job gets when --label is missing. */
-export const UNLABELLED = "unnamed";
+import { UNLABELLED } from "./kinds.mjs";
 
 export const USAGE = [
     "dotime-queue: one shared queue for heavy jobs on this computer",

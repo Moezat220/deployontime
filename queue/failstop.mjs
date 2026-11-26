@@ -1,7 +1,7 @@
 // The repeated-failure stop: a run is refused when the same check just failed twice on unchanged code.
 import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
-import { UNLABELLED } from "./args.mjs";
+import { UNLABELLED } from "./kinds.mjs";
 import { HOUR } from "./units.mjs";
 
 // A run that ended by itself or at its limit; a stopped run says nothing about the code.
