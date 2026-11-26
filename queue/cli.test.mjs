@@ -86,7 +86,7 @@ test("statusLines: an empty queue with an open gate", () => {
     assert.deepEqual(statusLines({ holders: [], queue: [], gate: "", max: 2 }), ["slots: 0 of 2 taken, 0 waiting", "gate: open"]);
 });
 
-test("historyRow: outcomes first, then waits, then the gates that held jobs", () => {
+test("historyRow: how jobs ended, then how long they waited, then what held them back", () => {
     const totals = { jobs: 9, waited: 4, waitMinTotal: 31.5, waitWallMin: 18, blockedOnlyMin: 2.5, waitMedian: 0.5, waitP90: 11, gaveUp: 1, failed: 2, stopped: 0, timedOut: 1, refused: 3, waitBy: { slots: 27, disk: 4.5 } };
     assert.equal(historyRow("shop-api", totals), "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1; waited: jobs 4, sum 31.5 min, clock 18 min, clock with no job running 2.5 min, median 0.5 min, p90 11 min; held by: slots 27 min, disk 4.5 min");
     assert.equal(historyRow("docs-site", { ...totals, waitBy: {} }).endsWith("; held by: nothing"), true);
