@@ -5,12 +5,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, tempDir, track, until } from "./testkit.mjs";
+import { cleanEnv, isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 const HOME = isolateProcess("reaper");
 const { checkIdleServers, checkIdleSlots, checkLowDisk, checkOverload, checkStrayRuns, groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
 const { snapshot } = await import("./slots.mjs");
-const { addNotice, readNotices } = await import("./notices.mjs");
+const { addNotice } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, MB = 1024, NOW = Date.UTC(2031, 10, 8, 18, 0);

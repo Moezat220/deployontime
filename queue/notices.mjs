@@ -5,9 +5,9 @@ import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu } from "./probes.mjs";
 import { psRows } from "./ps.mjs";
 import { jobCpu } from "./proctree.mjs";
-import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readJson, tempName } from "./files.mjs";
+import { tempName } from "./files.mjs";
 import { MINUTE } from "./units.mjs";
 
 function heldUpText(waiting, now) {
@@ -93,7 +93,6 @@ export function slotIdleCheck(check) {
 // The store holds one file per notice, named after its key. A notice is written under a temporary name and then
 // linked into place, which fails when the file exists, so two processes that send notices at once never lose one,
 // and the first of two with the same key wins.
-const UNUSABLE = Symbol("unusable notice");
 const noticeFile = (dir, key) => join(dir, `${encodeURIComponent(key)}.json`);
 
 /** Stores a notice in the notices folder of the state folder under its key. Returns true when it was added, false
@@ -111,20 +110,4 @@ export function addNotice(key, entry, dir) {
     } finally {
         try { rmSync(temp, { force: true }); } catch { /* the folder itself could not be made */ }
     }
-}
-
-/** Every stored notice as { key: entry }. A notice file that cannot be read or is not JSON is passed to
- *  warn(text) and left out. */
-export function readNotices(dir, warn = () => {}) {
-    let names = [];
-    try { names = readdirSync(dir); } catch { /* no notices yet */ }
-    const all = {};
-    for (const name of names.filter((n) => n.endsWith(".json")).sort()) {
-        const file = join(dir, name);
-        const entry = readJson(file, UNUSABLE, (problem, code) => warn(problem === "invalid"
-            ? `notice ignored: ${file} is not valid JSON`
-            : `notice ignored: ${file} could not be read (${code})`));
-        if (entry !== UNUSABLE) all[decodeURIComponent(name.slice(0, -".json".length))] = entry;
-    }
-    return all;
 }

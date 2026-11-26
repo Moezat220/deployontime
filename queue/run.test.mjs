@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { isolateProcess, tempDir, track, until } from "./testkit.mjs";
+import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("run");
 const { EXIT, journalWriter, planJob, runCommand, runJob, waitForSlot } = await import("./run.mjs");
@@ -16,7 +16,6 @@ const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takeSlot } = await import("./slots.mjs");
 const { notify } = await import("./notify.mjs");
-const { readNotices } = await import("./notices.mjs");
 
 const NODE = process.execPath, MINUTE = 60_000;
 const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };

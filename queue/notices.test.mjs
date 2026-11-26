@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import fs, { readdirSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { isolateProcess, tempDir } from "./testkit.mjs";
+import { isolateProcess, readNotices, tempDir } from "./testkit.mjs";
 
 isolateProcess("notices");
-const { addNotice, idleAlert, longRunAlert, readNotices, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
+const { addNotice, idleAlert, longRunAlert, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
@@ -119,13 +119,4 @@ test("addNotice: a second process that stores a notice in the middle of a write 
     }
     assert.equal(interrupted, 2);
     assert.deepEqual(Object.keys(readNotices(dir)).sort(), ["idle-slot:5160:2", "long-run:6340:1"]);
-});
-
-test("readNotices: a broken notice file is named and left out, the others are kept", () => {
-    const dir = join(tempDir("notices"), "notices"), seen = [];
-    addNotice("long-run:6340:1", { minutes: 22 }, dir);
-    writeFileSync(join(dir, "idle-slot%3A5160%3A2.json"), "{");
-    assert.deepEqual(readNotices(dir, (text) => seen.push(text)), { "long-run:6340:1": { minutes: 22 } });
-    assert.deepEqual(seen, [`notice ignored: ${join(dir, "idle-slot%3A5160%3A2.json")} is not valid JSON`]);
-    assert.deepEqual(readNotices(join(dir, "absent")), {});
 });

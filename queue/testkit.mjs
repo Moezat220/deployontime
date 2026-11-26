@@ -3,7 +3,7 @@
 // configuration and hooks of whoever runs the tests. Every test file imports this module first. Importing it already
 // points DOTIME_HOME at a fresh temp folder and sends notices to the log file only, so a test that forgets
 // isolateProcess() still never touches the real state folder.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -158,4 +158,35 @@ export async function until(check, limitMs = 10_000) {
         await pause(25);
     }
     throw new Error("the expected state was not reached in time");
+}
+
+/** Every notice stored in a notices folder, as { key: entry }. A file that cannot be read, is not JSON, or has a name
+ *  that is not an encoded key is passed to warn(text) and left out. */
+export function readNotices(dir, warn = () => {}) {
+    let names = [];
+    try { names = readdirSync(dir); } catch { /* no notices yet */ }
+    const all = {};
+    for (const name of names.filter((n) => n.endsWith(".json")).sort()) {
+        const file = join(dir, name);
+        let key;
+        try {
+            key = decodeURIComponent(name.slice(0, -".json".length));
+        } catch {
+            warn(`notice ignored: ${file} is not named after a notice key`);
+            continue;
+        }
+        let text;
+        try {
+            text = readFileSync(file, "utf8");
+        } catch (e) {
+            warn(`notice ignored: ${file} could not be read (${e.code ?? e.message})`);
+            continue;
+        }
+        try {
+            all[key] = JSON.parse(text);
+        } catch {
+            warn(`notice ignored: ${file} is not valid JSON`);
+        }
+    }
+    return all;
 }
