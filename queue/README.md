@@ -108,6 +108,10 @@ because `--label` has no value. To give such a value, join it to the option with
 refusal message says so. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
 only the options shown for it.
 
+`run` started in a folder that was removed checks its options first, as above. When they are fine, it says
+`dotime-queue: the current folder was removed; start the job from a folder that exists` and exits 2; nothing is
+journalled.
+
 While it waits, `run` prints its position and what holds it, at each change of position and again after each
 minute of waiting.
 
@@ -275,7 +279,7 @@ changes only such untracked files, the code counts as unchanged: pass `--after-f
 | Code | Meaning |
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
-| 2 | The command line was not understood, for example an unknown option or a value that is not a number. |
+| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run` from a folder that was removed. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |

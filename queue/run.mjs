@@ -291,13 +291,28 @@ export function realDeps({ readHealth, notify, after }) {
         addNotice: storeNotice,
         gitState: readGitState,
         signals: process,
+        cwd: () => process.cwd(),
     };
 }
 
-/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd }. A signal while
- *  the job waits takes it out of the line and resolves with 130 instead of ending the process. */
+/** The folder the job runs in: ctx.cwd when given, else the current folder, read through deps.cwd(). Returns
+ *  { cwd } or { error } when the current folder was removed. */
+function jobFolder(ctx, deps) {
+    if (ctx.cwd !== undefined) return { cwd: ctx.cwd };
+    try {
+        return { cwd: deps.cwd() };
+    } catch (e) {
+        if (e.code !== "ENOENT") throw e;
+        return { error: "the current folder was removed; start the job from a folder that exists" };
+    }
+}
+
+/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd }; without cwd
+ *  the current folder is read, and only after the arguments were found valid, so a usage error is reported the same
+ *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
+ *  instead of ending the process. */
 export async function runCommand(args, ctx, deps) {
-    const { settings, files, tz, cwd } = ctx;
+    const { settings, files, tz } = ctx;
     const { say, signals } = deps;
     const parsed = parseRunArgs(args, settings);
     if (parsed.error) {
@@ -305,6 +320,12 @@ export async function runCommand(args, ctx, deps) {
         else say(parsed.error);
         return EXIT.usage;
     }
+    const folderRead = jobFolder(ctx, deps);
+    if (folderRead.error) {
+        say(folderRead.error);
+        return EXIT.usage;
+    }
+    const { cwd } = folderRead;
     const { label, cmd, priority, maxWait, maxRun, afterFix } = parsed;
     const queuedAt = deps.now();
     const folder = folderProject(cwd);

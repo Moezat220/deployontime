@@ -102,7 +102,8 @@ export async function main(args = process.argv.slice(2)) {
         return EXIT.usage;
     }
     // The settings, the state folder and the zone are read once here and handed to the command. The current folder
-    // is read only by the commands that use it, so status and history still work in a folder that was removed.
+    // is read only by the commands that use it, so status and history still work in a folder that was removed, and
+    // `run` reads it only after its arguments were found valid.
     const ctx = { settings: loadSettings(), files: paths(), tz: timeZone() };
     if (command === "status") return cmdStatus(ctx);
     if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
@@ -114,7 +115,7 @@ export async function main(args = process.argv.slice(2)) {
         notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
         after: afterMinutes,
     });
-    return runCommand(args, { ...ctx, cwd: process.cwd() }, deps);
+    return runCommand(args, ctx, deps);
 }
 
 if (isMainModule(import.meta.url)) process.exit(await main());
