@@ -12,7 +12,7 @@ What it does for every job:
 3. **Limit.** The job runs under a time limit. At the limit, the job and everything it started are stopped.
 4. **Journal.** Each run leaves a record of its wait, its run time and its result. Later runs use that record.
 
-Requirements: macOS, Node 20 or newer, git 2.31 or newer. Nothing to install besides this folder.
+Requirements: macOS, Node 22 or newer, git 2.31 or newer. Nothing to install besides this folder.
 
 ## Quick start
 

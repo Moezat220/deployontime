@@ -1,0 +1,7 @@
+# Proposes an update when a new release of a pinned action comes out, so its security fixes are not missed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
