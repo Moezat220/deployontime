@@ -12,7 +12,7 @@ import { fingerprint } from "./fingerprint.mjs";
 import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate.mjs";
 import { gitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
-import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./group.mjs";
+import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
 import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } from "./journal.mjs";
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
@@ -26,7 +26,7 @@ import { MINUTE } from "./units.mjs";
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
 export const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
 const REPEAT_WAIT_LINE_MS = MINUTE;
-const WRAPPER = fileURLToPath(new URL("./group.mjs", import.meta.url));
+const WRAPPER = fileURLToPath(new URL("./job-wrapper.mjs", import.meta.url));
 // Signals that take a waiting job out of the line, and signals that are passed on to a running job.
 const LEAVE_SIGNALS = ["SIGINT", "SIGTERM"];
 const FORWARD_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -45,14 +45,14 @@ export function planJob(request, settings, journalRows) {
     const stats = kindStats(journalRows, { ...window, kind });
     const stemRuns = stemStats(journalRows, { ...window, stem });
     const limit = decideLimit({ maxRun, kind, stats, stem: stemRuns, priority }, limits);
-    const check = { label, cmd: command, project, cwd, head, fp: request.fingerprint, at: queuedAt };
+    const check = { label, cmd: command, project, cwd, head, fingerprint: request.fingerprint, at: queuedAt };
     const verdict = failStop(journalRows, check, limits, tz);
     const details = {
         kind,
         ...(stem ? { stem } : {}),
         limitMin: limit.limitMin,
         limitBasis: limit.basis,
-        fp: request.fingerprint,
+        fingerprint: request.fingerprint,
         ...(afterFix ? { afterFix } : {}),
     };
     return {
@@ -79,7 +79,7 @@ export async function waitForSlot(job, deps) {
     for (;;) {
         const signal = deps.leaving?.() ?? null;
         if (signal) return { left: signal, tally };
-        const snap = snapshot({ dirs: files });
+        const snap = snapshot({ dirs: files, prune: true });
         const turn = decide(snap, pid, max);
         const ahead = turn.position - 1;
         // One reading per poll, taken only when something needs it; the message reuses it.

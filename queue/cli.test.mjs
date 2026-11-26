@@ -4,7 +4,7 @@
 // run the same command in this process instead, in run.test.mjs. Signals are sent only to processes started here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -140,7 +140,7 @@ test("run: with the only slot taken, the next job waits, says why, and starts wh
 
 test("run: a caller's environment cannot raise the slot count", async () => {
     const box = sandbox({ config: { slots: 1 } });
-    takeSlot(process.pid, "docs-site: build", 1, {}, { slots: join(box.home, "slots"), line: join(box.home, "line") });
+    takeSlot(process.pid, "docs-site: build", 1, {}, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
     // One made-up variable per setting, so the check does not depend on guessing a variable name.
     const pushy = { ...box.env, ...settingEnv(DEFAULTS, 999) };
     const result = await cli(box, ["run", "--label", "shop-api: lint", "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"], { env: pushy });
@@ -184,7 +184,7 @@ test("run: an edit to the script it runs lifts the refusal", async () => {
 
 test("run: Ctrl-C before the start removes the job from the line, exit 130", async () => {
     const box = sandbox({ config: { slots: 1 } });
-    takeSlot(process.pid, "docs-site: build", 1, {}, { slots: join(box.home, "slots"), line: join(box.home, "line") });
+    takeSlot(process.pid, "docs-site: build", 1, {}, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
     const waiter = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", "console.log('started')"]);
     await until(() => waiter.seen.stderr.includes("in line"));
     waiter.child.kill("SIGINT");
@@ -319,4 +319,14 @@ test("run: a check that failed twice runs again once its command changes", async
     assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)"])).code, 3);
     const changed = await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(0)"]);
     assert.deepEqual([changed.code, changed.stderr], [0, ""]);
+});
+
+test("status: changes nothing in the state folder, also with the slot file of a dead job in it", async () => {
+    const box = sandbox(), slot = join(box.home, "slots", "slot-0.json");
+    assert.equal((await cli(box, ["status"])).code, 0);
+    assert.deepEqual(readdirSync(box.home), ["config.json"]);
+    mkdirSync(join(box.home, "slots"));
+    writeFileSync(slot, JSON.stringify({ pid: 2 ** 30 + 7, label: "docs-site: build", at: Date.now() }));
+    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: open\n`);
+    assert.deepEqual([readdirSync(box.home).sort(), existsSync(slot)], [["config.json", "slots"], true]);
 });

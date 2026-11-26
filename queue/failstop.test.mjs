@@ -13,8 +13,8 @@ const NOW = Date.UTC(2031, 8, 3, 7, 0);
 const L = { ...DEFAULTS.limits, failWindowHours: 6 };
 const ago = (ms) => new Date(NOW - ms).toISOString();
 const SUITE = "shop-api: integration suite";
-const failure = (minutesAgo, fields = {}) => JSON.stringify({ projectKey: "shop-api", label: SUITE, cmd: "pnpm run test:integration", cwd: "/srv/shop-api", outcome: "ran", exit: 7, head: "ab12cd34ef", fp: "f00d", endedAt: ago(minutesAgo * MINUTE), ...fields });
-const job = { label: SUITE, cmd: "pnpm run test:integration", project: "shop-api", cwd: "/srv/shop-api", head: "ab12cd34ef", fp: "f00d", at: NOW };
+const failure = (minutesAgo, fields = {}) => JSON.stringify({ projectKey: "shop-api", label: SUITE, cmd: "pnpm run test:integration", cwd: "/srv/shop-api", outcome: "ran", exit: 7, head: "ab12cd34ef", fingerprint: "f00d", endedAt: ago(minutesAgo * MINUTE), ...fields });
+const job = { label: SUITE, cmd: "pnpm run test:integration", project: "shop-api", cwd: "/srv/shop-api", head: "ab12cd34ef", fingerprint: "f00d", at: NOW };
 const verdict = (lines, thisJob = job) => failStop(lines, thisJob, L, "UTC");
 const TWICE = [failure(95), failure(40)];
 
@@ -27,9 +27,9 @@ test("failStop: matches earlier runs by label first, and by command plus project
 });
 
 test("failStop: lets the run through and says whether the commit or the files moved", () => {
-    assert.deepEqual(verdict(TWICE, { ...job, fp: "beef" }), { refuse: false, changed: "files" });
+    assert.deepEqual(verdict(TWICE, { ...job, fingerprint: "beef" }), { refuse: false, changed: "files" });
     assert.deepEqual(verdict(TWICE, { ...job, head: "9988776655" }), { refuse: false, changed: "commit" });
-    assert.equal(verdict(TWICE, { ...job, fp: null }).refuse, true);
+    assert.equal(verdict(TWICE, { ...job, fingerprint: null }).refuse, true);
 });
 
 test("failStop: a changed command under the same label is a new attempt, not a third failure", () => {
@@ -39,7 +39,7 @@ test("failStop: a changed command under the same label is a new attempt, not a t
 
 test("failStop: allows a third run once the code differs between the two failures", () => {
     assert.deepEqual(verdict([failure(95, { head: "9988776655" }), failure(40)]), { refuse: false });
-    assert.deepEqual(verdict([failure(95, { fp: "beef" }), failure(40)]), { refuse: false });
+    assert.deepEqual(verdict([failure(95, { fingerprint: "beef" }), failure(40)]), { refuse: false });
 });
 
 test("failStop: two failures that ran different commands are not the same failure twice", () => {
@@ -66,4 +66,11 @@ test("failStop: refuses the third run on unchanged code and tells how the two be
         reason: `same check failed twice on unchanged code: "${SUITE}", commit ab12cd34, exit 7 at 05:25 UTC, then run limit hit at 06:20 UTC; hint: change the code, or pass --after-fix "<note>" before the -- to run it anyway`,
     });
     assert.equal(verdict([failure(95, { head: undefined }), failure(40, { head: undefined })]).reason.includes("commit"), false);
+});
+
+test("failStop: journal lines that name the fingerprint fp still count", () => {
+    const older = (minutesAgo, fp) => failure(minutesAgo, { fingerprint: undefined, fp });
+    assert.equal(verdict([older(95, "f00d"), older(40, "f00d")]).refuse, true);
+    assert.deepEqual(verdict([older(95, "f00d"), older(40, "f00d")], { ...job, fingerprint: "beef" }), { refuse: false, changed: "files" });
+    assert.deepEqual(verdict([older(95, "beef"), failure(40)]), { refuse: false });
 });

@@ -249,8 +249,8 @@ test("main: a dry run leaves the slot file of a dead holder in place", () => {
     const ran = spawnSync(process.execPath, [script, "--dry"], { env: cleanEnv(home), encoding: "utf8", timeout: 60_000 });
     assert.equal(ran.status, 0, "the reaper did not exit cleanly");
     assert.deepEqual([existsSync(slot), readdirSync(home)], [true, ["slots"]]);
-    // The same file is cleared away by an ordinary snapshot, which shows that the holder does count as dead.
-    assert.deepEqual(snapshot({ dirs: { slots: join(home, "slots"), line: join(home, "line") } }).holders, []);
+    // The same file is cleared away by a pruning snapshot, which shows that the holder does count as dead.
+    assert.deepEqual(snapshot({ dirs: { slots: join(home, "slots"), waitingLine: join(home, "line") }, prune: true }).holders, []);
     assert.equal(existsSync(slot), false);
 });
 

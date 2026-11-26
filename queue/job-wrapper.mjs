@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Wrapper that the queue starts in a new process group: `node group.mjs <queue pid> <command> [args]`. Because the
+// Wrapper that the queue starts in a new process group: `node job-wrapper.mjs <queue pid> <command> [args]`. Because the
 // job and everything it starts share that group, one signal reaches all of it. The wrapper ends the way the job
 // ended, and it stops the group when the queue process that started it is gone. When the command cannot be started
 // at all, the wrapper says so on file descriptor 3 if the queue opened one, so the queue can tell that apart from a

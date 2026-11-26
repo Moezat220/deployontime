@@ -81,14 +81,14 @@ const settle = (promise) => {
 // ---- planJob ----
 
 const passedRun = (fields = {}) => ({ projectKey: "docs-site", label: "docs-site: build", cmd: "pnpm run build", kind: "build", outcome: "ran", exit: 0, runMin: 8, endedAt: new Date(NOW - 60 * MINUTE).toISOString(), ...fields });
-const failedRun = (minutesAgo) => ({ projectKey: "shop-api", label: "shop-api: unit tests", cmd: "pnpm test", cwd: "/srv/shop-api", outcome: "ran", exit: 4, head: "ab12cd34ef", fp: "f00d", endedAt: new Date(NOW - minutesAgo * MINUTE).toISOString() });
+const failedRun = (minutesAgo) => ({ projectKey: "shop-api", label: "shop-api: unit tests", cmd: "pnpm test", cwd: "/srv/shop-api", outcome: "ran", exit: 4, head: "ab12cd34ef", fingerprint: "f00d", endedAt: new Date(NOW - minutesAgo * MINUTE).toISOString() });
 const request = (fields = {}) => ({ label: "docs-site: build", command: "pnpm run build", maxRun: null, priority: false, afterFix: null, project: "docs-site", cwd: "/srv/docs-site", head: "ab12cd34ef", fingerprint: "f00d", queuedAt: NOW, tz: "UTC", ...fields });
 
 test("planJob: the limit comes from the journal rows, and the details name it", () => {
     const rows = Array.from({ length: 5 }, () => passedRun());
     const plan = planJob(request(), DEFAULTS, rows);
     assert.deepEqual([plan.kind, plan.stem, plan.limit.limitMin, plan.refusal, plan.afterFixUsed], ["build", "pnpm run build", 12, null, false]);
-    assert.deepEqual(plan.details, { kind: "build", stem: "pnpm run build", limitMin: 12, limitBasis: plan.limit.basis, fp: "f00d" });
+    assert.deepEqual(plan.details, { kind: "build", stem: "pnpm run build", limitMin: 12, limitBasis: plan.limit.basis, fingerprint: "f00d" });
     assert.equal(planJob(request({ maxRun: 45 }), DEFAULTS, rows).limit.basis, "the --max-run flag");
     assert.equal(planJob(request({ kind: "Deploy" }), DEFAULTS, []).kind, "deploy");
 });

@@ -9,24 +9,24 @@ isolateProcess("slots");
 const { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000;
-const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), line: join(home, "line") }; };
+const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), waitingLine: join(home, "line") }; };
 const allAlive = () => true;
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 test("snapshot: an entry whose pid now belongs to a newer process is dropped; its own process keeps it", () => {
     const dirs = newDirs(), now = 50_000_000;
-    fs.mkdirSync(dirs.slots, { recursive: true }); fs.mkdirSync(dirs.line, { recursive: true });
-    const put = (name, data) => writeFileSync(join(dirs.line, name), JSON.stringify(data));
+    fs.mkdirSync(dirs.slots, { recursive: true }); fs.mkdirSync(dirs.waitingLine, { recursive: true });
+    const put = (name, data) => writeFileSync(join(dirs.waitingLine, name), JSON.stringify(data));
     put("1-801.json", { pid: 801, label: "same process", at: 1, born: now - 600_000 });
     put("2-802.json", { pid: 802, label: "pid reused", at: 2, born: now - 600_000 });
     put("3-803.json", { pid: 803, label: "no start time", at: 3 });
     put("4-804.json", { pid: 804, label: "age unknown", at: 4, born: now - 600_000 });
     const asked = [];
     const ages = (pids) => { asked.push(...pids); return new Map([[801, 601], [802, 30]]); };
-    const { queue } = snapshot({ dirs, isAlive: allAlive, ages, now });
+    const { queue } = snapshot({ dirs, isAlive: allAlive, ages, now, prune: true });
     assert.deepEqual(queue.map((t) => t.label), ["same process", "no start time", "age unknown"]);
     assert.deepEqual(asked, [801, 802, 804]);
-    assert.equal(existsSync(join(dirs.line, "2-802.json")), false);
+    assert.equal(existsSync(join(dirs.waitingLine, "2-802.json")), false);
 });
 
 test("enqueue and takeSlot: this process's own entries carry its start time", () => {
@@ -40,7 +40,7 @@ test("enqueue and takeSlot: this process's own entries carry its start time", ()
 
 test("enqueue: writes one complete ticket and leaves no temporary file", () => {
     const dirs = newDirs(), ticket = enqueue(640, "docs-site: link check", true, dirs, 9_000);
-    assert.deepEqual(readdirSync(dirs.line), ["9000-640.json"]);
+    assert.deepEqual(readdirSync(dirs.waitingLine), ["9000-640.json"]);
     assert.deepEqual(read(ticket), { pid: 640, label: "docs-site: link check", at: 9_000, priority: true });
     assert.equal("priority" in read(enqueue(641, "docs-site: build", false, dirs, 9_500)), false);
 });
@@ -55,37 +55,37 @@ test("snapshot: orders the line by priority, then arrival, then pid", () => {
     assert.deepEqual(snapshot({ dirs, isAlive: allAlive }).queue.map((t) => t.pid), [614, 612, 610, 611, 613]);
 });
 
-test("snapshot: deletes the tickets and slots of processes that no longer exist", () => {
+test("snapshot: with prune it deletes the tickets and slots of processes that no longer exist", () => {
     const dirs = newDirs(), gone = new Set([720, 722]);
     const deadTicket = enqueue(720, "docs-site: build", false, dirs), liveTicket = enqueue(721, "shop-api: lint", false, dirs);
     const deadSlot = takeSlot(722, "mobile-app: bundle", 2, {}, dirs), liveSlot = takeSlot(723, "shop-api: build", 2, {}, dirs);
-    const seen = snapshot({ dirs, isAlive: (pid) => !gone.has(pid) });
+    const seen = snapshot({ dirs, isAlive: (pid) => !gone.has(pid), prune: true });
     assert.deepEqual([seen.holders.map((h) => h.pid), seen.queue.map((t) => t.pid)], [[723], [721]]);
     assert.deepEqual([deadTicket, liveTicket, deadSlot, liveSlot].map(existsSync), [false, true, false, true]);
 });
 
-test("snapshot: with readOnly it reports the same entries and leaves every file where it is", () => {
+test("snapshot: without prune it reports the same entries and leaves every file where it is", () => {
     const dirs = newDirs(), gone = new Set([725]);
     const deadSlot = takeSlot(725, "docs-site: build", 2, {}, dirs), liveTicket = enqueue(726, "shop-api: lint", false, dirs);
-    const abandoned = join(dirs.line, "4000-727.json.tmp-727");
+    const abandoned = join(dirs.waitingLine, "4000-727.json.tmp-727");
     writeFileSync(abandoned, "");
     utimesSync(abandoned, new Date(Date.now() - 10 * MINUTE), new Date(Date.now() - 10 * MINUTE));
-    const seen = snapshot({ dirs, isAlive: (pid) => !gone.has(pid), readOnly: true });
+    const seen = snapshot({ dirs, isAlive: (pid) => !gone.has(pid) });
     assert.deepEqual([seen.holders, seen.queue.map((t) => t.pid)], [[], [726]]);
     assert.deepEqual([deadSlot, liveTicket, abandoned].map(existsSync), [true, true, true]);
     const untouched = join(tempDir("slots"), "never-made");
-    assert.deepEqual(snapshot({ dirs: { slots: join(untouched, "slots"), line: join(untouched, "line") }, readOnly: true }), { holders: [], queue: [] });
+    assert.deepEqual(snapshot({ dirs: { slots: join(untouched, "slots"), waitingLine: join(untouched, "line") } }), { holders: [], queue: [] });
     assert.equal(existsSync(untouched), false);
 });
 
 test("snapshot: a temporary file is neither listed nor deleted while it is fresh", () => {
     const dirs = newDirs(), ticket = enqueue(730, "docs-site: build", false, dirs, 1_000);
-    const halfWritten = join(dirs.line, "2000-731.json.tmp-731"), abandoned = join(dirs.line, "3000-732.json.tmp-732");
+    const halfWritten = join(dirs.waitingLine, "2000-731.json.tmp-731"), abandoned = join(dirs.waitingLine, "3000-732.json.tmp-732");
     writeFileSync(halfWritten, '{"pid":731,"lab');
     writeFileSync(abandoned, "");
     utimesSync(abandoned, new Date(Date.now() - 10 * MINUTE), new Date(Date.now() - 10 * MINUTE));
-    const seen = snapshot({ dirs, isAlive: allAlive });
-    assert.deepEqual(seen.queue.map((t) => t.f), [ticket]);
+    const seen = snapshot({ dirs, isAlive: allAlive, prune: true });
+    assert.deepEqual(seen.queue.map((t) => t.file), [ticket]);
     assert.equal(existsSync(halfWritten), true);
     assert.equal(existsSync(abandoned), false);
 });
@@ -107,7 +107,7 @@ test("enqueue: a snapshot taken in the middle of the write does not lose the tic
     const dirs = newDirs();
     const [ticket, interrupted] = withSnapshotDuringWrites(dirs, () => enqueue(740, "shop-api: integration suite", false, dirs, 6_000));
     assert.equal(interrupted, 1);
-    assert.deepEqual(snapshot({ dirs, isAlive: allAlive }).queue.map((t) => [t.f, t.pid, t.label]), [[ticket, 740, "shop-api: integration suite"]]);
+    assert.deepEqual(snapshot({ dirs, isAlive: allAlive }).queue.map((t) => [t.file, t.pid, t.label]), [[ticket, 740, "shop-api: integration suite"]]);
 });
 
 test("takeSlot, updateSlot: a snapshot taken in the middle of the write does not lose the slot", () => {
@@ -118,7 +118,7 @@ test("takeSlot, updateSlot: a snapshot taken in the middle of the write does not
         return taken;
     });
     assert.equal(interrupted, 2);
-    assert.deepEqual(snapshot({ dirs, isAlive: allAlive }).holders.map((h) => [h.f, h.pid, h.pgid]), [[slot, 741, 7410]]);
+    assert.deepEqual(snapshot({ dirs, isAlive: allAlive }).holders.map((h) => [h.file, h.pid, h.pgid]), [[slot, 741, 7410]]);
 });
 
 test("takeSlot: hands out each slot once and stores the job's details", () => {

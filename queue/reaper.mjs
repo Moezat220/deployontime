@@ -234,7 +234,7 @@ async function main() {
     const files = paths();
     const stateFile = files.reaperState;
     const state = readJson(stateFile, {});
-    const { holders, queue } = snapshot({ dirs: files, readOnly: dry });
+    const { holders, queue } = snapshot({ dirs: files, prune: !dry });
     const { load, cores } = probeLoad();
     const run = await reap({
         rows: parseProcessTable(probeProcessTable()), holders, queue, state, now, dry, settings, tz: timeZone(),

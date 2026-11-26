@@ -16,7 +16,7 @@ test("strayRuns: reports a large run with its root, process count and memory", (
 test("strayRuns: a run under a slot holder belongs to the queue, whatever the command lines say", () => {
     const rows = [
         { pid: 6000, ppid: 40, rss: 60 * MB, cmd: "node queue/cli.mjs run --priority -- pnpm exec vitest run" },
-        { pid: 6001, ppid: 6000, rss: 40 * MB, cmd: "node group.mjs 6000 npx vitest run" },
+        { pid: 6001, ppid: 6000, rss: 40 * MB, cmd: "node job-wrapper.mjs 6000 npx vitest run" },
         ...bigRun(7000, 6001),
     ];
     assert.deepEqual(strayRuns(rows, { holders: [{ pid: 6000, pgid: 6001 }] }), []);
@@ -26,7 +26,7 @@ test("strayRuns: a run under a slot holder belongs to the queue, whatever the co
 });
 
 test("strayRuns: the wrapper's group id is enough when the queue process is not listed", () => {
-    const rows = [{ pid: 6001, ppid: 6000, rss: 40 * MB, cmd: "node group.mjs 6000 npx vitest run" }, ...bigRun(7000, 6001)];
+    const rows = [{ pid: 6001, ppid: 6000, rss: 40 * MB, cmd: "node job-wrapper.mjs 6000 npx vitest run" }, ...bigRun(7000, 6001)];
     assert.deepEqual(strayRuns(rows, { holders: [{ pid: 6000, pgid: 6001 }] }), []);
     assert.deepEqual(strayRuns(bigRun(7000, 6000), { holders: [{ pid: 6000 }] }), []);
 });

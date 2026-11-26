@@ -9,9 +9,9 @@ import { constants as osConstants } from "node:os";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, track } from "./testkit.mjs";
 
-const HOME = isolateProcess("group");
-const { exitPlan, NO_START_EXIT, queueGone, readStartFailure, startFailureLine, wrapperEnd } = await import("./group.mjs");
-const WRAPPER = fileURLToPath(new URL("./group.mjs", import.meta.url));
+const HOME = isolateProcess("job-wrapper");
+const { exitPlan, NO_START_EXIT, queueGone, readStartFailure, startFailureLine, wrapperEnd } = await import("./job-wrapper.mjs");
+const WRAPPER = fileURLToPath(new URL("./job-wrapper.mjs", import.meta.url));
 
 test("exitPlan: a job that exited by itself passes its code on", () => {
     assert.deepEqual(exitPlan({ code: 0, signal: null }), { exit: 0 });
