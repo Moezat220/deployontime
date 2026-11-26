@@ -3,11 +3,11 @@
 // the same kind, else from a default. An unreadable journal counts as no history and never holds a job back.
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { isSandbox, loadSettings, paths, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
-import { isFailedRun, isStopped, lineProject, parseLines, readOnlyGit } from "./journal.mjs";
+import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
+import { git } from "./git.mjs";
 import { psSeconds, sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu, probeProcessTree } from "./probes.mjs";
 import { pctl } from "./stats.mjs";
@@ -196,12 +196,16 @@ const SKIPPED_UNTRACKED_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|mp4|webm|mov|pd
 const SCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 
 function addUntracked(hash, cwd, ignoreDirs) {
-    const top = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 10_000, env: readOnlyGit() }).stdout?.trim();
+    const top = git(cwd, ["rev-parse", "--show-toplevel"])?.trim();
     if (!top) return;
     const excludes = ignoreDirs.map((dir) => `:(top,exclude,glob)**/${dir}/**`);
-    const listed = spawnSync("git", ["-C", top, "ls-files", "-o", "--exclude-standard", "-z", "--", ".", ...excludes], { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, env: readOnlyGit() });
-    if (listed.status !== 0) { hash.update("untracked-unknown"); return; }
-    const files = listed.stdout.split("\0").filter((name) => name && !SKIPPED_UNTRACKED_RE.test(name)).sort().slice(0, UNTRACKED.maxFiles);
+    const listArgs = ["ls-files", "-o", "--exclude-standard", "-z", "--", ".", ...excludes];
+    const listed = git(top, listArgs, { timeout: 15_000, maxBuffer: 64 * 1024 * 1024 });
+    if (listed === null) {
+        hash.update("untracked-unknown");
+        return;
+    }
+    const files = listed.split("\0").filter((name) => name && !SKIPPED_UNTRACKED_RE.test(name)).sort().slice(0, UNTRACKED.maxFiles);
     let bytesRead = 0;
     for (const name of files) {
         try {
@@ -219,8 +223,8 @@ export function codePrint(cwd, command = [], ignoreDirs = loadSettings().outputD
     try {
         // --no-ext-diff --no-textconv: a diff program configured in the repository is never started by the queue
         for (const args of [["status", "--porcelain"], ["diff", "--no-ext-diff", "--no-textconv", "HEAD"]]) {
-            const ran = spawnSync("git", ["-C", cwd, ...args], { encoding: "buffer", timeout: 15_000, maxBuffer: 256 * 1024 * 1024, env: readOnlyGit() });
-            hash.update(ran.status === 0 ? ran.stdout : Buffer.from("git-unknown"));
+            const out = git(cwd, args, { encoding: "buffer", timeout: 15_000, maxBuffer: 256 * 1024 * 1024 });
+            hash.update(out ?? Buffer.from("git-unknown"));
         }
         addUntracked(hash, cwd, ignoreDirs);
     } catch { hash.update("git-unknown"); }

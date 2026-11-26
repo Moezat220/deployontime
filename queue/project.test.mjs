@@ -1,26 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
 
 isolateProcess("project");
-const { folderProject, jobProject, labelProject, readOnlyGit } = await import("./project.mjs");
-
-test("readOnlyGit: no index lock, no watcher program, and the caller's own settings kept", () => {
-    assert.deepEqual(readOnlyGit({ KEEP: "1" }), { KEEP: "1", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false" });
-    const added = readOnlyGit({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.pager", GIT_CONFIG_VALUE_0: "cat" });
-    assert.deepEqual([added.GIT_CONFIG_COUNT, added.GIT_CONFIG_KEY_0, added.GIT_CONFIG_KEY_1, added.GIT_CONFIG_VALUE_1], ["2", "core.pager", "core.fsmonitor", "false"]);
-});
-
-test("the queue's git calls do not start a watcher program named in the repository's settings", async () => {
-    const { gitState } = await import("./journal.mjs");
-    const repo = makeRepo(tempDir("project")), marker = join(tempDir("project-marker"), "watcher-ran");
-    git(repo, "config", "core.fsmonitor", `touch '${marker}'; false`);
-    folderProject(repo);
-    gitState(repo);
-    assert.equal(existsSync(marker), false);
-});
+const { folderProject, jobProject, labelProject } = await import("./project.mjs");
 
 test("labelProject: the text in front of the first colon", () => {
     assert.equal(labelProject("mobile-app: integration suite"), "mobile-app");

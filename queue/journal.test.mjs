@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { symlinkSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
+import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("journal");
 const {
-    addWait, append, clockMinutes, cmdString, findStamp, gitState, historyWindow, isFailedRun, isStopped, jobEnd,
-    lineProject, parseLines, porcelainClean, readLines, record, summarize,
+    addWait, append, clockMinutes, cmdString, findStamp, historyWindow, isFailedRun, isStopped, jobEnd,
+    lineProject, parseLines, readLines, record, summarize,
 } = await import("./journal.mjs");
 
 const MINUTE = 60_000, START = Date.UTC(2031, 2, 14, 16, 30);
@@ -26,34 +26,6 @@ test("addWait: adds the time to every gate in the blocks", () => {
     addWait(tally, [{ gate: "load" }, { gate: "disk" }], 1_500);
     addWait(tally, [], 9_000);
     assert.deepEqual(addWait(tally, [{ gate: "slots" }, { gate: "load" }], 500), { slots: 4_500, load: 2_000, disk: 1_500 });
-});
-
-test("porcelainClean: clean for no output and for untracked node_modules links only", () => {
-    for (const status of ["?? notes.txt\n", "A  node_modules\n", "?? node_modules.bak\n", " D node_modules\n", "?? node_modules\n M lib/price.js\n", " M lib/price.js\n", "?? tools/cache/node_modules/\n"]) {
-        assert.equal(porcelainClean(status), false, JSON.stringify(status));
-    }
-    for (const status of ["?? packages/ui/node_modules\n", "?? packages/ui/node_modules\n?? node_modules\n", "?? node_modules\n", ""]) assert.equal(porcelainClean(status), true, JSON.stringify(status));
-});
-
-test("gitState: null answers outside a repository", () => {
-    assert.deepEqual(gitState(tempDir("journal")), { head: null, clean: null });
-});
-
-test("gitState: reports the commit, and clean until a file changes or appears", () => {
-    const repo = makeRepo(join(tempDir("journal"), "shop-api"), { "lib/price.js": "export const vat = 0.2;\n" });
-    const before = gitState(repo);
-    assert.equal(/^[0-9a-f]{40}$/.test(before.head), true);
-    assert.equal(before.clean, true);
-    writeFileSync(join(repo, "lib", "tax.js"), "export const rate = 0.1;\n");
-    assert.deepEqual(gitState(repo), { head: before.head, clean: false });
-});
-
-test("gitState: a node_modules symlink escapes the `node_modules/` ignore rule, and the tree still counts as clean", () => {
-    const repo = makeRepo(join(tempDir("journal"), "docs-site"), { ".gitignore": "node_modules/\n", "index.md": "# docs\n" });
-    symlinkSync(tempDir("shared-modules"), join(repo, "node_modules"));
-    assert.equal(gitState(repo).clean, true);
-    writeFileSync(join(repo, "index.md"), "# docs, edited\n");
-    assert.equal(gitState(repo).clean, false);
 });
 
 test("cmdString: quotes an argument only when it holds unusual characters", () => {

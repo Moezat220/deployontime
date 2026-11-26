@@ -1,11 +1,11 @@
 // The journal: one JSON line per job in $DOTIME_HOME/journal.jsonl, holding its label and project, waiting time per
 // gate, run time, outcome, command and the commit it ran on. Run limits, the repeated-failure stop, pass stamps and
-// `history` all read it. A failed write is reported by a return value and never interrupts a job.
+// `history` all read it. A failed write is reported by a return value and never interrupts a job. This module only
+// reads and writes the journal file; the git facts in a line come from git.mjs.
 import { readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { paths, timeZone } from "./settings.mjs";
 import { dateTime, dayOf, dayStart, shiftDay } from "./clock.mjs";
-import { jobProject, readOnlyGit } from "./project.mjs";
+import { jobProject } from "./project.mjs";
 import { pctl } from "./stats.mjs";
 import { appendLine } from "./files.mjs";
 import { MINUTE, oneDecimal } from "./units.mjs";
@@ -26,25 +26,6 @@ export function parseLines(lines) {
 export function addWait(tally, blocks, ms) {
     for (const { gate } of blocks) tally[gate] = (tally[gate] ?? 0) + ms;
     return tally;
-}
-
-export { readOnlyGit };
-function git(cwd, args) {
-    try {
-        const ran = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 10_000, env: readOnlyGit() });
-        return ran.status === 0 ? ran.stdout : null;
-    } catch { return null; }
-}
-/** Is `git status --porcelain` output free of changes? The one line it forgives is a link named `node_modules`
- *  that git lists as untracked: a `node_modules/` ignore rule matches folders only, and that link is no source. */
-export function porcelainClean(status) {
-    return String(status).split("\n").filter(Boolean).every((entry) => /^\?\? (.*\/)?node_modules$/.test(entry));
-}
-/** Returns { head, clean }, each null when git has no answer. */
-export function gitState(cwd) {
-    const head = git(cwd, ["rev-parse", "HEAD"])?.trim() || null;
-    const status = head ? git(cwd, ["status", "--porcelain"]) : null;
-    return { head, clean: status == null ? null : porcelainClean(status) };
 }
 
 /** Joins arguments with spaces, JSON-quoting any that a shell would not read as one plain word. */
