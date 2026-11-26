@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -58,6 +58,13 @@ test("loadSettings: gives the defaults when there is no config file", () => {
     const c = collect();
     assert.deepEqual(loadSettings({ DOTIME_HOME: tempDir("settings") }, { warn: c.warn }), DEFAULTS);
     assert.deepEqual(c.seen, []);
+});
+
+test("loadSettings: a config.json that exists but cannot be read is reported, and the defaults are used", () => {
+    const home = tempDir("settings"), c = collect();
+    mkdirSync(join(home, "config.json"));
+    assert.deepEqual(loadSettings({ DOTIME_HOME: home }, { warn: c.warn }), DEFAULTS);
+    assert.deepEqual(c.seen, ["config.json ignored: it could not be read (EISDIR), defaults kept"]);
 });
 
 test("loadSettings: config.json replaces single values and leaves the rest", () => {

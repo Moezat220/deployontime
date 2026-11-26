@@ -1,7 +1,7 @@
 // The checks run on made-up jobs. Only the last test starts the real script, with --dry, which reads and never writes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,17 @@ test("readRules: empty rules without a file, else the file's content", () => {
     assert.deepEqual(readRules(), { skip: ["org.sample.*"], maxLogAgeH: { [LABEL]: 5 } });
     const broken = join(tempDir("schedule"), "rules.json");
     writeFileSync(broken, "{");
-    assert.deepEqual(readRules(broken), { skip: [], okExit: {} });
+    assert.deepEqual(readRules(broken, { warn: () => {} }), { skip: [], okExit: {} });
+});
+
+test("readRules: a rules file that is broken or cannot be read is reported; a missing one is not", () => {
+    const dir = tempDir("schedule"), seen = [], warn = (text) => seen.push(text);
+    const broken = join(dir, "broken.json"), folder = join(dir, "folder.json"), list = join(dir, "list.json");
+    writeFileSync(broken, "{");
+    mkdirSync(folder);
+    writeFileSync(list, "[]");
+    for (const file of [join(dir, "absent.json"), broken, folder, list]) assert.deepEqual(readRules(file, { warn }), { skip: [], okExit: {} }, file);
+    assert.deepEqual(seen, [`rules file ignored: ${broken} is not valid JSON`, `rules file ignored: ${folder} could not be read (EISDIR)`, `rules file ignored: ${list} needs one JSON object`]);
 });
 
 test("globMatch: * stands for any text, everything else is literal", () => {

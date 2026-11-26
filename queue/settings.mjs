@@ -120,6 +120,7 @@ export function loadSettings(env = process.env, { configText, warn = warnOnce } 
         if (!isPlain(given)) { warn("config.json ignored: it needs one JSON object"); given = {}; }
     } catch (e) {
         if (e instanceof SyntaxError) warn("config.json ignored: it is not valid JSON");
+        else if (e.code !== "ENOENT") warn(`config.json ignored: it could not be read (${e.code ?? e.message}), defaults kept`);
     }
     const settings = overlay(DEFAULTS, given, "", warn);
     settings.slots = Math.floor(settings.slots);

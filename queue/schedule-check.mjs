@@ -13,9 +13,20 @@ import { probeReadPlist, probeScheduledJobs } from "./probes.mjs";
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 export const LIST_ERROR = "could not read the job list";
 
-/** The rules file as an object: { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }. */
-export function readRules(file = paths().scheduleRules) {
-    try { return JSON.parse(readFileSync(file, "utf8")); } catch { return { skip: [], okExit: {} }; }
+const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`);
+/** The rules file as an object: { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }.
+ *  A missing file means no rules. A file that cannot be read or is not one JSON object is reported through warn
+ *  and also means no rules. */
+export function readRules(file = paths().scheduleRules, { warn = warnOnStderr } = {}) {
+    const none = { skip: [], okExit: {} };
+    let rules;
+    try { rules = JSON.parse(readFileSync(file, "utf8")); } catch (e) {
+        if (e instanceof SyntaxError) warn(`rules file ignored: ${file} is not valid JSON`);
+        else if (e.code !== "ENOENT") warn(`rules file ignored: ${file} could not be read (${e.code ?? e.message})`);
+        return none;
+    }
+    if (!rules || typeof rules !== "object" || Array.isArray(rules)) { warn(`rules file ignored: ${file} needs one JSON object`); return none; }
+    return rules;
 }
 
 /** Matches a label against a pattern in which * stands for any text. */
