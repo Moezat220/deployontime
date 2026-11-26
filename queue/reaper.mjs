@@ -6,7 +6,8 @@ import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { isMainModule, loadSettings, paths } from "./settings.mjs";
 import { snapshot } from "./slots.mjs";
-import { idleText, isServer, sampleKeepMs, serverIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
+import { idleText, isServer, sampleKeepMs, serverIdleVerdict } from "./idle.mjs";
+import { LAUNCHER_RE, TEST_RUN_RE } from "./commands.mjs";
 import { parseProcessTable } from "./ps.mjs";
 import { ancestors, descendants, stopGroup } from "./proctree.mjs";
 import { slotIdleCheck } from "./limits.mjs";
@@ -33,10 +34,6 @@ export function shortCommand(command) {
     return [basename(program), arg?.startsWith("/") ? basename(arg) : arg].filter(Boolean).join(" ");
 }
 
-// Programs that only start a script: a dev server's group may hold these above the server.
-// The program itself must be the launcher (or the script node runs, as pnpm and yarn appear): a folder named npm
-// further along a command line does not count.
-const LAUNCHER_RE = /^(\S*\/)?(npm|npx|pnpm|yarn|bun)(\s|$)|^(\S*\/)?node \S*\/(npm|npx|pnpm|yarn)(-cli)?(\.c?js)?(\s|$)|^(\S*\/)?(sh|bash|zsh) -c /;
 /** True when every process in the group is the server, a process it started, or a process on the line above it that
  *  is a launcher or itself names a dev server (isServerCmd). */
 export function serverOnly(procs, server, isServerCmd = () => false) {

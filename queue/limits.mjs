@@ -8,6 +8,7 @@ import { isSandbox, loadSettings, paths, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
 import { git } from "./git.mjs";
+import { SHELLS, TEST_KIND_RE } from "./commands.mjs";
 import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu } from "./probes.mjs";
 import { psRows } from "./ps.mjs";
@@ -53,7 +54,7 @@ const taskOf = (label) => String(label ?? "").replace(/^[^:]{1,40}:\s*/, "");
 // Ordered from heaviest to lightest; the first match wins.
 export const KINDS = [
     ["deploy", /\b(deploy|release|publish)\b/i],
-    ["test", /\b(tests?|check|suite|spec|e2e|vitest|jest|playwright)\b|node --test/i],
+    ["test", TEST_KIND_RE],
     ["build", /\b(build|bundle|compile)\b/i],
     ["lint", /\b(lint|typecheck|tsc|format)\b/i],
 ];
@@ -75,7 +76,6 @@ export function kindOf(label, command, given) {
 
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn"]);
 const TOOL_RUNNERS = new Set(["npx", "pnpx", "bunx"]);
-const SHELLS = new Set(["sh", "bash", "zsh"]);
 const INTERPRETERS = new Set(["node", "tsx", "ts-node", "vite-node", "bun", "deno", "python", "python3", ...SHELLS]);
 const INLINE_CODE_FLAGS = new Set(["-e", "-c", "--eval"]);
 const baseName = (word) => String(word).split("/").pop();

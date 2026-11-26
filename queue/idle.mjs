@@ -2,11 +2,9 @@
 // by the reaper; a job that holds a slot without using CPU only earns a notice. A sample is { t, cpu }, where cpu is
 // the summed CPU seconds of the whole group, and samples are ordered oldest first.
 import { loadSettings } from "./settings.mjs";
+import { TEST_RUN_RE } from "./commands.mjs";
 import { MINUTE } from "./units.mjs";
 
-
-// Commands that run tests once and exit; they are never dev servers.
-export const TEST_RUN_RE = /\bvitest (--)?run\b|\bnode --test\b|playwright test|jest(?!.*--watch)/;
 
 export function isServer(command, pattern = loadSettings().reaper.serverPattern) {
     let matcher;

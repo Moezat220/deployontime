@@ -1,14 +1,13 @@
 // Finds large test runs that did not come through the queue, so the reaper can report them. A run belongs to the
 // queue when it descends from a process that holds a slot. Small runs outside the queue are left alone.
 import { ancestors, descendants, treeIndex } from "./proctree.mjs";
+import { SHELL_PROGRAM_RE, STRAY_TEST_RE } from "./commands.mjs";
 
-export const TEST_RE = /jest-worker|\/jest(\.js)?(\s|$)|\bjest\s|\bvitest(\.mjs)?(\s|$)|vitest\/dist|playwright test|@playwright\/test/;
 // Reported when the run has at least two test processes using minMB together, or minProcs test processes of any size.
 export const STRAY = { minMB: 2048, minProcs: 5 };
 
-// "sh -c jest" matches TEST_RE through its argument; launchers like that are excluded.
-const SHELL_RE = /^(\/bin\/|\/usr\/bin\/)?(zsh|bash|sh)(\s|$)/;
-const isTestProcess = (row) => TEST_RE.test(row.cmd) && !SHELL_RE.test(row.cmd);
+// "sh -c jest" matches through its argument; a shell is only the launcher of the run.
+const isTestProcess = (row) => STRAY_TEST_RE.test(row.cmd) && !SHELL_PROGRAM_RE.test(row.cmd);
 
 /** rows: [{ pid, ppid, rss (KB), cmd }]; holders: slot entries with pid and pgid.
  *  Returns [{ rootPid, procs, rssMB, cmd }], largest first. */

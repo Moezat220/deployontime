@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { idleText, isServer, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
+import { idleText, isServer, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict } from "./idle.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 const MINUTE = 60_000, PATTERN = DEFAULTS.reaper.serverPattern;
@@ -20,11 +20,6 @@ test("isServer: follows the pattern it is given and rejects a broken one", () =>
     assert.equal(isServer("preview-server --port 4300", "preview-server"), true);
     assert.equal(isServer("node node_modules/.bin/vite", "preview-server"), false);
     assert.equal(isServer("preview-server", "[unclosed"), false);
-});
-
-test("TEST_RUN_RE: matches test commands that exit by themselves", () => {
-    for (const command of ["npx vitest run", "npx vitest --run", "node --test queue/", "npx playwright test --project mobile", "node node_modules/.bin/jest"]) assert.equal(TEST_RUN_RE.test(command), true, command);
-    for (const command of ["npx vitest", "node node_modules/.bin/jest --watch", "node server.js"]) assert.equal(TEST_RUN_RE.test(command), false, command);
 });
 
 test("sinceReset: drops everything before the last fall of the CPU total", () => {

@@ -1,17 +1,12 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { STRAY, strayRuns, TEST_RE } from "./stray.mjs";
+import { STRAY, strayRuns } from "./stray.mjs";
 
 const MB = 1024; // rss is given in KB
 const runner = (pid, ppid, extra = {}) => ({ pid, ppid, rss: 90 * MB, cmd: "node /srv/mobile-app/node_modules/.bin/vitest run", ...extra });
 const workers = (ppid, count, rss, firstPid = 7100) => Array.from({ length: count }, (_, i) => ({ pid: firstPid + i, ppid, rss, cmd: "node /srv/mobile-app/node_modules/vitest/dist/workers/forks.js" }));
 const bigRun = (rootPid, ppid) => [runner(rootPid, ppid), ...workers(rootPid, 3, 900 * MB)];
-
-test("TEST_RE: recognises test runner and worker processes", () => {
-    for (const cmd of ["node node_modules/.bin/vitest run", "node node_modules/jest-worker/build/workers/processChild.js", "node node_modules/.bin/jest --runInBand", "npx playwright test", "node node_modules/@playwright/test/cli.js test"]) assert.equal(TEST_RE.test(cmd), true, cmd);
-    for (const cmd of ["node api/server.js", "node node_modules/.bin/vite", "git status"]) assert.equal(TEST_RE.test(cmd), false, cmd);
-});
 
 test("strayRuns: reports a large run with its root, process count and memory", () => {
     const found = strayRuns([{ pid: 40, ppid: 1, rss: 5 * MB, cmd: "-zsh" }, ...bigRun(7000, 40)]);
@@ -67,4 +62,9 @@ test("strayRuns: time grows in step with the rows, also when one process has the
     const began = performance.now(), [found] = strayRuns(rows);
     assert.deepEqual([found.rootPid, found.procs], [9000, 50_001]);
     assert.ok(performance.now() - began < 1500, "50000 rows took too long");
+});
+
+test("strayRuns: a shell in any folder is the launcher of a run, not its root", () => {
+    const rows = [{ pid: 50, ppid: 1, rss: 4 * MB, cmd: "/opt/homebrew/bin/bash -c npx vitest run" }, ...bigRun(7000, 50)];
+    assert.deepEqual(strayRuns(rows).map((run) => [run.rootPid, run.procs]), [[7000, 4]]);
 });
