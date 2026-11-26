@@ -25,8 +25,11 @@
 
 <br>
 
+DeployOnTime is being built as the whole path from an agent's change to a safe live release. The machine queue is
+the first part, and it works on its own.
+
 **Ready to use today: the machine queue** (macOS). It lets several coding agents share one computer without
-overloading it. The rest of DeployOnTime is on the [roadmap](#roadmap).
+overloading it. The next parts are on the [roadmap](#roadmap).
 
 <p align="center">
   <img src="docs/assets/status.svg" alt="dotime-queue status: two jobs running, one waiting for a free slot" width="860">
