@@ -579,7 +579,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `ps.mjs` | Parsers for `ps` output. | library | None. |
 | `proctree.mjs` | Process trees: descendants, ancestors, a job's pids and CPU; group signals and stops. | library | Sends signals; runs `ps` when no listing is given. |
 | `files.mjs` | JSON read with warnings, atomic JSON write, append with folder. | library | Reads and writes the files it is handed. |
-| `timer.mjs` | Timers longer than one Node timer can hold. | library | Sets timers. |
+| `timer.mjs` | Timers longer than one Node timer can hold, and a sleep that can be ended early. | library | Sets timers. |
 | `clock.mjs` | Clock times, days and zone offsets. | library | None. |
 | `stats.mjs` | The percentile that limits and `history` share. | library | None. |
 | `units.mjs` | Time units and rounding. | library | None. |

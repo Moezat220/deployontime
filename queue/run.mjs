@@ -21,7 +21,7 @@ import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
-import { MAX_TIMER_MS } from "./timer.mjs";
+import { MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
@@ -360,11 +360,10 @@ export async function runCommand(args, ctx, deps) {
     };
     signals.on("exit", leaveLine);
     let leaving = null;
-    let wake;
-    const woken = new Promise((resolve) => { wake = resolve; });
+    const sleeps = wakeableSleep(deps.sleep);
     const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {
         leaving ??= signal;
-        wake();
+        sleeps.wake();
     }]);
     for (const [signal, handler] of leavers) signals.on(signal, handler);
     const { limit, kind } = plan;
@@ -372,7 +371,7 @@ export async function runCommand(args, ctx, deps) {
         kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd,
         ...(priority ? { priority: true } : {}),
     };
-    const waitDeps = { ...deps, sleep: (ms) => Promise.race([deps.sleep(ms), woken]), leaving: () => leaving };
+    const waitDeps = { ...deps, sleep: sleeps.sleep, leaving: () => leaving };
     // The leave handlers stay until runJob has added its own: with no listener at all, a signal would end the
     // process at once, with no journal line and the slot left behind. A signal that arrives while the job is being
     // started reaches the handlers of the job and is passed on to it.
