@@ -1,44 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-label="DeployOnTime: ship AI-written code to production, safely, one change at a time. Stage 1, share the machine, is available now; validate and deploy come next.">
-<title>DeployOnTime</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-label="DeployOnTime, the autonomous software factory: multi-agent, AI orchestration, security checks. Stage 1, share the machine, is available now; orchestration is planned; validate and deploy come next.">
+<title>DeployOnTime: the autonomous software factory</title>
 <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#161B22"/><stop offset="1" stop-color="#0D1117"/></linearGradient></defs>
-<rect width="1200" height="640" rx="24" fill="url(#bg)"/>
-<rect x="1" y="1" width="1198" height="638" rx="23" fill="none" stroke="#30363D" stroke-width="2"/>
-<svg x="300" y="46" width="600" height="91" viewBox="60 222 1560 236">
+<rect width="1200" height="700" rx="24" fill="url(#bg)"/>
+<rect x="1" y="1" width="1198" height="698" rx="23" fill="none" stroke="#30363D" stroke-width="2"/>
+<svg x="320" y="40" width="560" height="85" viewBox="60 222 1560 236">
 
 <g transform="translate(70,235) scale(0.5231) translate(-70,-177)"><g transform="translate(0.000000,667.000000) scale(0.100000,-0.100000)" fill="#F2F4F5"><path d="M 1548,4892 l -838,-2,0,-335,0,-335,943,0 c 903,0,945,-1,1024,-20,149,-36,278,-103,383,-200 l 45,-41,228,233,228,233,-68,63 c -228,212,-600,377,-893,397,-149,10,-199,10,-1052,7 z M 3658,3856 c -92,-94,-201,-208,-243,-253 l -76,-83,17,-102 c 70,-423,-135,-868,-482,-1046,-182,-93,-173,-92,-886,-92 l -618,0,0,735,0,735,-335,0,-335,0,0,-1055,0,-1055,963,0 c 802,0,976,2,1046,15,474,83,850,347,1100,771,212,361,273,917,145,1326,-36,116,-106,278,-118,277,-6,-1,-86,-79,-178,-173 z"/></g></g>
 <g transform="translate(70,235) scale(0.5231) translate(-70,-177)"><g transform="translate(0.000000,667.000000) scale(0.100000,-0.100000)" fill="#00984C"><path d="M 3293,4152 c -143,-147,-439,-447,-656,-667 l -394,-400,-175,173 c -226,223,-203,220,-377,48,-118,-118,-126,-127,-126,-164,0,-49,-11,-36,354,-397 l 283,-280,45,0,45,0,524,530 c 288,292,552,559,586,595,34,36,147,151,251,257 l 188,191,-17,34 c -40,77,-244,348,-263,348,-3,0,-124,-120,-268,-268 z"/></g></g>
 <g transform="translate(-334,0)"><g transform="translate(0.000000,667.000000) scale(0.100000,-0.100000)" fill="#F2F4F5"><path d="M 15822,4339 c -175,-87,-114,-349,82,-349,81,0,134,33,167,105,73,157,-94,320,-249,244 z M 8630,3493 c 0,-456,3,-838,6,-850,6,-23,9,-23,160,-23 l 153,0,3,823 c 2,452,1,834,-1,850 l -3,27,-159,0,-159,0,0,-827 z M 14987,4184 c -4,-4,-7,-81,-7,-170 l 0,-163,-97,-3,-98,-3,0,-135,0,-135,98,-3 c 92,-3,97,-4,97,-25,1,-12,1,-132,0,-267,-1,-361,22,-472,118,-568,96,-96,283,-136,462,-99 l 55,12,3,134 c 1,74,-1,138,-5,142,-4,4,-36,2,-70,-3,-89,-15,-147,-4,-191,37 l -37,33,0,299,0,298,153,3,153,3,-3,137,-3,137,-152,3,-153,3,-2,167,-3,167,-156,3 c -85,1,-158,-1,-162,-4 z M 6470,3873 c -391,-49,-629,-398,-545,-798,32,-150,148,-313,280,-390,228,-135,559,-117,767,42,38,28,118,119,118,133,0,8,-75,57,-172,110 l -66,38,-44,-41 c -125,-117,-330,-126,-469,-20,-49,37,-99,114,-99,152 l 0,21,455,0,455,0,1,43 c 9,237,-44,398,-175,531,-128,130,-330,202,-506,179 z m 199,-303 c 78,-34,161,-137,161,-201,0,-5,-133,-9,-295,-9,-330,0,-313,-5,-274,73,73,145,250,204,408,137 z M 7855,3869 c -104,-17,-221,-78,-266,-138,-33,-45,-39,-39,-39,44 l 0,76,-147,-3,-148,-3,-1,-837,-1,-838,158,0,159,0,0,290 c 0,160,3,290,6,290,4,0,23,-16,42,-36,20,-20,70,-53,111,-73,76,-36,76,-36,211,-36,132,0,137,1,212,35,43,19,102,52,132,75,254,190,320,591,146,887,-111,187,-358,302,-575,267 z m 167,-317 c 267,-118,233,-566,-49,-648,-335,-97,-559,360,-292,600,27,24,69,52,92,60,58,22,188,15,249,-12 z M 9534,3856 c -440,-107,-627,-645,-352,-1011,278,-369,882,-322,1087,83,192,381,-3,833,-400,927,-77,18,-262,19,-335,1 z m 303,-306 c 61,-26,110,-76,150,-152,43,-81,42,-246,-2,-332,-97,-192,-356,-237,-505,-87,-135,136,-141,342,-13,499,80,98,240,129,370,72 z M 12370,3855 c -201,-45,-380,-211,-448,-413,-38,-112,-38,-301,0,-415,123,-370,559,-541,927,-364,135,65,268,230,317,392,30,99,26,288,-9,388,-64,185,-208,331,-388,394,-93,33,-293,42,-399,18 z m 303,-303 c 250,-111,259,-492,16,-627,-79,-44,-218,-44,-297,-1,-257,143,-229,553,43,640,65,21,177,15,238,-12 z M 13818,3855 c -66,-18,-127,-56,-176,-109,-23,-25,-44,-46,-47,-46,-2,0,-5,33,-7,73 l -3,72,-115,3 c -63,2,-130,0,-148,-3 l -32,-6,2,-607,3,-607,157,-3,157,-3,3,378 c 3,374,3,379,27,431,82,181,348,196,432,25,24,-47,24,-54,29,-438 l 5,-390,163,-3,162,-2,0,397 c 0,439,-5,492,-54,598,-92,199,-333,302,-558,240 z M 16733,3855 c -67,-21,-130,-62,-166,-110 l -34,-45,-7,38 c -3,20,-6,54,-6,75 l 0,37,-145,0,-145,0,0,-615,0,-615,160,0,159,0,3,388,3,387,28,56 c 43,88,88,114,197,114,107,0,158,-27,193,-103,21,-45,22,-61,25,-444 l 3,-398,159,0,159,0,3,388 c 4,422,3,419,65,492,78,93,257,94,336,1,49,-59,51,-80,53,-466,1,-198,2,-372,3,-387 l 1,-28,155,0 c 154,0,155,0,156,23,9,164,-4,844,-17,893,-58,226,-229,344,-478,332,-133,-7,-192,-33,-286,-125 l -75,-73,-20,27 c -62,86,-129,133,-229,159,-64,17,-197,17,-253,-1 z M 18646,3854 c -217,-52,-393,-240,-441,-468,-71,-347,97,-660,409,-763,71,-23,97,-26,216,-27,154,0,220,14,334,71,72,36,206,158,206,187,0,14,-110,87,-192,127 l -47,22,-38,-37 c -173,-169,-536,-93,-570,120 l -6,34,457,0,456,0,0,113 c 0,320,-163,545,-446,617,-92,24,-249,26,-338,4 z m 236,-265 c 70,-15,115,-39,160,-86,32,-32,68,-104,68,-134,0,-5,-133,-9,-295,-9,-326,0,-309,-4,-281,64,52,125,202,196,348,165 z M 10293,3844 c -16,-7,-15,-8,232,-579,24,-55,91,-210,149,-345 l 106,-244,-35,-91 c -53,-134,-76,-155,-167,-155 l -58,0,0,-135,0,-135,120,0 c 146,0,205,18,267,82,53,56,59,68,224,476,389,960,449,1110,449,1123,0,5,-69,9,-165,9 l -165,0,-14,-32 c -8,-18,-39,-96,-69,-173,-159,-409,-222,-565,-227,-565,-4,0,-55,118,-113,263,-58,144,-128,316,-155,382 l -49,120,-159,2 c -87,1,-164,-1,-171,-3 z M 15763,3843 l -23,-4,0,-587 c 0,-323,3,-597,6,-609,6,-23,9,-23,160,-23 l 153,0,3,568 c 2,312,1,587,-2,612 l -5,45,-135,1 c -74,1,-145,0,-157,-3 z"/></g></g>
 </svg>
 <g font-family="-apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, Helvetica, Arial, sans-serif">
-<text x="600" y="196" font-size="30" fill="#F0F6FC" font-weight="600" text-anchor="middle">Ship AI-written code to production, safely, one change at a time.</text>
-<text x="600" y="236" font-size="20" fill="#8B949E" font-weight="400" text-anchor="middle">Being built as the whole path from an agent's change to a safe live release.</text>
-<line x1="60" y1="276" x2="1140" y2="276" stroke="#30363D" stroke-width="2"/>
-<rect x="60" y="306" width="330" height="250" rx="16" fill="#161B22" stroke="#3FB950" stroke-width="2"/>
-<text x="88" y="356" font-size="22" fill="#3FB950" font-weight="700" text-anchor="start">01</text>
-<text x="88" y="398" font-size="26" fill="#F0F6FC" font-weight="600" text-anchor="start">Share the machine</text>
-<text x="88" y="434" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">Agents take turns on one</text>
-<text x="88" y="460" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">computer: slots, health,</text>
-<text x="88" y="486" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">time limits.</text>
-<rect x="88" y="504" width="150" height="32" rx="16" fill="#0F3D22"/>
-<text x="163.0" y="526" font-size="16" fill="#3FB950" font-weight="600" text-anchor="middle">Available now</text>
-<path d="M 398 431 L 427 431 M 419 424 L 427 431 L 419 438" stroke="#6E7681" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="435" y="306" width="330" height="250" rx="16" fill="#161B22" stroke="#30363D" stroke-width="2"/>
-<text x="463" y="356" font-size="22" fill="#6E7681" font-weight="700" text-anchor="start">02</text>
-<text x="463" y="398" font-size="26" fill="#F0F6FC" font-weight="600" text-anchor="start">Validate</text>
-<text x="463" y="434" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">An agent's pull request goes</text>
-<text x="463" y="460" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">through checks before</text>
-<text x="463" y="486" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">it can ship.</text>
-<rect x="463" y="504" width="76" height="32" rx="16" fill="#21262D"/>
-<text x="501.0" y="526" font-size="16" fill="#8B949E" font-weight="600" text-anchor="middle">Next</text>
-<path d="M 773 431 L 802 431 M 794 424 L 802 431 L 794 438" stroke="#6E7681" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="810" y="306" width="330" height="250" rx="16" fill="#161B22" stroke="#30363D" stroke-width="2"/>
-<text x="838" y="356" font-size="22" fill="#6E7681" font-weight="700" text-anchor="start">03</text>
-<text x="838" y="398" font-size="26" fill="#F0F6FC" font-weight="600" text-anchor="start">Deploy</text>
-<text x="838" y="434" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">Controlled, safe live</text>
-<text x="838" y="460" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">releases, one change</text>
-<text x="838" y="486" font-size="18" fill="#8B949E" font-weight="400" text-anchor="start">at a time.</text>
-<rect x="838" y="504" width="76" height="32" rx="16" fill="#21262D"/>
-<text x="876.0" y="526" font-size="16" fill="#8B949E" font-weight="600" text-anchor="middle">Next</text>
-<text x="60" y="606" font-size="17" fill="#6E7681" font-weight="400" text-anchor="start">Open source · AGPL-3.0 · published in parts</text>
-<text x="1140" y="606" font-size="17" fill="#3FB950" font-weight="600" text-anchor="end">Works with any coding agent that runs shell commands</text>
+<text x="600" y="182" font-size="38" fill="#F0F6FC" font-weight="700" text-anchor="middle">The Autonomous Software Factory</text>
+<text x="600" y="222" font-size="21" fill="#8B949E" font-weight="400" text-anchor="middle">Ship AI-written code to production, safely, one change at a time.</text>
+<rect x="221.0" y="248" width="260" height="36" rx="18" fill="#0F2A1A" stroke="#238636" stroke-width="1.5"/>
+<text x="351.0" y="272" font-size="16" fill="#3FB950" font-weight="600" text-anchor="middle">Multi-agent · available now</text>
+<rect x="495.0" y="248" width="250" height="36" rx="18" fill="#161B22" stroke="#30363D" stroke-width="1.5"/>
+<text x="620.0" y="272" font-size="16" fill="#8B949E" font-weight="600" text-anchor="middle">AI orchestration · planned</text>
+<rect x="759.0" y="248" width="220" height="36" rx="18" fill="#161B22" stroke="#30363D" stroke-width="1.5"/>
+<text x="869.0" y="272" font-size="16" fill="#8B949E" font-weight="600" text-anchor="middle">Security checks · next</text>
+<line x1="60" y1="312" x2="1140" y2="312" stroke="#30363D" stroke-width="2"/>
+<rect x="60.0" y="340" width="249.0" height="250" rx="16" fill="#161B22" stroke="#3FB950" stroke-width="2"/>
+<text x="84.0" y="386" font-size="20" fill="#3FB950" font-weight="700" text-anchor="start">01</text>
+<text x="84.0" y="426" font-size="24" fill="#F0F6FC" font-weight="600" text-anchor="start">Share the machine</text>
+<text x="84.0" y="462" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">Several agents, one</text>
+<text x="84.0" y="487" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">computer: slots, health</text>
+<text x="84.0" y="512" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">checks, time limits.</text>
+<rect x="84.0" y="540" width="140" height="30" rx="15" fill="#0F3D22"/>
+<text x="154.0" y="561" font-size="15" fill="#3FB950" font-weight="600" text-anchor="middle">Available now</text>
+<rect x="337.0" y="340" width="249.0" height="250" rx="16" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+<text x="361.0" y="386" font-size="20" fill="#6E7681" font-weight="700" text-anchor="start">02</text>
+<text x="361.0" y="426" font-size="24" fill="#F0F6FC" font-weight="600" text-anchor="start">Orchestrate</text>
+<text x="361.0" y="462" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">Plan the work and hand</text>
+<text x="361.0" y="487" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">it out to several</text>
+<text x="361.0" y="512" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">coding agents.</text>
+<rect x="361.0" y="540" width="96" height="30" rx="15" fill="#21262D"/>
+<text x="409.0" y="561" font-size="15" fill="#8B949E" font-weight="600" text-anchor="middle">Planned</text>
+<rect x="614.0" y="340" width="249.0" height="250" rx="16" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+<text x="638.0" y="386" font-size="20" fill="#6E7681" font-weight="700" text-anchor="start">03</text>
+<text x="638.0" y="426" font-size="24" fill="#F0F6FC" font-weight="600" text-anchor="start">Validate</text>
+<text x="638.0" y="462" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">Tests, reviews and</text>
+<text x="638.0" y="487" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">security checks before</text>
+<text x="638.0" y="512" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">a change can ship.</text>
+<rect x="638.0" y="540" width="70" height="30" rx="15" fill="#21262D"/>
+<text x="673.0" y="561" font-size="15" fill="#8B949E" font-weight="600" text-anchor="middle">Next</text>
+<rect x="891.0" y="340" width="249.0" height="250" rx="16" fill="#161B22" stroke="#30363D" stroke-width="2"/>
+<text x="915.0" y="386" font-size="20" fill="#6E7681" font-weight="700" text-anchor="start">04</text>
+<text x="915.0" y="426" font-size="24" fill="#F0F6FC" font-weight="600" text-anchor="start">Deploy</text>
+<text x="915.0" y="462" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">Controlled, safe live</text>
+<text x="915.0" y="487" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">releases, one change</text>
+<text x="915.0" y="512" font-size="17" fill="#8B949E" font-weight="400" text-anchor="start">at a time.</text>
+<rect x="915.0" y="540" width="70" height="30" rx="15" fill="#21262D"/>
+<text x="950.0" y="561" font-size="15" fill="#8B949E" font-weight="600" text-anchor="middle">Next</text>
+<text x="60" y="660" font-size="17" fill="#6E7681" font-weight="400" text-anchor="start">Open source · AGPL-3.0 · published in parts</text>
+<text x="1140" y="660" font-size="17" fill="#3FB950" font-weight="600" text-anchor="end">Works with any coding agent that runs shell commands</text>
 </g></svg>

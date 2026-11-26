@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime: ship AI-written code to production, safely, one change at a time. Stage 1, share the machine, is available now; validate and deploy come next.">
+  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime, the autonomous software factory: multi-agent, AI orchestration, security checks. Stage 1, share the machine, is available now; orchestration is planned; validate and deploy come next.">
 </p>
 
 <p align="center">
@@ -19,6 +19,10 @@
 </p>
 
 <br>
+
+**DeployOnTime is an open-source autonomous software factory in the making** for building with AI coding agents:
+several agents working side by side today; tests, reviews and security checks, safe live releases and AI orchestration
+next. It is published one part at a time, and the first part, the machine queue, works on its own.
 
 **Ready to use today: the machine queue** (macOS). It lets several coding agents share one computer without
 overloading it. The next parts are on the [roadmap](#roadmap).
@@ -144,13 +148,14 @@ this code on, changed or not, and when you let others use a changed version of i
 
 ## Roadmap
 
-The machine queue is complete and usable on its own. These pieces come next, in this order:
+The machine queue is complete and usable on its own. These parts come next, in this order:
 
 | Next | What it will do |
 | --- | --- |
-| Release engine | Validate an agent's pull request with checks, then deploy it as a safe live release (stages 02 and 03 in the banner) |
+| Release engine | Validate an agent's pull request with tests, reviews and security checks, then deploy it as a safe live release (stages 03 and 04 in the banner) |
 | Install and quickstart | Set everything up with one command, with a trial mode that changes nothing |
 | Linux and Docker | Run the queue outside macOS |
+| Orchestration | Plan the work and hand it out to several coding agents (stage 02 in the banner) |
 
 ## Tests
 
