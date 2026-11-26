@@ -230,7 +230,8 @@ A job that reaches its limit ends `run` with exit 124. Before that, its whole pr
 `limits.killGraceMs` (10 seconds) later, KILL. With `--priority` the stop moves out to `limits.priorityGrace` (2)
 times the limit, and reaching the limit itself only prints a warning. When the last KILL is refused, for example
 for a process that runs as another user, the job is still there: `run` then prints `timed out: exit 124, stop failed
-after N min, KILL refused for pid ... (EPERM)` instead of `stopped after N min`, and the journal line gets
+after N min, KILL refused for group 48210 (EPERM), pid 48215 (EPERM)` instead of `stopped after N min`, naming the
+group when the signal to the whole group was refused and each process that refused it, and the journal line gets
 `stopFailed` with the same reason. The slot is freed either way, because `run` itself ends.
 
 **Long-run notice.** A job that runs much longer than usual gets one notice and keeps running. `run` prints it,
