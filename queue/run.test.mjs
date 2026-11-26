@@ -172,6 +172,24 @@ test("waitForSlot: leaves the line when a signal asks for it", async () => {
     assert.deepEqual(got, { left: "SIGTERM", tally: { slots: 60 } });
 });
 
+// ---- journalWriter ----
+
+test("journalWriter: note() fills in the start, commit and wait, and finish() writes one line", () => {
+    const box = sandbox();
+    const writer = journalWriter({
+        label: "docs-site: build", folder: "docs-site", cwd: box.work, priority: false, queuedAt: NOW,
+        command: "pnpm run build", details: { kind: "build" }, file: box.ctx.files.journal, now: () => NOW + 3 * MINUTE,
+    });
+    writer.note({ commit: { head: "ab12cd34ef", clean: true }, tally: { slots: 60_000 } });
+    writer.note({ startedAt: NOW + MINUTE });
+    writer.finish("ran", 0);
+    writer.finish("ran", 1);
+    const lines = journal(box);
+    assert.deepEqual(lines.map((line) => [line.outcome, line.exit, line.head, line.clean, line.waitBy.slots, line.runMin]), [
+        ["ran", 0, "ab12cd34ef", true, 1, 2],
+    ]);
+});
+
 // ---- runJob ----
 
 function startJob(box, cmd, fields = {}) {

@@ -129,9 +129,9 @@ export function runJob(job, slot, deps) {
     const killGraceMs = settings.limits.killGraceMs;
     const { say, signals } = deps;
     // The commit is read at this point because it is what a pass stamp will vouch for.
-    journal.commit = gitState(job.cwd);
+    const commit = gitState(job.cwd);
     const startedAt = deps.now();
-    journal.startedAt = startedAt;
+    journal.note({ commit, startedAt });
     if (startedAt - job.waitFrom > 5000) say(`started: ${minutesSince(job.waitFrom, startedAt)} min in line`);
     // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
@@ -247,25 +247,25 @@ export function runJob(job, slot, deps) {
     return result;
 }
 
-/** The writer of a job's one journal line. Its startedAt, commit and tally are filled in as the job goes; finish()
- *  writes the line once and ignores later calls. */
+/** The writer of a job's one journal line. note({ startedAt, commit, tally }) fills in any of those as the job goes;
+ *  finish() writes the line once and ignores later calls. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now }) {
-    const writer = {
-        startedAt: null,
-        commit: { head: null, clean: null },
-        tally: {},
-        written: false,
+    const known = { startedAt: null, commit: { head: null, clean: null }, tally: {} };
+    let written = false;
+    return {
+        note(fields) {
+            for (const name of Object.keys(known)) if (fields[name] !== undefined) known[name] = fields[name];
+        },
         finish(outcome, exit, more = {}) {
-            if (writer.written) return;
-            writer.written = true;
-            const { head, clean } = writer.commit;
+            if (written) return;
+            written = true;
+            const { head, clean } = known.commit;
             append(record({
-                label, project: folder, cwd, priority, queuedAt, startedAt: writer.startedAt, endedAt: now(), outcome,
-                exit, tally: writer.tally, cmd: command, head, clean, extra: { ...details, ...more },
+                label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, endedAt: now(), outcome,
+                exit, tally: known.tally, cmd: command, head, clean, extra: { ...details, ...more },
             }), file);
         },
     };
-    return writer;
 }
 
 const sleepFor = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -313,7 +313,7 @@ export async function runCommand(args, ctx, deps) {
         label, folder, cwd, priority, queuedAt, command, details: plan.details, file: files.journal, now: deps.now,
     });
     if (plan.refusal) {
-        journal.commit = before;
+        journal.note({ commit: before });
         journal.finish("refused", EXIT.refused);
         say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}`);
         return EXIT.refused;
@@ -351,7 +351,7 @@ export async function runCommand(args, ctx, deps) {
     } finally {
         for (const [signal, handler] of leavers) signals.off(signal, handler);
     }
-    journal.tally = waited.tally;
+    journal.note({ tally: waited.tally });
     slot = waited.slot ?? null;
     try {
         if (waited.left || leaving) {
