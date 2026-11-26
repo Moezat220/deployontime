@@ -1,16 +1,15 @@
 // The journal: one JSON line per job in $DOTIME_HOME/journal.jsonl, holding its label and project, waiting time per
 // gate, run time, outcome, command and the commit it ran on. Run limits, the repeated-failure stop, pass stamps and
 // `history` all read it. A failed write is reported by a return value and never interrupts a job.
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { paths, timeZone } from "./settings.mjs";
 import { dateTime, dayOf, dayStart, shiftDay } from "./clock.mjs";
 import { jobProject, readOnlyGit } from "./project.mjs";
 import { pctl } from "./stats.mjs";
+import { appendLine } from "./files.mjs";
+import { MINUTE, oneDecimal } from "./units.mjs";
 
-const MINUTE = 60_000;
-const oneDecimal = (x) => Math.round(x * 10) / 10;
 const minutes = (ms) => oneDecimal(ms / MINUTE);
 
 /** Journal lines as objects; text that is not JSON is skipped. */
@@ -80,11 +79,7 @@ export function record({ label, project, cwd, priority, queuedAt, startedAt, end
 export const lineProject = (row) => row.projectKey ?? jobProject(row);
 
 export function append(row, file = paths().journal) {
-    try {
-        mkdirSync(dirname(file), { recursive: true });
-        appendFileSync(file, `${JSON.stringify(row)}\n`);
-        return true;
-    } catch { return false; }
+    return appendLine(file, `${JSON.stringify(row)}\n`);
 }
 export function readLines(file = paths().journal) {
     try { return readFileSync(file, "utf8").split("\n").filter(Boolean); } catch { return []; }

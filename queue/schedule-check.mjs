@@ -2,15 +2,16 @@
 // A read-only report on the scheduled jobs in ~/Library/LaunchAgents: is each one loaded, did its last run end with
 // an accepted exit code, do its scripts exist, and is its log as recent as its schedule implies. Problems go out as
 // one notice. Flags: --dry (no notice, no log entry) and --json. Rules come from $DOTIME_HOME/schedule-check.json.
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { isMainModule, paths, timeZone } from "./settings.mjs";
 import { dateTime } from "./clock.mjs";
 import { notify } from "./notify.mjs";
 import { probeReadPlist, probeScheduledJobs } from "./probes.mjs";
+import { appendLine, readJson } from "./files.mjs";
+import { DAY, HOUR, MINUTE } from "./units.mjs";
 
-const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 export const LIST_ERROR = "could not read the job list";
 
 const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`);
@@ -19,12 +20,11 @@ const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`)
  *  and also means no rules. */
 export function readRules(file = paths().scheduleRules, { warn = warnOnStderr } = {}) {
     const none = { skip: [], okExit: {} };
-    let rules;
-    try { rules = JSON.parse(readFileSync(file, "utf8")); } catch (e) {
-        if (e instanceof SyntaxError) warn(`rules file ignored: ${file} is not valid JSON`);
-        else if (e.code !== "ENOENT") warn(`rules file ignored: ${file} could not be read (${e.code ?? e.message})`);
-        return none;
-    }
+    const missing = Symbol("no rules");
+    const rules = readJson(file, missing, (problem, code) => warn(problem === "invalid"
+        ? `rules file ignored: ${file} is not valid JSON`
+        : `rules file ignored: ${file} could not be read (${code})`));
+    if (rules === missing) return none;
     if (!rules || typeof rules !== "object" || Array.isArray(rules)) { warn(`rules file ignored: ${file} needs one JSON object`); return none; }
     return rules;
 }
@@ -115,11 +115,8 @@ async function main() {
     else console.log(`schedule-check ${dateTime(now, timeZone())}: jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}${text ? `; ${text}` : ""}`);
     if (!dry) {
         if (text) { try { notify("dotime: scheduled jobs", text); } catch { /* the printed line already says it */ } }
-        try {
-            const log = paths().scheduleLog;
-            mkdirSync(dirname(log), { recursive: true });
-            appendFileSync(log, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
-        } catch { /* the report does not depend on its log */ }
+        // The report does not depend on its log: a line that cannot be written is left out.
+        appendLine(paths().scheduleLog, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
     }
     if (error) process.exitCode = 1;
 }

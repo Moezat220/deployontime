@@ -2,19 +2,19 @@
 // A limit is taken from the journal: from earlier runs of the same command when there are enough, else from runs of
 // the same kind, else from a default. An unreadable journal counts as no history and never holds a job back.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { isSandbox, loadSettings, paths, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines, readOnlyGit } from "./journal.mjs";
 import { psSeconds, sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu, probeProcessTree } from "./probes.mjs";
 import { pctl } from "./stats.mjs";
+import { readJson, writeJsonAtomic } from "./files.mjs";
+import { DAY, HOUR, MINUTE, oneDecimal } from "./units.mjs";
 
-const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 const limitSettings = () => loadSettings().limits;
-const oneDecimal = (x) => Math.round(x * 10) / 10;
 
 /** The label a job gets when --label is missing. */
 export const UNLABELLED = "unnamed";
@@ -324,14 +324,10 @@ export function slotIdleCheck({ holders, waiting = [], state = {}, now = Date.no
  *  or the file cannot be written. */
 export function addNotice(key, entry, file = paths().notices) {
     try {
-        let all = {};
-        try { all = JSON.parse(readFileSync(file, "utf8")); } catch { /* start a new file */ }
+        const all = readJson(file, {});
         if (all[key]) return false;
         all[key] = entry;
-        mkdirSync(dirname(file), { recursive: true });
-        const temp = `${file}.tmp-${process.pid}`;
-        writeFileSync(temp, JSON.stringify(all, null, 1));
-        renameSync(temp, file);
+        writeJsonAtomic(file, all, 1);
         return true;
     } catch { return false; }
 }

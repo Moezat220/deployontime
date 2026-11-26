@@ -1,7 +1,6 @@
 // Clock helpers. Times shown to people use a 24-hour clock in the configured zone, and calendar days are counted in
 // that zone too.
-
-const MINUTE = 60_000;
+import { MINUTE } from "./units.mjs";
 
 function wallParts(ms, zone) {
     const format = new Intl.DateTimeFormat("en-US", {

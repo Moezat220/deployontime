@@ -1,10 +1,11 @@
 // Settings and file locations. Every value is a built-in default unless $DOTIME_HOME/config.json replaces it; that
 // file is shared by all callers on the machine, so one caller cannot loosen a limit for itself. The environment only
 // selects the state folder, the time zone and the notice channel.
-import { readFileSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readJson } from "./files.mjs";
 
 export const DEFAULTS = Object.freeze({
     slots: 2,
@@ -81,6 +82,9 @@ function warnOnce(text) {
     process.stderr.write(`dotime-queue: ${text}\n`);
 }
 
+function parseOr(text, problem) {
+    try { return JSON.parse(text); } catch { problem("invalid"); return {}; }
+}
 const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 /** null when the value fits the setting, else a few words on what the setting needs. */
 function misfit(name, fallback, value) {
@@ -114,13 +118,13 @@ function overlay(defaults, given, prefix, warn) {
 
 /** The settings in force. A value that does not fit is replaced by its default, with one warning per process. */
 export function loadSettings(env = process.env, { configText, warn = warnOnce } = {}) {
-    let given = {};
-    try {
-        given = JSON.parse(configText ?? readFileSync(paths(env).config, "utf8"));
-        if (!isPlain(given)) { warn("config.json ignored: it needs one JSON object"); given = {}; }
-    } catch (e) {
-        if (e instanceof SyntaxError) warn("config.json ignored: it is not valid JSON");
-        else if (e.code !== "ENOENT") warn(`config.json ignored: it could not be read (${e.code ?? e.message}), defaults kept`);
+    const problem = (kind, code) => warn(kind === "invalid"
+        ? "config.json ignored: it is not valid JSON"
+        : `config.json ignored: it could not be read (${code}), defaults kept`);
+    let given = configText === undefined ? readJson(paths(env).config, {}, problem) : parseOr(configText, problem);
+    if (!isPlain(given)) {
+        warn("config.json ignored: it needs one JSON object");
+        given = {};
     }
     const settings = overlay(DEFAULTS, given, "", warn);
     settings.slots = Math.floor(settings.slots);

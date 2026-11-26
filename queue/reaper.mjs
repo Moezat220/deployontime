@@ -2,8 +2,8 @@
 // The reaper, meant to be started by a scheduler every few minutes. It stops dev servers that have gone idle and
 // sends notices about test runs outside the queue, jobs idle in a slot, an overloaded machine and a filling disk.
 // Only idle dev servers are ever stopped. `--dry` prints what a run would do and changes nothing.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import { isMainModule, loadSettings, paths } from "./settings.mjs";
 import { alive, snapshot } from "./slots.mjs";
 import { idleText, isServer, psSeconds, sampleKeepMs, serverIdleVerdict, TEST_RUN_RE } from "./idle.mjs";
@@ -11,9 +11,10 @@ import { slotIdleCheck } from "./limits.mjs";
 import { strayRuns } from "./stray.mjs";
 import { readHealth } from "./health.mjs";
 import { notify as sendNotice } from "./notify.mjs";
+import { readJson, writeJsonAtomic } from "./files.mjs";
+import { HOUR, MINUTE } from "./units.mjs";
 import { probeGroupOf, probeLoad, probeProcessCpu, probeProcessTable, probeSwapPct } from "./probes.mjs";
 
-const MINUTE = 60_000, HOUR = 60 * MINUTE;
 // Minimum time between two notices of the same sort.
 const REPEAT = { stray: HOUR, overload: HOUR, lowDisk: 6 * HOUR };
 const OVERLOAD_RUNS = 2;
@@ -165,8 +166,7 @@ export async function reap({
 
 async function main() {
     const dry = process.argv.includes("--dry"), now = Date.now(), stateFile = paths().reaperState;
-    let state = {};
-    try { state = JSON.parse(readFileSync(stateFile, "utf8")); } catch { /* nothing saved yet */ }
+    const state = readJson(stateFile, {});
     const { holders, queue } = snapshot({ readOnly: dry }), { load, cores } = probeLoad();
     const run = await reap({
         rows: parseProcessTable(probeProcessTable()), holders, queue, state, now, dry, health: readHealth(), load, cores,
@@ -177,8 +177,7 @@ async function main() {
         if (!existsSync(stateFile)) console.log("reaper: dry run without saved samples, idle servers show only after real runs have covered one idle window");
         return;
     }
-    mkdirSync(dirname(stateFile), { recursive: true });
-    writeFileSync(stateFile, JSON.stringify(run.state));
+    writeJsonAtomic(stateFile, run.state);
 }
 
 if (isMainModule(import.meta.url)) await main();

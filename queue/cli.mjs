@@ -14,8 +14,8 @@ import { notify } from "./notify.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { flagError } from "./args.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./group.mjs";
+import { MINUTE } from "./units.mjs";
 
-const MINUTE = 60_000;
 const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
 const REPEAT_WAIT_LINE_MS = MINUTE;
 
