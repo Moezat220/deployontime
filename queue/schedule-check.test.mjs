@@ -20,9 +20,10 @@ const facts = (fields = {}) => ({ label: LABEL, plist: hourly, loaded: true, exi
 const problems = (fields, rules = {}) => judge(facts(fields), rules, NOW, "UTC").problems;
 
 test("readRules: empty rules without a file, else the file's content", () => {
-    assert.deepEqual(readRules(), { skip: [], okExit: {} });
-    writeFileSync(join(HOME, "schedule-check.json"), JSON.stringify({ skip: ["org.sample.*"], maxLogAgeH: { [LABEL]: 5 } }));
-    assert.deepEqual(readRules(), { skip: ["org.sample.*"], maxLogAgeH: { [LABEL]: 5 } });
+    const file = join(HOME, "schedule-check.json");
+    assert.deepEqual(readRules(file), { skip: [], okExit: {} });
+    writeFileSync(file, JSON.stringify({ skip: ["org.sample.*"], maxLogAgeH: { [LABEL]: 5 } }));
+    assert.deepEqual(readRules(file), { skip: ["org.sample.*"], maxLogAgeH: { [LABEL]: 5 } });
     const broken = join(tempDir("schedule"), "rules.json");
     writeFileSync(broken, "{");
     assert.deepEqual(readRules(broken, { warn: () => {} }), { skip: [], okExit: {} });

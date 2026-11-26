@@ -18,7 +18,7 @@ const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`)
 /** The rules file as an object: { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }.
  *  A missing file means no rules. A file that cannot be read or is not one JSON object is reported through warn
  *  and also means no rules. */
-export function readRules(file = paths().scheduleRules, { warn = warnOnStderr } = {}) {
+export function readRules(file, { warn = warnOnStderr } = {}) {
     const none = { skip: [], okExit: {} };
     const missing = Symbol("no rules");
     const rules = readJson(file, missing, (problem, code) => warn(problem === "invalid"
@@ -55,7 +55,7 @@ export function scriptsOf(plist) {
 }
 
 /** Judges one job from the facts gathered about it. Returns { label, ok, problems, log }. */
-export function judge({ label, plist, loaded, exit, logMtime, scriptsMissing }, rules = {}, now = Date.now(), tz = timeZone()) {
+export function judge({ label, plist, loaded, exit, logMtime, scriptsMissing }, rules, now, tz) {
     const problems = [];
     if (!loaded) problems.push("not loaded in the scheduler");
     if (scriptsMissing.length) problems.push(`script not found: ${scriptsMissing.join(", ")}`);
@@ -75,10 +75,10 @@ export function judge({ label, plist, loaded, exit, logMtime, scriptsMissing }, 
  *  given, they are read from rulesFile. Returns { results, error, warnings }; error is set, and results empty, when
  *  the scheduler's job list cannot be read; warnings name a rules file that could not be used. */
 export function checkAll({
-    rules, rulesFile = paths().scheduleRules, warn = warnOnStderr, now = Date.now(), dir = join(homedir(), "Library", "LaunchAgents"),
+    rules, rulesFile, warn = warnOnStderr, now = Date.now(), dir = join(homedir(), "Library", "LaunchAgents"),
     list = () => readdirSync(dir), status = probeScheduledJobs, readPlist = probeReadPlist,
-    exists = existsSync, mtime = (file) => statSync(file).mtimeMs, tz = timeZone(),
-} = {}) {
+    exists = existsSync, mtime = (file) => statSync(file).mtimeMs, tz,
+}) {
     const warnings = [];
     if (!rules) rules = readRules(rulesFile, { warn: (text) => { warnings.push(text); warn(text); } });
     let files;
@@ -109,14 +109,16 @@ export function reportText(results, warnings = []) {
 
 async function main() {
     const dry = process.argv.includes("--dry"), asJson = process.argv.includes("--json"), now = Date.now();
-    const { results, error, warnings } = checkAll({ now }), text = error ? [...warnings, error].join("; ") : reportText(results, warnings);
+    const files = paths(), tz = timeZone();
+    const { results, error, warnings } = checkAll({ now, rulesFile: files.scheduleRules, tz });
+    const text = error ? [...warnings, error].join("; ") : reportText(results, warnings);
     if (asJson) console.log(JSON.stringify(error ? { error } : results, null, 1));
-    else if (error) console.log(`schedule-check ${dateTime(now, timeZone())}: ${text}`);
-    else console.log(`schedule-check ${dateTime(now, timeZone())}: jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}${text ? `; ${text}` : ""}`);
+    else if (error) console.log(`schedule-check ${dateTime(now, tz)}: ${text}`);
+    else console.log(`schedule-check ${dateTime(now, tz)}: jobs checked ${results.length}, with problems ${results.filter((r) => !r.ok).length}${text ? `; ${text}` : ""}`);
     if (!dry) {
-        if (text) { try { notify("dotime: scheduled jobs", text); } catch { /* the printed line already says it */ } }
+        if (text) { try { notify("dotime: scheduled jobs", text, { env: process.env, logFile: files.notifyLog }); } catch { /* the printed line already says it */ } }
         // The report does not depend on its log: a line that cannot be written is left out.
-        appendLine(paths().scheduleLog, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
+        appendLine(files.scheduleLog, `${JSON.stringify({ at: new Date(now).toISOString(), error, warnings, results })}\n`);
     }
     if (error) process.exitCode = 1;
 }

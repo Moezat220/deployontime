@@ -41,7 +41,7 @@ test("runNotifyCommand: false when the command fails", () => {
 
 test("notify: writes the log line and uses both other channels", () => {
     const home = tempDir("notify"), c = channels();
-    const sent = notify("dotime: job running long", "mobile-app: bundle\nstill going", { env: { DOTIME_HOME: home, DOTIME_NOTIFY_CMD: "relay --quiet" }, desktop: c.desktop, command: c.command, now: AT });
+    const sent = notify("dotime: job running long", "mobile-app: bundle\nstill going", { env: { DOTIME_NOTIFY_CMD: "relay --quiet" }, logFile: join(home, "notify.log"), desktop: c.desktop, command: c.command, now: AT });
     assert.deepEqual(sent, { logged: true, desktop: true, command: true });
     assert.deepEqual(c.calls, [
         ["desktop", "dotime: job running long", "mobile-app: bundle still going"],
@@ -52,21 +52,21 @@ test("notify: writes the log line and uses both other channels", () => {
 
 test("notify: DOTIME_NOTIFY=log stops after the log line", () => {
     const home = tempDir("notify"), c = channels();
-    const sent = notify("first", "one", { env: { DOTIME_HOME: home, DOTIME_NOTIFY: "log", DOTIME_NOTIFY_CMD: "relay" }, desktop: c.desktop, command: c.command, now: AT });
+    const sent = notify("first", "one", { env: { DOTIME_NOTIFY: "log", DOTIME_NOTIFY_CMD: "relay" }, logFile: join(home, "notify.log"), desktop: c.desktop, command: c.command, now: AT });
     assert.deepEqual(sent, { logged: true, desktop: false, command: null });
     assert.deepEqual(c.calls, []);
 });
 
 test("notify: without DOTIME_NOTIFY_CMD no command runs", () => {
     const c = channels();
-    const sent = notify("second", "two", { env: { DOTIME_HOME: tempDir("notify") }, desktop: () => false, command: c.command, now: AT });
+    const sent = notify("second", "two", { env: {}, logFile: join(tempDir("notify"), "notify.log"), desktop: () => false, command: c.command, now: AT });
     assert.deepEqual(sent, { logged: true, desktop: false, command: null });
     assert.deepEqual(c.calls, []);
 });
 
 test("notify: a long message is cut to 900 characters, and to 240 for the desktop", () => {
     const home = tempDir("notify"), c = channels(), long = "x".repeat(1200);
-    notify("third", long, { env: { DOTIME_HOME: home, DOTIME_NOTIFY_CMD: "relay" }, desktop: c.desktop, command: c.command, now: AT });
+    notify("third", long, { env: { DOTIME_NOTIFY_CMD: "relay" }, logFile: join(home, "notify.log"), desktop: c.desktop, command: c.command, now: AT });
     assert.deepEqual(c.calls.map((call) => call.at(-1).length), [240, 900]);
 });
 

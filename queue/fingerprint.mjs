@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { loadSettings } from "./settings.mjs";
 import { git } from "./git.mjs";
 
 // A hash that moves when the code under test moves. Tracked files always count. Small untracked files are hashed
@@ -36,8 +35,9 @@ function addUntracked(hash, cwd, ignoreDirs) {
         } catch { /* the file went away */ }
     }
 }
-/** A short hash over uncommitted changes, untracked files and any file named in the command. Never throws. */
-export function fingerprint(cwd, command = [], ignoreDirs = loadSettings().outputDirs) {
+/** A short hash over uncommitted changes, untracked files and any file named in the command. ignoreDirs: the
+ *  outputDirs setting. Never throws. */
+export function fingerprint(cwd, command, ignoreDirs) {
     const hash = createHash("sha1");
     try {
         // --no-ext-diff --no-textconv: a diff program configured in the repository is never started by the queue

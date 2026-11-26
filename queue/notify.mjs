@@ -2,7 +2,6 @@
 // $DOTIME_NOTIFY_CMD. DOTIME_NOTIFY=log limits it to the log line. Nothing here throws.
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { paths } from "./settings.mjs";
 import { showDesktopNotice } from "./probes.mjs";
 import { appendLine } from "./files.mjs";
 
@@ -27,8 +26,9 @@ export function runNotifyCommand(command, title, message, env = process.env) {
     } catch { return false; }
 }
 
-/** Returns { logged, desktop, command }; command is null when no command is set. */
-export function notify(title, message, { env = process.env, desktop = showDesktopNotice, command = runNotifyCommand, logFile = paths(env).notifyLog, now = Date.now() } = {}) {
+/** Returns { logged, desktop, command }; command is null when no command is set. env selects the channels; logFile
+ *  is the notify.log of the state folder. */
+export function notify(title, message, { env, logFile, desktop = showDesktopNotice, command = runNotifyCommand, now = Date.now() }) {
     const head = cleanText(title, 80), body = cleanText(message, 900), sent = { logged: false, desktop: false, command: null };
     // A log line that cannot be written does not stop the other channels.
     sent.logged = appendLine(logFile, `${new Date(now).toISOString()}\t${head}\t${body}\n`);

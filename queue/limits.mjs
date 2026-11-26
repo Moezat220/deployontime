@@ -1,7 +1,6 @@
 // Run limits. A limit is taken from the journal: from earlier runs of the same command when there are enough, else
 // from runs of the same kind, else from a default. An unreadable journal counts as no history and never holds a job
 // back.
-import { loadSettings } from "./settings.mjs";
 import { lineProject, parseLines } from "./journal.mjs";
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { pctl } from "./stats.mjs";
@@ -16,12 +15,12 @@ function passedRuns(lines, { project, now, windowDays }) {
 }
 const runTimes = (rows) => rows.map((row) => row.runMin ?? 0);
 /** Returns { n, p75, p90 } in minutes, over passed runs of one kind in one project. */
-export function kindStats(lines, { project, kind, now = Date.now(), windowDays = loadSettings().limits.windowDays }) {
+export function kindStats(lines, { project, kind, now = Date.now(), windowDays }) {
     const times = runTimes(passedRuns(lines, { project, now, windowDays }).filter((row) => (row.kind ?? kindOf(row.label, row.cmd)) === kind));
     return { n: times.length, p75: pctl(times, 0.75), p90: pctl(times, 0.9) };
 }
 /** Returns { n, p75, p90, max, stem } in minutes, over passed runs with one command stem in one project. */
-export function stemStats(lines, { project, stem, now = Date.now(), windowDays = loadSettings().limits.windowDays }) {
+export function stemStats(lines, { project, stem, now = Date.now(), windowDays }) {
     if (!stem) return { n: 0, stem: null };
     const times = runTimes(passedRuns(lines, { project, now, windowDays }).filter((row) => cmdStem(row.cmd) === stem));
     return { n: times.length, p75: pctl(times, 0.75), p90: pctl(times, 0.9), max: times.length ? Math.max(...times) : null, stem };
@@ -29,7 +28,7 @@ export function stemStats(lines, { project, stem, now = Date.now(), windowDays =
 
 /** Picks the run limit and the long-run mark for a job. Returns { limitMin, basis, longRunMin, longRunBasis,
  *  killMin, notifyLongRun }; killMin is when the job is stopped. */
-export function decideLimit(job, limitSettings = loadSettings().limits) {
+export function decideLimit(job, limitSettings) {
     const { maxRun = null, kind, stats = { n: 0 }, stem = null, priority = false } = job;
     const { minSamples, p90Factor, floorMin, longRunFactor, longRunUnmeasuredMin } = limitSettings;
     const ownHistory = (stem?.n ?? 0) >= minSamples;

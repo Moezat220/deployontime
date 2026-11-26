@@ -5,7 +5,10 @@ import { dirname, join } from "node:path";
 import { isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
 
 isolateProcess("fingerprint");
-const { fingerprint, UNTRACKED } = await import("./fingerprint.mjs");
+const { fingerprint: fingerprintIn, UNTRACKED } = await import("./fingerprint.mjs");
+const { DEFAULTS } = await import("./settings.mjs");
+// The output folders the shipped settings name, unless a test gives its own.
+const fingerprint = (cwd, command = [], ignoreDirs = DEFAULTS.outputDirs) => fingerprintIn(cwd, command, ignoreDirs);
 
 const write = (dir, name, text) => { mkdirSync(dirname(join(dir, name)), { recursive: true }); writeFileSync(join(dir, name), text); };
 

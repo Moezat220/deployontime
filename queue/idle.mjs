@@ -1,15 +1,16 @@
 // Idle detection from CPU samples. A dev-server group that used almost no CPU over the idle window may be stopped
 // by the reaper; a job that holds a slot without using CPU only earns a notice. A sample is { t, cpu }, where cpu is
 // the summed CPU seconds of the whole group, and samples are ordered oldest first.
-import { loadSettings } from "./settings.mjs";
 import { TEST_RUN_RE } from "./commands.mjs";
 import { MINUTE } from "./units.mjs";
 
 
-export function isServer(command, pattern = loadSettings().reaper.serverPattern) {
+/** A test for dev-server commands, from the reaper.serverPattern setting, compiled once: (command) => boolean. A
+ *  one-shot test command is never a server. A pattern that does not compile matches nothing. */
+export function serverTest(pattern) {
     let matcher;
-    try { matcher = new RegExp(pattern); } catch { return false; }
-    return matcher.test(command) && !TEST_RUN_RE.test(command);
+    try { matcher = new RegExp(pattern); } catch { return () => false; }
+    return (command) => matcher.test(command) && !TEST_RUN_RE.test(command);
 }
 
 // marginMin: how much longer than the idle window samples are kept. bandMin: how far past the window the older
@@ -31,7 +32,7 @@ export function sinceReset(samples) {
 export const idleText = ({ usedS, minutes }) => `${usedS.toFixed(1)} s of CPU in ${minutes} min`;
 
 /** Returns { idle, state, usedS?, minutes? } with state one of protected, new, sampling, restarted, active, idle. */
-export function serverIdleVerdict({ ageMs, samples, now, exempt }, idle = loadSettings().idle, sampling = SAMPLING) {
+export function serverIdleVerdict({ ageMs, samples, now, exempt }, idle, sampling = SAMPLING) {
     const windowMs = idle.serverIdleMin * MINUTE;
     if (exempt) return { idle: false, state: "protected" };
     if (ageMs < windowMs) return { idle: false, state: "new" };
@@ -44,7 +45,7 @@ export function serverIdleVerdict({ ageMs, samples, now, exempt }, idle = loadSe
 
 /** The same question for a job in a slot. Returns { idle, state, usedS?, minutes?, since? } with state new, sampling,
  *  restarted, active or idle. */
-export function slotIdleVerdict({ startedAt, samples, now }, idle = loadSettings().idle, sampling = SAMPLING) {
+export function slotIdleVerdict({ startedAt, samples, now }, idle, sampling = SAMPLING) {
     const windowMs = idle.slotIdleMin * MINUTE;
     if (now - startedAt < windowMs) return { idle: false, state: "new" };
     const usable = sinceReset(samples), newest = usable.at(-1);

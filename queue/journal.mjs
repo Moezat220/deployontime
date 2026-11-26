@@ -3,7 +3,6 @@
 // `history` all read it. A failed write is reported by a return value and never interrupts a job. This module only
 // reads and writes the journal file; the git facts in a line come from git.mjs.
 import { readFileSync } from "node:fs";
-import { paths, timeZone } from "./settings.mjs";
 import { dateTime, dayOf, dayStart, shiftDay } from "./clock.mjs";
 import { jobProject } from "./project.mjs";
 import { pctl } from "./stats.mjs";
@@ -59,17 +58,17 @@ export function record({ label, project, cwd, priority, queuedAt, startedAt, end
 }
 export const lineProject = (row) => row.projectKey ?? jobProject(row);
 
-export function append(row, file = paths().journal) {
+export function append(row, file) {
     return appendLine(file, `${JSON.stringify(row)}\n`);
 }
-export function readLines(file = paths().journal) {
+export function readLines(file) {
     try { return readFileSync(file, "utf8").split("\n").filter(Boolean); } catch { return []; }
 }
 
 const shortId = (commit) => String(commit).slice(0, 8);
 /** Looks for a passing run on the commit a folder is at. folder = { project, head, clean }; match narrows the runs to
  *  those with the text in their label or command. Returns { stamp: the run or null, text: one line to print }. */
-export function findStamp(lines, folder, match = "", { tz = timeZone(), at = Date.now() } = {}) {
+export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
     const none = (why) => ({ stamp: null, text: `no stamp: ${why}` });
     const wanted = String(match).toLowerCase();
     if (!folder.head) return none("this folder is not a git checkout");
@@ -93,7 +92,7 @@ export function findStamp(lines, folder, match = "", { tz = timeZone(), at = Dat
 
 /** The time range `history` covers. Returns { from, to, title }. day picks one calendar day; otherwise the range is the
  *  last `days` calendar days up to now, both counted in the zone. */
-export function historyWindow({ day = null, days = 7, now = Date.now(), tz = timeZone() }) {
+export function historyWindow({ day = null, days = 7, now = Date.now(), tz }) {
     if (day) return { from: dayStart(day, tz), to: Math.min(now, dayStart(shiftDay(day, 1), tz)), title: `${day}, zone ${tz}` };
     const count = Math.max(1, Math.ceil(days)), today = dayOf(now, tz), first = shiftDay(today, 1 - count);
     return { from: dayStart(first, tz), to: now, title: count === 1 ? `${today} so far, zone ${tz}` : `${first} through ${today} (${count} days), zone ${tz}` };

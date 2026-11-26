@@ -29,13 +29,13 @@ test("kindStats: counts passed runs of the kind in the project and the time wind
     assert.deepEqual(kindStats(HISTORY, { project: "docs-site", kind: "build", now: NOW, windowDays: 14 }), { n: 6, p75: 12, p90: 30 });
     assert.deepEqual(kindStats(HISTORY, { project: "docs-site", kind: "build", now: NOW, windowDays: 30 }), { n: 7, p75: 12, p90: 30 });
     assert.deepEqual(kindStats(HISTORY, { project: "docs-site", kind: "deploy", now: NOW, windowDays: 14 }), { n: 0, p75: null, p90: null });
-    assert.equal(kindStats(HISTORY, { project: "shop-api", kind: "build", now: NOW }).n, 1);
+    assert.equal(kindStats(HISTORY, { project: "shop-api", kind: "build", now: NOW, windowDays: 14 }).n, 1);
 });
 
 test("stemStats: counts passed runs with the same command stem", () => {
     assert.deepEqual(stemStats(HISTORY, { project: "docs-site", stem: "pnpm run build", now: NOW, windowDays: 14 }), { n: 4, p75: 8, p90: 12, max: 12, stem: "pnpm run build" });
-    assert.deepEqual(stemStats(HISTORY, { project: "docs-site", stem: "make docs", now: NOW }), { n: 0, p75: null, p90: null, max: null, stem: "make docs" });
-    assert.deepEqual(stemStats(HISTORY, { project: "docs-site", stem: null, now: NOW }), { n: 0, stem: null });
+    assert.deepEqual(stemStats(HISTORY, { project: "docs-site", stem: "make docs", now: NOW, windowDays: 14 }), { n: 0, p75: null, p90: null, max: null, stem: "make docs" });
+    assert.deepEqual(stemStats(HISTORY, { project: "docs-site", stem: null, now: NOW, windowDays: 14 }), { n: 0, stem: null });
 });
 
 const E2E = "pnpm run test:e2e";

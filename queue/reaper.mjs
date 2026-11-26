@@ -4,13 +4,13 @@
 // Only idle dev servers are ever stopped. `--dry` prints what a run would do and changes nothing.
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
-import { isMainModule, loadSettings, paths } from "./settings.mjs";
+import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { snapshot } from "./slots.mjs";
-import { idleText, isServer, sampleKeepMs, serverIdleVerdict } from "./idle.mjs";
+import { idleText, sampleKeepMs, serverIdleVerdict, serverTest } from "./idle.mjs";
 import { LAUNCHER_RE, TEST_RUN_RE } from "./commands.mjs";
 import { parseProcessTable } from "./ps.mjs";
 import { ancestors, descendants, stopGroup } from "./proctree.mjs";
-import { slotIdleCheck } from "./notices.mjs";
+import { addNotice, slotIdleCheck } from "./notices.mjs";
 import { strayRuns } from "./stray.mjs";
 import { readHealth } from "./health.mjs";
 import { notify as sendNotice } from "./notify.mjs";
@@ -46,17 +46,18 @@ export function serverOnly(procs, server, isServerCmd = () => false) {
     return procs.every((p) => line.has(p.pid));
 }
 
-/** One reaper run over the given readings. Nothing is read from the machine in here, so tests can pass any process
- *  table. state is what the previous run returned. Returns { state, lines, stopped }. */
+/** One reaper run over the given readings. Nothing is read from the machine or the state folder in here, so tests
+ *  can pass any process table. settings and tz come from the caller; record(key, entry) stores an idle-slot notice.
+ *  state is what the previous run returned. Returns { state, lines, stopped }. */
 export async function reap({
-    rows, holders = [], queue = [], state = {}, now = Date.now(), dry = false, settings = loadSettings(),
+    rows, holders = [], queue = [], state = {}, now = Date.now(), dry = false, settings, tz,
     health = { freePct: null, diskGB: null }, load = 0, cores = 1, swapPct = 0, myPgid = null,
-    notify = () => {}, stop = null, cpuPs = () => "",
+    notify = () => {}, record = () => {}, stop = null, cpuPs = () => "",
 }) {
     const stopIdle = stop ?? ((pgid, procs) => stopGroup(pgid, procs, { graceMs: settings.limits.killGraceMs }));
     const next = { samples: {}, streak: 0, lastOverload: 0, ...state };
     const lines = [], stopped = [], failedStops = [], R = settings.reaper, groups = groupRows(rows);
-    const isDevServer = (command) => isServer(command, R.serverPattern);
+    const isDevServer = serverTest(R.serverPattern);
     let keep;
     try { keep = new RegExp(R.keepPattern); } catch { keep = null; }
 
@@ -116,7 +117,9 @@ export async function reap({
 
     // Jobs that hold a slot without doing work.
     try {
-        const checked = slotIdleCheck({ holders, waiting: queue, state: next.slotIdle ?? {}, now, dry, notify, ps: cpuPs, idle: settings.idle });
+        const checked = slotIdleCheck({
+            holders, waiting: queue, state: next.slotIdle ?? {}, now, dry, notify, record, ps: cpuPs, idle: settings.idle, tz,
+        });
         next.slotIdle = checked.state;
         lines.push(...checked.lines);
     } catch (e) {
@@ -152,12 +155,20 @@ export async function reap({
 }
 
 async function main() {
-    const dry = process.argv.includes("--dry"), now = Date.now(), stateFile = paths().reaperState;
+    const dry = process.argv.includes("--dry");
+    const now = Date.now();
+    const settings = loadSettings();
+    const files = paths();
+    const stateFile = files.reaperState;
     const state = readJson(stateFile, {});
-    const { holders, queue } = snapshot({ readOnly: dry }), { load, cores } = probeLoad();
+    const { holders, queue } = snapshot({ dirs: files, readOnly: dry });
+    const { load, cores } = probeLoad();
     const run = await reap({
-        rows: parseProcessTable(probeProcessTable()), holders, queue, state, now, dry, health: readHealth(), load, cores,
-        swapPct: probeSwapPct(), myPgid: probeGroupOf(process.pid), notify: (title, message) => sendNotice(title, message), cpuPs: probeProcessCpu,
+        rows: parseProcessTable(probeProcessTable()), holders, queue, state, now, dry, settings, tz: timeZone(),
+        health: readHealth(), load, cores, swapPct: probeSwapPct(), myPgid: probeGroupOf(process.pid),
+        notify: (title, message) => sendNotice(title, message, { env: process.env, logFile: files.notifyLog }),
+        record: (key, entry) => addNotice(key, entry, files.notices),
+        cpuPs: probeProcessCpu,
     });
     for (const line of run.lines) console.log(`${new Date(now).toISOString()} reaper: ${line}`);
     if (dry) {

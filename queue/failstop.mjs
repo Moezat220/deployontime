@@ -1,5 +1,4 @@
 // The repeated-failure stop: a run is refused when the same check just failed twice on unchanged code.
-import { loadSettings, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
 import { UNLABELLED } from "./args.mjs";
@@ -10,7 +9,7 @@ const bothDiffer = (a, b) => a != null && b != null && a !== b;
 /** Should this run be refused because the same check just failed twice on the same code?
  *  job = { label, cmd, project, cwd, head, fp, at }.
  *  Returns { refuse: false }, { refuse: false, changed: "commit" | "files" | "command" } or { refuse: true, reason }. */
-export function failStop(lines, job, limitSettings = loadSettings().limits, tz = timeZone()) {
+export function failStop(lines, job, limitSettings, tz) {
     // Runs are one check when their labels match; failing that, when command, project and folder all match.
     const sameCheck = (row) => (job.label !== UNLABELLED && row.label === job.label)
         || (!!job.cmd && row.cmd === job.cmd && lineProject(row) === job.project && (!job.cwd || !row.cwd || row.cwd === job.cwd));

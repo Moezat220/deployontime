@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isMainModule, loadSettings, timeZone } from "./settings.mjs";
+import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
 import { blockReason, blockText, decide, gateBlocks, gateReason, shouldGiveUp } from "./gate.mjs";
@@ -60,40 +60,40 @@ export function historyRow(name, t) {
 const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-function cmdStatus(settings) {
-    const { holders, queue } = snapshot();
+function cmdStatus({ settings, files }) {
+    const { holders, queue } = snapshot({ dirs: files });
     const gate = gateReason({ holders, health: healthVerdict(readHealth(), settings.health) }, settings.slots);
     for (const line of statusLines({ holders, queue, gate, max: settings.slots })) console.log(line);
     return 0;
 }
 
-function cmdPassed(args) {
+function cmdPassed(args, { files, tz }) {
     const dir = opt(args, "--cwd") || process.cwd();
-    const found = findStamp(readLines(), { project: folderProject(dir), ...gitState(dir) }, opt(args, "--match") || "");
+    const found = findStamp(readLines(files.journal), { project: folderProject(dir), ...gitState(dir) }, opt(args, "--match") || "", { tz });
     console.log(found.text);
     return found.stamp ? 0 : 1;
 }
 
-function cmdHistory(args) {
+function cmdHistory(args, { files, tz }) {
     const day = opt(args, "--day"), daysText = opt(args, "--days");
     if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day)) { say("--day: needs a date as YYYY-MM-DD"); return EXIT.usage; }
     if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) { say("--days: needs a whole number of days, 1 or more"); return EXIT.usage; }
-    const range = historyWindow({ day, days: daysText === undefined ? 7 : Number(daysText), tz: timeZone() });
-    const { all, byProject } = summarize(readLines(), range.from, range.to);
+    const range = historyWindow({ day, days: daysText === undefined ? 7 : Number(daysText), tz });
+    const { all, byProject } = summarize(readLines(files.journal), range.from, range.to);
     console.log(`history: ${range.title}, jobs ${all.jobs}`);
     if (all.jobs) for (const [name, t] of [["all projects", all], ...Object.entries(byProject)]) console.log(historyRow(name, t));
     return 0;
 }
 
 /** Runs one job and resolves with the exit code for `run`. */
-async function cmdRun(args, settings) {
+async function cmdRun(args, { settings, files, tz }) {
     const parsed = parseRunArgs(args, settings);
     if (parsed.error) { if (parsed.error === USAGE) process.stderr.write(`${USAGE}\n`); else say(parsed.error); return EXIT.usage; }
     const { label, cmd, priority, maxWait, maxRun, afterFix } = parsed, L = settings.limits, max = settings.slots;
     const queuedAt = Date.now(), cwd = process.cwd(), folder = folderProject(cwd), command = cmdString(cmd);
     const project = jobProject({ label, project: folder, cwd }), tally = {};
 
-    const past = readLines(), kind = kindOf(label, command, parsed.kind), stem = cmdStem(command);
+    const past = readLines(files.journal), kind = kindOf(label, command, parsed.kind), stem = cmdStem(command);
     const window = { project, now: queuedAt, windowDays: L.windowDays };
     const limit = decideLimit({ maxRun, kind, stats: kindStats(past, { ...window, kind }), stem: stemStats(past, { ...window, stem }), priority }, L);
     const before = { ...gitState(cwd), fp: fingerprint(cwd, cmd, settings.outputDirs) };
@@ -102,9 +102,9 @@ async function cmdRun(args, settings) {
     const finish = (outcome, exit, more = {}) => {
         if (written) return;
         written = true;
-        append(record({ label, project: folder, cwd, priority, queuedAt, startedAt, endedAt: Date.now(), outcome, exit, tally, cmd: command, ...commit, extra: { ...details, ...more } }));
+        append(record({ label, project: folder, cwd, priority, queuedAt, startedAt, endedAt: Date.now(), outcome, exit, tally, cmd: command, ...commit, extra: { ...details, ...more } }), files.journal);
     };
-    const verdict = failStop(past, { label, cmd: command, project, cwd, head: before.head, fp: before.fp, at: queuedAt }, L);
+    const verdict = failStop(past, { label, cmd: command, project, cwd, head: before.head, fp: before.fp, at: queuedAt }, L, tz);
     if (verdict.refuse && !afterFix) {
         commit = before;
         finish("refused", EXIT.refused);
@@ -114,7 +114,7 @@ async function cmdRun(args, settings) {
     if (verdict.refuse) say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
 
     // Wait in line.
-    const ticket = enqueue(process.pid, label, priority);
+    const ticket = enqueue(process.pid, label, priority, files);
     const leaveQueue = () => { rmSync(ticket, { force: true }); releaseSlot(slot, process.pid); };
     process.on("exit", leaveQueue);
     const whileWaiting = ["SIGINT", "SIGTERM"].map((signal) => [signal, () => { finish("left", EXIT.left, { signal }); leaveQueue(); process.exit(EXIT.left); }]);
@@ -122,12 +122,12 @@ async function cmdRun(args, settings) {
     const waitFrom = Date.now();
     let shownPosition = 0, shownAt = 0;
     while (!slot) {
-        const snap = snapshot(), turn = decide(snap, process.pid, max), ahead = turn.position - 1;
+        const snap = snapshot({ dirs: files }), turn = decide(snap, process.pid, max), ahead = turn.position - 1;
         // Only full slots make the health reading irrelevant to a waiter.
         const slotFree = snap.holders.length < max;
         const health = turn.go || slotFree ? healthVerdict(readHealth(), settings.health) : null;
         if (turn.go && health.ok) {
-            slot = takeSlot(process.pid, label, max, { kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd, ...(priority ? { priority: true } : {}) });
+            slot = takeSlot(process.pid, label, max, { kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd, ...(priority ? { priority: true } : {}) }, files);
         }
         if (slot) break;
         const heldBy = blockReason({ holders: snap.holders, health, ahead }, max);
@@ -202,10 +202,10 @@ async function cmdRun(args, settings) {
         afterMinutes(limit.longRunMin, () => {
             longRunAt = Date.now();
             try {
-                const alert = longRunAlert({ label, project, pid: process.pid, minutes: minutesSince(startedAt, longRunAt), longRunBasis: limit.longRunBasis, limitMin: limit.limitMin, killMin: limit.killMin, startedAt, waiting: snapshot().queue, now: longRunAt });
+                const alert = longRunAlert({ label, project, pid: process.pid, minutes: minutesSince(startedAt, longRunAt), longRunBasis: limit.longRunBasis, limitMin: limit.limitMin, killMin: limit.killMin, startedAt, waiting: snapshot({ dirs: files }).queue, now: longRunAt, tz });
                 say(alert.message);
-                notify(alert.title, alert.message);
-                addNotice(alert.key, alert.entry);
+                notify(alert.title, alert.message, { env: process.env, logFile: files.notifyLog });
+                addNotice(alert.key, alert.entry, files.notices);
             } catch { /* a notice that fails must not disturb the job */ }
         });
     }
@@ -237,11 +237,12 @@ export async function main(args = process.argv.slice(2)) {
     const command = args.length ? args[0] : "status";
     const badFlag = command === "run" ? null : flagError([command, ...args.slice(1)]);
     if (badFlag) { say(badFlag); return EXIT.usage; }
-    const settings = loadSettings();
-    if (command === "status") return cmdStatus(settings);
-    if (command === "passed") return cmdPassed(args);
-    if (command === "history") return cmdHistory(args);
-    return cmdRun(args, settings);
+    // The settings, the state folder and the zone are read once here and handed to the command.
+    const ctx = { settings: loadSettings(), files: paths(), tz: timeZone() };
+    if (command === "status") return cmdStatus(ctx);
+    if (command === "passed") return cmdPassed(args, ctx);
+    if (command === "history") return cmdHistory(args, ctx);
+    return cmdRun(args, ctx);
 }
 
 if (isMainModule(import.meta.url)) process.exit(await main());

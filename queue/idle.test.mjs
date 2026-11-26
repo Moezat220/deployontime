@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { idleText, isServer, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict } from "./idle.mjs";
+import { idleText, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, serverTest, slotIdleVerdict } from "./idle.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 const MINUTE = 60_000, PATTERN = DEFAULTS.reaper.serverPattern;
@@ -9,17 +9,17 @@ const IDLE = { serverIdleMin: 40, serverCpuS: 8, slotIdleMin: 15, slotCpuS: 4 };
 const NOW = 500 * MINUTE;
 const at = (minutesAgo, cpu) => ({ t: NOW - minutesAgo * MINUTE, cpu });
 
-test("isServer: watch-mode tools match the default pattern, one-shot commands do not", () => {
+test("serverTest: watch-mode tools match the default pattern, one-shot commands do not", () => {
     const servers = ["node /srv/shop-api/node_modules/.bin/vite", "node /srv/docs-site/node_modules/.bin/next dev -p 4100", "npx wrangler dev", "node node_modules/.bin/webpack serve", "nodemon src/api.js", "node node_modules/.bin/vitest"];
     const others = ["node node_modules/.bin/vitest run", "node --test", "node scripts/build.mjs", "next build", "wrangler deploy", "npm install", "node node_modules/.bin/vite build --watch"];
-    for (const command of servers) assert.equal(isServer(command, PATTERN), true, command);
-    for (const command of others) assert.equal(isServer(command, PATTERN), false, command);
+    for (const command of servers) assert.equal(serverTest(PATTERN)(command), true, command);
+    for (const command of others) assert.equal(serverTest(PATTERN)(command), false, command);
 });
 
-test("isServer: follows the pattern it is given and rejects a broken one", () => {
-    assert.equal(isServer("preview-server --port 4300", "preview-server"), true);
-    assert.equal(isServer("node node_modules/.bin/vite", "preview-server"), false);
-    assert.equal(isServer("preview-server", "[unclosed"), false);
+test("serverTest: follows the pattern it is given and rejects a broken one", () => {
+    assert.equal(serverTest("preview-server")("preview-server --port 4300"), true);
+    assert.equal(serverTest("preview-server")("node node_modules/.bin/vite"), false);
+    assert.equal(serverTest("[unclosed")("preview-server"), false);
 });
 
 test("sinceReset: drops everything before the last fall of the CPU total", () => {

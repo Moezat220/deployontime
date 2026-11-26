@@ -74,7 +74,7 @@ test("slotIdleStep: samples are kept long enough for a longer idle window", () =
 test("slotIdleCheck: sends and stores each alert, except on a dry run", () => {
     const state = { [`3300:${holder.startedAt}`]: { samples: [{ t: NOW - 11 * MINUTE, cpu: 20 }] } };
     const sent = [], stored = [];
-    const check = (dry) => slotIdleCheck({ holders: [holder], state, now: NOW, dry, notify: (title) => sent.push(title), ps: () => cpuTable(20.4), record: (key) => stored.push(key), idle: SLOT_IDLE });
+    const check = (dry) => slotIdleCheck({ holders: [holder], state, now: NOW, dry, notify: (title) => sent.push(title), ps: () => cpuTable(20.4), record: (key) => stored.push(key), idle: SLOT_IDLE, tz: "UTC" });
     const dry = check(true);
     assert.deepEqual([sent, stored], [[], []]);
     assert.equal(dry.lines.length === 1 && dry.lines[0].startsWith(`idle slot: "${SUITE}"`) && dry.lines[0].endsWith("(dry run, no notice sent)"), true);
@@ -85,7 +85,7 @@ test("slotIdleCheck: sends and stores each alert, except on a dry run", () => {
 });
 
 test("slotIdleCheck: does not list processes when no slot is taken", () => {
-    const result = slotIdleCheck({ holders: [], notify: assert.fail, ps: assert.fail, record: assert.fail });
+    const result = slotIdleCheck({ holders: [], notify: assert.fail, ps: assert.fail, record: assert.fail, idle: SLOT_IDLE, tz: "UTC" });
     assert.deepEqual(result, { state: {}, lines: [] });
 });
 

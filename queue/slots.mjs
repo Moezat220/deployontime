@@ -3,7 +3,6 @@
 // a temporary name and then moved into place, so a reader never meets half a file.
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadSettings, paths } from "./settings.mjs";
 import { probeProcessAges } from "./probes.mjs";
 import { parseElapsed } from "./ps.mjs";
 import { alive } from "./proctree.mjs";
@@ -31,7 +30,7 @@ function dropOldTemp(file, now) {
 /** Returns { holders, queue }: the jobs holding a slot, and the line in start order. Entries of dead processes, and
  *  entries whose pid now belongs to a process that started later, are left out and their files deleted. With
  *  readOnly nothing on disk is created or deleted. */
-export function snapshot({ dirs = paths(), isAlive = alive, ages = processAges, now = Date.now(), readOnly = false } = {}) {
+export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date.now(), readOnly = false } = {}) {
     if (!readOnly) makeDirs(dirs);
     const liveEntries = (dir) => {
         let names = [];
@@ -60,7 +59,7 @@ export function snapshot({ dirs = paths(), isAlive = alive, ages = processAges, 
 }
 
 /** Joins the line. Returns the ticket file; deleting it leaves the line. */
-export function enqueue(pid, label, priority = false, dirs = paths(), now = Date.now()) {
+export function enqueue(pid, label, priority, dirs, now = Date.now()) {
     makeDirs(dirs);
     const ticket = join(dirs.line, `${now}-${pid}.json`);
     writeJsonAtomic(ticket, { pid, label, at: now, ...(priority ? { priority: true } : {}), ...bornOf(pid) });
@@ -68,7 +67,7 @@ export function enqueue(pid, label, priority = false, dirs = paths(), now = Date
 }
 
 /** Claims a free slot. Returns the slot file, or null when all are taken. */
-export function takeSlot(pid, label, max = loadSettings().slots, meta = {}, dirs = paths()) {
+export function takeSlot(pid, label, max, meta, dirs) {
     makeDirs(dirs);
     for (let n = 0; n < max; n++) {
         const slot = join(dirs.slots, `slot-${n}.json`), temp = tempName(slot);

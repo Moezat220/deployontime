@@ -1,10 +1,11 @@
 // The health gate. A new job may start only while load, free memory, free disk and battery are inside their limits.
 // healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading.
-import { isSandbox, loadSettings } from "./settings.mjs";
+import { isSandbox } from "./settings.mjs";
 import { probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
 
-/** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. */
-export function healthVerdict({ load, cores, freePct, diskGB, battery = null }, limits = loadSettings().health) {
+/** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
+ *  the health settings. */
+export function healthVerdict({ load, cores, freePct, diskGB, battery = null }, limits) {
     const blocks = [], loadCap = cores * limits.loadPerCore;
     if (load > loadCap) blocks.push({ gate: "load", text: `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed` });
     if (freePct != null && freePct < limits.minFreeMemPct) {

@@ -1,6 +1,5 @@
 // The long-run and idle-slot notices: their text, the per-slot CPU sampling that finds a quiet job, and the store
 // of notices already sent in the state folder.
-import { loadSettings, paths, timeZone } from "./settings.mjs";
 import { clockTime } from "./clock.mjs";
 import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu } from "./probes.mjs";
@@ -14,7 +13,8 @@ function heldUpText(waiting, now) {
     return `holding up ${waiting.map((w) => `"${w.label}" (${Math.max(0, Math.round((now - w.at) / MINUTE))} min)`).join(" and ")}`;
 }
 /** The notice for a job that passed its long-run mark. Returns { title, message, key, entry }. */
-export function longRunAlert({ label, project, pid, minutes, longRunBasis, limitMin, killMin, startedAt, waiting = [], now = Date.now(), tz = timeZone() }) {
+export function longRunAlert(job) {
+    const { label, project, pid, minutes, longRunBasis, limitMin, killMin, startedAt, waiting = [], now = Date.now(), tz } = job;
     const heldUp = heldUpText(waiting, now), stopAt = clockTime(startedAt + killMin * MINUTE, tz);
     return {
         title: "dotime: job running long",
@@ -24,7 +24,8 @@ export function longRunAlert({ label, project, pid, minutes, longRunBasis, limit
     };
 }
 /** The notice for a job that holds a slot without using CPU. Returns { title, message, key, entry }. */
-export function idleAlert({ label, project, pid, usedS, minutes, startedAt, killMin = null, waiting = [], now = Date.now(), tz = timeZone() }) {
+export function idleAlert(job) {
+    const { label, project, pid, usedS, minutes, startedAt, killMin = null, waiting = [], now = Date.now(), tz } = job;
     const heldUp = heldUpText(waiting, now), use = `${usedS} s of CPU in ${minutes} min`;
     const limit = killMin ? `, limit reached at ${clockTime(startedAt + killMin * MINUTE, tz)}` : "";
     return {
@@ -38,7 +39,7 @@ export function idleAlert({ label, project, pid, usedS, minutes, startedAt, kill
 /** Takes one CPU sample per slot holder and judges it. ps: text from `ps -S -Ao pid=,ppid=,pgid=,time=`;
  *  state: { "<pid>:<startedAt>": { samples, told } } from the previous call.
  *  Returns { state, alerts }: state for the holders still present; each job gets at most one alert. */
-export function slotIdleStep({ holders, ps, state = {}, waiting = [], now = Date.now(), idle = loadSettings().idle, tz = timeZone() }) {
+export function slotIdleStep({ holders, ps, state = {}, waiting = [], now = Date.now(), idle, tz }) {
     const rows = psRows(ps), next = {}, alerts = [], keepMs = sampleKeepMs(idle.slotIdleMin);
     for (const holder of holders) {
         const startedAt = holder.startedAt ?? holder.at, id = `${holder.pid}:${startedAt}`, cpu = jobCpu(holder, rows);
@@ -58,15 +59,16 @@ export function slotIdleStep({ holders, ps, state = {}, waiting = [], now = Date
     return { state: next, alerts };
 }
 /** slotIdleStep plus delivery of the new alerts. On a dry run nothing is sent. Returns { state, lines }. */
-export function slotIdleCheck({ holders, waiting = [], state = {}, now = Date.now(), dry = false, notify, ps = probeProcessCpu, record = addNotice, idle = loadSettings().idle }) {
-    const step = slotIdleStep({ holders, ps: holders.length ? ps() : "", state, waiting, now, idle });
+export function slotIdleCheck(check) {
+    const { holders, waiting = [], state = {}, now = Date.now(), dry = false, notify, ps = probeProcessCpu, record, idle, tz } = check;
+    const step = slotIdleStep({ holders, ps: holders.length ? ps() : "", state, waiting, now, idle, tz });
     if (!dry) for (const alert of step.alerts) { notify(alert.title, alert.message); record(alert.key, alert.entry); }
     return { state: step.state, lines: step.alerts.map((alert) => `${alert.message}${dry ? " (dry run, no notice sent)" : ""}`) };
 }
 
 /** Stores a notice in $DOTIME_HOME/notices.json under its key. Returns true when it was added, false when the key exists
  *  or the file cannot be written. */
-export function addNotice(key, entry, file = paths().notices) {
+export function addNotice(key, entry, file) {
     try {
         const all = readJson(file, {});
         if (all[key]) return false;
