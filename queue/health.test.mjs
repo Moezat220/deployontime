@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
 import { cachedHealth, healthVerdict, MAX_SHARED_READING_MS, parsePower, powerState, readBattery, readHealth } from "./health.mjs";
 
-const LIMITS = { loadPerCore: 2, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
+const LIMITS = { loadPerCore: 2, busyCpuPct: 90, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
 const roomy = { load: 1.5, cores: 4, freePct: 45, diskGB: 120, battery: null };
 const texts = (sample, limits = LIMITS) => healthVerdict(sample, limits).blocks.map((b) => b.text);
 const gates = (sample, limits = LIMITS) => healthVerdict(sample, limits).blocks.map((b) => b.gate);
@@ -45,6 +45,20 @@ test("healthVerdict: judges by the limits it is handed", () => {
     assert.deepEqual(gates({ ...roomy, load: 9 }, { ...LIMITS, loadPerCore: 3 }), []);
 });
 
+test("healthVerdict: a high load holds a job only while the CPU is busy now", () => {
+    assert.deepEqual(healthVerdict({ ...roomy, load: 14.8, busyCpuPct: 12 }, LIMITS), { ok: true, blocks: [] }, "load high, CPU idle");
+    assert.deepEqual(healthVerdict({ ...roomy, load: 14.8, busyCpuPct: 89.9 }, LIMITS).ok, true, "just below the CPU limit");
+    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 96.6 }), ["load too high: 14.8 now, 8.0 allowed; CPU 97 % busy now"]);
+    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 90 }), ["load too high: 14.8 now, 8.0 allowed; CPU 90 % busy now"]);
+    assert.deepEqual(healthVerdict({ ...roomy, load: 1.5, busyCpuPct: 100 }, LIMITS), { ok: true, blocks: [] }, "load low, CPU busy");
+    assert.deepEqual(gates({ ...roomy, load: 14.8, busyCpuPct: 50 }, { ...LIMITS, busyCpuPct: 40 }), ["load"]);
+});
+
+test("healthVerdict: without a live CPU reading a high load holds as before", () => {
+    assert.deepEqual(texts({ ...roomy, load: 9, busyCpuPct: null }), ["load too high: 9.0 now, 8.0 allowed"]);
+    assert.deepEqual(texts({ ...roomy, load: 9, busyCpuPct: Number.NaN }), ["load too high: 9.0 now, 8.0 allowed"]);
+});
+
 const unplugged = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=2)\t37%; discharging; 1:25 remaining present: true\n";
 const charging = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=2)\t91%; charging; 0:15 remaining present: true\n";
 const drainingOnMains = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=2)\t58%; discharging; (no estimate) present: true\n";
@@ -77,7 +91,30 @@ test("readBattery: null whenever the reading is incomplete or the probe fails", 
 
 test("readHealth: combines the probes it is given", () => {
     const probes = { load: () => ({ load: 0.8, cores: 6 }), memory: () => 71, disk: () => 0, battery: () => null };
-    assert.deepEqual(readHealth({ probes }), { load: 0.8, cores: 6, freePct: 71, diskGB: 0, battery: null });
+    assert.deepEqual(readHealth({ probes: { ...probes, cpu: assert.fail } }), { load: 0.8, cores: 6, busyCpuPct: null, freePct: 71, diskGB: 0, battery: null });
+});
+
+test("readHealth: takes the live CPU reading only when the load is above its limit", () => {
+    let cpuReads = 0;
+    const probes = { memory: () => 71, disk: () => 50, battery: () => null, cpu: () => { cpuReads++; return 34; } };
+    const calm = readHealth({ probes: { ...probes, load: () => ({ load: 8, cores: 4 }) }, limits: LIMITS });
+    assert.deepEqual([calm.busyCpuPct, cpuReads], [null, 0]);
+    const loaded = readHealth({ probes: { ...probes, load: () => ({ load: 8.1, cores: 4 }) }, limits: LIMITS });
+    assert.deepEqual([loaded.busyCpuPct, cpuReads], [34, 1]);
+    assert.equal(healthVerdict(loaded, LIMITS).ok, true);
+    const noLimits = readHealth({ probes: { ...probes, load: () => ({ load: 50, cores: 4 }) } });
+    assert.deepEqual([noLimits.busyCpuPct, cpuReads], [null, 1]);
+});
+
+test("cachedHealth: the shared reading carries the live CPU reading, so waiters do not each take one", () => {
+    const file = join(tempDir("health"), "health.json");
+    let cpuReads = 0;
+    const probes = { load: () => ({ load: 30, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null, cpu: () => { cpuReads++; return 15; } };
+    const read = () => readHealth({ probes, limits: LIMITS });
+    assert.equal(cachedHealth(file, 3000, read, 10_000).busyCpuPct, 15);
+    assert.equal(cachedHealth(file, 3000, read, 11_000).busyCpuPct, 15);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).reading.busyCpuPct, 15);
+    assert.equal(cpuReads, 1);
 });
 
 test("cachedHealth: one reading per poll time, shared through the cache file", () => {

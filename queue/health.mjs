@@ -1,16 +1,21 @@
 // The health gate. A new job may start only while load, free memory, free disk and battery are inside their limits.
 // healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading; cachedHealth()
-// shares one reading between jobs that wait at the same time.
-import { probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
+// shares one reading between jobs that wait at the same time. The 1-minute load lags behind: it stays high for a while
+// after heavy work has ended. So a high load holds a job only while the CPU is also busy right now.
+import { probeBusyCpuPct, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 
 /** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
- *  the health settings. */
-export function healthVerdict({ load, cores, freePct, diskGB, battery = null }, limits) {
+ *  the health settings. A load above its limit holds a job unless the live CPU reading (busyCpuPct) is known and
+ *  below limits.busyCpuPct. */
+export function healthVerdict({ load, cores, busyCpuPct = null, freePct, diskGB, battery = null }, limits) {
     const blocks = [];
     const loadCap = cores * limits.loadPerCore;
-    if (load > loadCap) {
-        blocks.push({ gate: "load", text: `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed` });
+    const cpuKnown = Number.isFinite(busyCpuPct);
+    if (load > loadCap && (!cpuKnown || busyCpuPct >= limits.busyCpuPct)) {
+        const cpu = cpuKnown ? `; CPU ${Math.round(busyCpuPct)} % busy now` : "";
+        const text = `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed${cpu}`;
+        blocks.push({ gate: "load", text });
     }
     if (freePct != null && freePct < limits.minFreeMemPct) {
         blocks.push({ gate: "memory", text: `memory too low: ${freePct}% free, ${limits.minFreeMemPct}% needed` });
@@ -56,12 +61,17 @@ export function readBattery(probe = probePowerText) {
     } catch { return null; }
 }
 
-/** The current reading: { load, cores, freePct, diskGB, battery }. probes replaces single readings. */
-export function readHealth({ probes = {} } = {}) {
+/** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
+ *  The live CPU reading takes about a second, so it is taken only when limits (the health settings) are given and
+ *  the load is above its limit; otherwise busyCpuPct is null. */
+export function readHealth({ probes = {}, limits = null } = {}) {
     const read = {
-        load: probeLoad, memory: probeMemoryFreePct, disk: probeDiskFreeGB, battery: readBattery, ...probes,
+        load: probeLoad, cpu: probeBusyCpuPct, memory: probeMemoryFreePct, disk: probeDiskFreeGB,
+        battery: readBattery, ...probes,
     };
-    return { ...read.load(), freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
+    const { load, cores } = read.load();
+    const busyCpuPct = limits && load > cores * limits.loadPerCore ? read.cpu() : null;
+    return { load, cores, busyCpuPct, freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
 }
 
 /** The oldest shared reading a job may start on, whatever the poll time. */

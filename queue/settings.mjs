@@ -12,7 +12,7 @@ export const DEFAULTS = Object.freeze({
     slots: 2,
     maxWaitMin: 60,
     pollMs: 3000,
-    health: { loadPerCore: 1.0, minFreeMemPct: 20, minFreeDiskGB: 10, minBatteryPct: 15 },
+    health: { loadPerCore: 1.0, busyCpuPct: 90, minFreeMemPct: 20, minFreeDiskGB: 10, minBatteryPct: 15 },
     limits: {
         defaultMin: 30, debugMin: 15, floorMin: 10, p90Factor: 1.5, longRunFactor: 2, longRunUnmeasuredMin: 20,
         minSamples: 5, windowDays: 14, failWindowHours: 6, priorityGrace: 2, killGraceMs: 10_000, orphanCheckMs: 2000,
@@ -35,9 +35,10 @@ export const DEFAULTS = Object.freeze({
 const above0 = [(n) => n > 0, "a number above 0"];
 const from0 = [(n) => n >= 0, "a number of 0 or more"];
 const from1 = [(n) => n >= 1, "a number of 1 or more"];
+const pct = [(n) => n > 0 && n <= 100, "a number above 0 and at most 100"];
 // Numbers may be 0 or more unless a stricter rule is listed here.
 const NUMBER_RULES = {
-    "slots": from1, "pollMs": above0, "health.loadPerCore": above0,
+    "slots": from1, "pollMs": above0, "health.loadPerCore": above0, "health.busyCpuPct": pct,
     "limits.defaultMin": above0, "limits.debugMin": above0, "limits.floorMin": above0, "limits.p90Factor": above0,
     "limits.longRunFactor": above0, "limits.longRunUnmeasuredMin": above0, "limits.minSamples": from1,
     "limits.windowDays": above0, "limits.priorityGrace": from1, "limits.orphanCheckMs": above0,

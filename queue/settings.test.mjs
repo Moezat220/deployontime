@@ -102,6 +102,20 @@ test("loadSettings: a time in milliseconds longer than one timer can hold falls 
         + `needs a number above 0 and at most ${2 ** 31 - 1}, default ${DEFAULTS.pollMs} kept`), true);
 });
 
+test("loadSettings: health.busyCpuPct is a percentage above 0 and at most 100", () => {
+    assert.equal(DEFAULTS.health.busyCpuPct, 90);
+    for (const value of [1, 75.5, 100]) {
+        const { settings, warnings } = load({ health: { busyCpuPct: value } });
+        assert.deepEqual([settings.health.busyCpuPct, warnings], [value, []]);
+    }
+    for (const value of [0, -5, 100.5, 250, "90", null]) {
+        const { settings, warnings } = load({ health: { busyCpuPct: value } });
+        assert.equal(settings.health.busyCpuPct, 90);
+        assert.deepEqual(warnings, [`setting ignored: health.busyCpuPct is ${JSON.stringify(value)}, `
+            + "needs a number above 0 and at most 100, default 90 kept"]);
+    }
+});
+
 test("loadSettings: zero stays allowed where it switches a check off", () => {
     const { settings, warnings } = load({ maxWaitMin: 0, health: { minFreeDiskGB: 0, minBatteryPct: 0 }, limits: { killGraceMs: 0 } });
     assert.deepEqual(warnings, []);
@@ -173,6 +187,7 @@ test("README settings table: every number setting has a row, and each row's mark
         // [value, refused?] pairs that tell the three markings apart
         const probes = /At least 1[.;]/.test(meaning) ? [[0, true], [0.5, true], [1.5, false]]
             : /Above 0\./.test(meaning) ? [[0, true], [0.5, false], [-1, true]]
+            : /Above 0, at most 100\./.test(meaning) ? [[0, true], [0.5, false], [100, false], [100.5, true]]
             : [[0, false], [-1, true]];
         for (const [value, no] of probes) assert.equal(refused(key, value), no, `${key} = ${value}: README marking "${meaning}"`);
     }

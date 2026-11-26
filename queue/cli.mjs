@@ -53,10 +53,11 @@ export function historyRow(name, t) {
 
 const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
 
-/** Prints `status` and returns 0. deps: { readHealth, print }. */
+/** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`. */
 export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
     const { holders, queue } = snapshot({ dirs: files });
-    const gate = gateReason({ holders, health: healthVerdict(read(), settings.health) }, settings.slots);
+    const health = healthVerdict(read({ limits: settings.health }), settings.health);
+    const gate = gateReason({ holders, health }, settings.slots);
     for (const line of statusLines({ holders, queue, gate, max: settings.slots })) print(line);
     return 0;
 }
@@ -109,9 +110,10 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
     if (command === "history") return cmdHistory(args, ctx);
     const { settings, files } = ctx;
+    const readGateHealth = () => readHealth({ limits: settings.health });
     const deps = realDeps({
         // Jobs that wait at the same time share one health reading per poll.
-        readHealth: () => cachedHealth(files.healthCache, settings.pollMs),
+        readHealth: () => cachedHealth(files.healthCache, settings.pollMs, readGateHealth),
         notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
         after: afterMinutes,
     });

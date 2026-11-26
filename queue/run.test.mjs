@@ -261,6 +261,26 @@ test("run: when the wait limit runs out, exit 75 names each health reading that 
     assert.equal(`${printed.join("\n")}\n`, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: shut; ${why}\n`);
 });
 
+test("run and status: a high load with an idle CPU starts the job, with a busy CPU it waits, both judged alike", async () => {
+    const box = sandbox({ health: { loadPerCore: 2 } });
+    const calmed = { load: 14.8, cores: 4, busyCpuPct: 12, freePct: 70, diskGB: 100, battery: null };
+    const status = (reading) => {
+        const printed = [], asked = [];
+        cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return reading; }, print: (text) => printed.push(text) });
+        assert.deepEqual(asked, [{ limits: box.ctx.settings.health }], "status takes the reading with the gate limits");
+        return printed.at(-1);
+    };
+    const start = fakeClock(), d = makeDeps(box, { now: start.now, sleep: start.sleep, readHealth: () => calmed });
+    assert.equal(await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps), 0);
+    assert.equal(status(calmed), "gate: open");
+    const busy = { ...calmed, busyCpuPct: 97 }, clock = fakeClock();
+    const held = makeDeps(box, { now: clock.now, sleep: clock.sleep, readHealth: () => busy, spawn: assert.fail });
+    const code = await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "process.exit(0)"], box.ctx, held.deps);
+    const why = "load too high: 14.8 now, 8.0 allowed; CPU 97 % busy now";
+    assert.deepEqual([code, held.said.at(-1)], [75, `gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit`]);
+    assert.equal(status(busy), `gate: shut; ${why}`);
+});
+
 test("run: the journal line stores the fingerprint as fp, the name older copies of the queue read", async () => {
     const box = sandbox(), d = makeDeps(box);
     const args = ["run", "--label", "docs-site: build", "--", NODE, "-e", "process.exit(0)"];
