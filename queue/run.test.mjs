@@ -89,7 +89,7 @@ test("planJob: the limit comes from the journal rows, and the details name it", 
     const rows = Array.from({ length: 5 }, () => passedRun());
     const plan = planJob(request(), DEFAULTS, rows);
     assert.deepEqual([plan.kind, plan.stem, plan.limit.limitMin, plan.refusal, plan.afterFixUsed], ["build", "pnpm run build", 12, null, false]);
-    assert.deepEqual(plan.details, { kind: "build", stem: "pnpm run build", limitMin: 12, limitBasis: plan.limit.basis, fingerprint: "f00d" });
+    assert.deepEqual(plan.details, { kind: "build", stem: "pnpm run build", limitMin: 12, limitBasis: plan.limit.basis, fp: "f00d" });
     assert.equal(planJob(request({ maxRun: 45 }), DEFAULTS, rows).limit.basis, "the --max-run flag");
     assert.equal(planJob(request({ kind: "Deploy" }), DEFAULTS, []).kind, "deploy");
 });
@@ -201,6 +201,14 @@ test("run: when the wait limit runs out, exit 75 names each health reading that 
     const printed = [];
     assert.equal(cmdStatus(box.ctx, { readHealth: () => reading, print: (text) => printed.push(text) }), 0);
     assert.equal(`${printed.join("\n")}\n`, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: shut; ${why}\n`);
+});
+
+test("run: the journal line stores the fingerprint as fp, the name older copies of the queue read", async () => {
+    const box = sandbox(), d = makeDeps(box);
+    const args = ["run", "--label", "docs-site: build", "--", NODE, "-e", "process.exit(0)"];
+    assert.equal(await runCommand(args, box.ctx, d.deps), 0);
+    const [line] = journal(box);
+    assert.deepEqual([typeof line.fp, /^[0-9a-f]+$/.test(line.fp), "fingerprint" in line], ["string", true, false]);
 });
 
 test("run: exit 124 at the run limit stops the whole process group", async () => {

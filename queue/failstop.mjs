@@ -8,8 +8,8 @@ import { HOUR } from "./units.mjs";
 const countsAsAttempt = (row) => row.outcome === "timed-out" || (row.outcome === "ran" && !isStopped(row));
 const failed = (row) => row.outcome === "timed-out" || isFailedRun(row);
 const bothDiffer = (a, b) => a != null && b != null && a !== b;
-// Journal lines written before the field had its full name carry it as fp.
-const printOf = (row) => row.fingerprint ?? row.fp;
+// The journal stores the fingerprint as fp. Lines that call it fingerprint are read as well.
+const printOf = (row) => row.fp ?? row.fingerprint;
 /** Should this run be refused because the same check just failed twice on the same code?
  *  job = { label, cmd, project, cwd, head, fingerprint, at }.
  *  Returns { refuse: false }, { refuse: false, changed: "commit" | "files" | "command" }, or

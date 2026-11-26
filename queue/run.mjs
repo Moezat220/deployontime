@@ -35,7 +35,8 @@ const FORWARD_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
  *  nothing. request: { label, command (the command line as text), kind (given with --kind, or undefined), maxRun,
  *  priority, afterFix, project, cwd, head, fingerprint, queuedAt, tz }.
  *  Returns { kind, stem, limit, refusal, afterFixUsed, details }: refusal is null or { reason }; afterFixUsed is true
- *  when --after-fix let through a run that would have been refused; details go into the journal line. */
+ *  when --after-fix let through a run that would have been refused; details go into the journal line, with the
+ *  fingerprint as fp. */
 export function planJob(request, settings, journalRows) {
     const { label, command, maxRun, priority, afterFix, project, cwd, head, queuedAt, tz } = request;
     const limits = settings.limits;
@@ -52,7 +53,8 @@ export function planJob(request, settings, journalRows) {
         ...(stem ? { stem } : {}),
         limitMin: limit.limitMin,
         limitBasis: limit.basis,
-        fingerprint: request.fingerprint,
+        // Stored as fp, the name every copy of the queue that shares the journal reads.
+        fp: request.fingerprint,
         ...(afterFix ? { afterFix } : {}),
     };
     return {

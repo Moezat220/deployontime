@@ -259,7 +259,7 @@ What is compared between the failures and the new run:
   take the total past 32 MB, counts by its size and modification time;
 - files the job's command mentions by path: their content, when they are smaller than 4 MB.
 
-All of this is hashed on the computer; the journal keeps only a short hash.
+All of this is hashed on the computer; the journal keeps only a short hash, in the field `fp`.
 
 Two groups of untracked files are skipped, because a check rewrites them itself: files inside a folder named in
 `outputDirs`, at any depth, and files ending in `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif`, `.ico`, `.bmp`,
@@ -511,6 +511,13 @@ Environment variables:
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
 A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
+
+Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`,
+`cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
+`waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
+`limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
+`afterFix`, `signal`, `stoppedAt`, `longRunAt` or `warnedAt`. Copies of the queue that share a state folder all read
+the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
 the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no
