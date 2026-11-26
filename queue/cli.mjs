@@ -1,31 +1,20 @@
 #!/usr/bin/env node
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
 // and gate; `passed` looks up a pass stamp; `history` sums up the journal. queue/README.md describes each in full.
-import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
-import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
-import { blockReason, blockText, decide, gateBlocks, gateReason, shouldGiveUp } from "./gate.mjs";
-import { healthVerdict, readHealth } from "./health.mjs";
-import { killTree, signalGroup } from "./proctree.mjs";
-import { afterMinutes, MAX_TIMER_MS } from "./timer.mjs";
-import { cmdStem, kindOf } from "./kinds.mjs";
-import { decideLimit, kindStats, stemStats } from "./limits.mjs";
-import { fingerprint } from "./fingerprint.mjs";
-import { failStop } from "./failstop.mjs";
-import { addNotice, longRunAlert } from "./notices.mjs";
+import { snapshot } from "./slots.mjs";
+import { gateReason } from "./gate.mjs";
+import { cachedHealth, healthVerdict, readHealth } from "./health.mjs";
 import { gitState } from "./git.mjs";
-import { addWait, append, cmdString, findStamp, historyWindow, jobEnd, readLines, record, summarize } from "./journal.mjs";
+import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
-import { folderProject, jobProject } from "./project.mjs";
-import { flagError, opt, parseRunArgs, USAGE } from "./args.mjs";
-import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./group.mjs";
+import { folderProject } from "./project.mjs";
+import { flagError, opt, USAGE } from "./args.mjs";
+import { EXIT, realDeps, runCommand } from "./run.mjs";
+import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
-const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
-const REPEAT_WAIT_LINE_MS = MINUTE;
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". */
 export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
@@ -58,12 +47,12 @@ export function historyRow(name, t) {
 }
 
 const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-function cmdStatus({ settings, files }) {
+/** Prints `status` and returns 0. deps: { readHealth, print }. */
+export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
     const { holders, queue } = snapshot({ dirs: files });
-    const gate = gateReason({ holders, health: healthVerdict(readHealth(), settings.health) }, settings.slots);
-    for (const line of statusLines({ holders, queue, gate, max: settings.slots })) console.log(line);
+    const gate = gateReason({ holders, health: healthVerdict(read(), settings.health) }, settings.slots);
+    for (const line of statusLines({ holders, queue, gate, max: settings.slots })) print(line);
     return 0;
 }
 
@@ -85,164 +74,32 @@ function cmdHistory(args, { files, tz }) {
     return 0;
 }
 
-/** Runs one job and resolves with the exit code for `run`. */
-async function cmdRun(args, { settings, files, tz }) {
-    const parsed = parseRunArgs(args, settings);
-    if (parsed.error) { if (parsed.error === USAGE) process.stderr.write(`${USAGE}\n`); else say(parsed.error); return EXIT.usage; }
-    const { label, cmd, priority, maxWait, maxRun, afterFix } = parsed, L = settings.limits, max = settings.slots;
-    const queuedAt = Date.now(), cwd = process.cwd(), folder = folderProject(cwd), command = cmdString(cmd);
-    const project = jobProject({ label, project: folder, cwd }), tally = {};
-
-    const past = readLines(files.journal), kind = kindOf(label, command, parsed.kind), stem = cmdStem(command);
-    const window = { project, now: queuedAt, windowDays: L.windowDays };
-    const limit = decideLimit({ maxRun, kind, stats: kindStats(past, { ...window, kind }), stem: stemStats(past, { ...window, stem }), priority }, L);
-    const before = { ...gitState(cwd), fp: fingerprint(cwd, cmd, settings.outputDirs) };
-    const details = { kind, ...(stem ? { stem } : {}), limitMin: limit.limitMin, limitBasis: limit.basis, fp: before.fp, ...(afterFix ? { afterFix } : {}) };
-    let slot = null, startedAt = null, written = false, commit = { head: null, clean: null };
-    const finish = (outcome, exit, more = {}) => {
-        if (written) return;
-        written = true;
-        append(record({ label, project: folder, cwd, priority, queuedAt, startedAt, endedAt: Date.now(), outcome, exit, tally, cmd: command, ...commit, extra: { ...details, ...more } }), files.journal);
-    };
-    const verdict = failStop(past, { label, cmd: command, project, cwd, head: before.head, fp: before.fp, at: queuedAt }, L, tz);
-    if (verdict.refuse && !afterFix) {
-        commit = before;
-        finish("refused", EXIT.refused);
-        say(`refused: exit ${EXIT.refused}; ${verdict.reason}`);
-        return EXIT.refused;
-    }
-    if (verdict.refuse) say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
-
-    // Wait in line.
-    const ticket = enqueue(process.pid, label, priority, files);
-    const leaveQueue = () => { rmSync(ticket, { force: true }); releaseSlot(slot, process.pid); };
-    process.on("exit", leaveQueue);
-    const whileWaiting = ["SIGINT", "SIGTERM"].map((signal) => [signal, () => { finish("left", EXIT.left, { signal }); leaveQueue(); process.exit(EXIT.left); }]);
-    for (const [signal, handler] of whileWaiting) process.on(signal, handler);
-    const waitFrom = Date.now();
-    let shownPosition = 0, shownAt = 0;
-    while (!slot) {
-        const snap = snapshot({ dirs: files }), turn = decide(snap, process.pid, max), ahead = turn.position - 1;
-        // Only full slots make the health reading irrelevant to a waiter.
-        const slotFree = snap.holders.length < max;
-        const health = turn.go || slotFree ? healthVerdict(readHealth(), settings.health) : null;
-        if (turn.go && health.ok) {
-            slot = takeSlot(process.pid, label, max, { kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd, ...(priority ? { priority: true } : {}) }, files);
-        }
-        if (slot) break;
-        const heldBy = blockReason({ holders: snap.holders, health, ahead }, max);
-        const giveUp = shouldGiveUp({ startedAt: waitFrom, now: Date.now(), maxWaitMin: maxWait });
-        if (giveUp || turn.position !== shownPosition || Date.now() - shownAt > REPEAT_WAIT_LINE_MS) {
-            const all = gateBlocks({ holders: snap.holders, health: health ?? healthVerdict(readHealth(), settings.health), ahead }, max);
-            const why = blockText(all) || "slot lost: another job took it a moment ago";
-            if (giveUp) {
-                finish("gave-up", EXIT.gaveUp);
-                say(`gave up: exit ${EXIT.gaveUp}, position ${turn.position}, ${minutesSince(waitFrom)} min waited; ${why}; hint: --max-wait 0 waits without limit`);
-                leaveQueue();
-                return EXIT.gaveUp;
-            }
-            say(`in line: position ${turn.position}, ${minutesSince(waitFrom)} min waited, ${maxWait ? `wait limit ${maxWait} min` : "no wait limit"}; ${why}`);
-            shownPosition = turn.position;
-            shownAt = Date.now();
-        }
-        const sleptFrom = Date.now();
-        await sleep(settings.pollMs);
-        addWait(tally, heldBy, Date.now() - sleptFrom);
-    }
-
-    // Run the job. The commit is read at this point because it is what a pass stamp will vouch for.
-    commit = gitState(cwd);
-    startedAt = Date.now();
-    rmSync(ticket, { force: true });
-    if (startedAt - waitFrom > 5000) say(`started: ${minutesSince(waitFrom)} min in line`);
-    for (const [signal, handler] of whileWaiting) process.off(signal, handler);
-    const wrapper = fileURLToPath(new URL("./group.mjs", import.meta.url));
-    // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
-    // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
-    const child = spawn(process.execPath, [wrapper, String(process.pid), ...cmd], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
-    updateSlot(slot, process.pid, { pgid: child.pid, startedAt });
-    const signalJob = (signal) => {
-        if (signalGroup(child.pid, signal).sent) return;
-        try { child.kill(signal); } catch { /* already gone */ }
-    };
-
-    // INT, TERM and HUP go on to the job; the first one received is kept for the journal.
-    let received = null, receivedAt = null;
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-        process.on(signal, () => { if (!received) { received = signal; receivedAt = Date.now(); } signalJob(signal); });
-    }
-    process.on("exit", () => { if (child.exitCode === null && child.signalCode === null) signalJob("SIGTERM"); });
-
-    let pastLimit = false, longRunAt = null, warnedAt = null, ended = false, done;
-    const result = new Promise((resolve) => { done = resolve; });
-    const end = (exit) => { if (!ended) { ended = true; releaseSlot(slot, process.pid); done(exit); } };
-    const stamps = () => ({ ...(longRunAt ? { longRunAt: new Date(longRunAt).toISOString() } : {}), ...(warnedAt ? { warnedAt: new Date(warnedAt).toISOString() } : {}) });
-    const endTimedOut = () => {
-        if (ended) return;
-        killTree(child.pid, "SIGKILL");
-        finish("timed-out", EXIT.timedOut, stamps());
-        say(`timed out: exit ${EXIT.timedOut}, stopped after ${limit.killMin} min; hint: the kind was taken as ${kind} (--kind <name> overrides it), and --max-run <min> sets the limit directly`);
-        end(EXIT.timedOut);
-    };
-    afterMinutes(limit.killMin, () => {
-        pastLimit = true;
-        say(`run limit: stopping "${label}", KILL follows TERM after ${L.killGraceMs / 1000} s; ran ${limit.killMin} min against a limit of ${limit.limitMin} min, set by ${limit.basis}`);
-        killTree(child.pid, "SIGTERM");
-        setTimeout(() => killTree(child.pid, "SIGKILL"), L.killGraceMs).unref();
-        // Backstop for a wrapper that never exits.
-        setTimeout(endTimedOut, Math.min(L.killGraceMs + 5000, MAX_TIMER_MS)).unref();
-    });
-    if (priority) {
-        afterMinutes(limit.limitMin, () => {
-            warnedAt = Date.now();
-            say(`priority warning: hard stop at ${limit.killMin} min, the ${limit.limitMin} min limit (set by ${limit.basis}) was passed by "${label}"`);
-        });
-    }
-    if (limit.notifyLongRun) {
-        afterMinutes(limit.longRunMin, () => {
-            longRunAt = Date.now();
-            try {
-                const alert = longRunAlert({ label, project, pid: process.pid, minutes: minutesSince(startedAt, longRunAt), longRunBasis: limit.longRunBasis, limitMin: limit.limitMin, killMin: limit.killMin, startedAt, waiting: snapshot({ dirs: files }).queue, now: longRunAt, tz });
-                say(alert.message);
-                notify(alert.title, alert.message, { env: process.env, logFile: files.notifyLog });
-                addNotice(alert.key, alert.entry, files.notices);
-            } catch { /* a notice that fails must not disturb the job */ }
-        });
-    }
-    wrapperEnd(child, child.stdio[3]).then(({ code, signal, report }) => {
-        if (pastLimit) return endTimedOut();
-        const startFailed = readStartFailure(report);
-        if (startFailed !== null) {
-            finish("could-not-start", EXIT.noStart, stamps());
-            say(`start failed: exit ${EXIT.noStart}, ${startFailed}`);
-            return end(EXIT.noStart);
-        }
-        const exit = code ?? (signal ? 1 : 0), how = jobEnd({ code, signal, received });
-        finish(how.outcome, exit, { ...stamps(), ...(how.signal ? { signal: how.signal, stoppedAt: new Date(receivedAt ?? Date.now()).toISOString() } : {}) });
-        if (how.signal) say(`stopped: signal ${how.signal}, ${minutesSince(startedAt)} min run, journalled as stopped and not as failed`);
-        end(exit);
-    });
-    // The wrapper is node itself, so this happens only when the system cannot start a process at all.
-    child.on("error", (e) => {
-        finish("could-not-start", EXIT.noStart);
-        say(`start failed: exit ${EXIT.noStart}, ${e.message}`);
-        end(EXIT.noStart);
-    });
-    return result;
-}
-
-/** Runs one subcommand and resolves with its exit code. */
+/** Runs one subcommand and resolves with its exit code. Nothing in here or below ends the process: the one call of
+ *  process.exit() is at the end of this file. */
 export async function main(args = process.argv.slice(2)) {
-    if (args[0] === "help" || args[0] === "--help") { console.log(USAGE); return 0; }
+    if (args[0] === "help" || args[0] === "--help") {
+        console.log(USAGE);
+        return 0;
+    }
     const command = args.length ? args[0] : "status";
     const badFlag = command === "run" ? null : flagError([command, ...args.slice(1)]);
-    if (badFlag) { say(badFlag); return EXIT.usage; }
+    if (badFlag) {
+        say(badFlag);
+        return EXIT.usage;
+    }
     // The settings, the state folder and the zone are read once here and handed to the command.
-    const ctx = { settings: loadSettings(), files: paths(), tz: timeZone() };
+    const ctx = { settings: loadSettings(), files: paths(), tz: timeZone(), cwd: process.cwd() };
     if (command === "status") return cmdStatus(ctx);
     if (command === "passed") return cmdPassed(args, ctx);
     if (command === "history") return cmdHistory(args, ctx);
-    return cmdRun(args, ctx);
+    const { settings, files } = ctx;
+    const deps = realDeps({
+        // Jobs that wait at the same time share one health reading per poll.
+        readHealth: () => cachedHealth(files.healthCache, settings.pollMs),
+        notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
+        after: afterMinutes,
+    });
+    return runCommand(args, ctx, deps);
 }
 
 if (isMainModule(import.meta.url)) process.exit(await main());

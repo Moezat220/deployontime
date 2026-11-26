@@ -440,7 +440,7 @@ default. Only a missing file is silent.
 | --- | --- | --- |
 | `slots` | 2 | Jobs that may run at once. At least 1; a fraction is rounded down. |
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
-| `pollMs` | 3000 | How often a waiting job looks at the line. Above 0. |
+| `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core. Above 0. |
 | `health.minFreeMemPct` | 20 | Gate shuts below this free memory, in percent, as `memory_pressure` reports it. |
 | `health.minFreeDiskGB` | 10 | Gate shuts below this free disk space. |
@@ -501,6 +501,7 @@ Environment variables:
 | `notices.json` | Long-run and idle-slot notices. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
+| `health.json` | The last health reading of a waiting job, which other waiting jobs reuse for up to `pollMs`. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
 A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
@@ -523,7 +524,6 @@ npm test                         # everything (the same as node --test)
 node --test queue/slots.test.mjs # one file
 ```
 
-The tests use two switches that exist only for them: `DOTIME_FAKE_HEALTH` (a health reading as JSON) and
-`DOTIME_FAKE_CLOCK` (path of a file whose number stands in for the minutes passed since a job started). Both are
-honoured only when the real path of `DOTIME_HOME` is inside the real path of `os.tmpdir()`. With any other state
-folder they are ignored.
+The code has no switch for the tests. A test that needs a made-up health reading, or a clock that jumps ahead, runs
+the steps of `run` inside the test process and hands them stand-ins for the clock, the health reading and the
+signals (see `queue/run.test.mjs`). Every test file gets a state folder of its own inside the temp folder.

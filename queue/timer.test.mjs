@@ -1,45 +1,36 @@
+import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dirname, join } from "node:path";
-import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { isolateProcess, pause, until } from "./testkit.mjs";
+import { until } from "./testkit.mjs";
+import { afterMinutes, MAX_TIMER_MS } from "./timer.mjs";
 
-const HOME = isolateProcess("timer");
-const { afterMinutes } = await import("./timer.mjs");
+// Stands in for setTimeout: keeps each timer so the test fires it by hand.
+function manualTimers() {
+    const set = [];
+    const schedule = (fn, ms) => {
+        const timer = { fn, ms, unref: () => timer };
+        set.push(timer);
+        return timer;
+    };
+    return { set, schedule, fireNext: () => set.at(-1).fn() };
+}
 
-test("afterMinutes: follows the fake clock file when the state folder is inside the temp folder", async () => {
-    const clock = join(HOME, "clock-a");
+test("afterMinutes: a short wait fires once on a real timer", async () => {
     let calls = 0;
-    afterMinutes(6, () => calls++, { DOTIME_HOME: HOME, DOTIME_FAKE_CLOCK: clock });
-    await pause(150);
-    writeFileSync(clock, "5");
-    await pause(150);
-    assert.equal(calls, 0);
-    writeFileSync(clock, "6");
+    afterMinutes(0.001, () => calls++);
     await until(() => calls === 1, 2000);
-    writeFileSync(clock, "60");
-    await pause(150);
     assert.equal(calls, 1);
 });
 
-test("afterMinutes: a wait longer than one timer can hold does not fire early", async () => {
+test("afterMinutes: a wait longer than one timer can hold is made of timers in a row and fires only at the end", () => {
+    const timers = manualTimers();
     let calls = 0;
-    const timer = afterMinutes(99_999, () => calls++, {});
-    await new Promise((done) => setTimeout(done, 50));
-    clearTimeout(timer);
-    assert.equal(calls, 0);
-});
-
-test("afterMinutes: uses a real timer everywhere else", async () => {
-    const clock = join(HOME, "clock-b"), outsideTemp = dirname(fileURLToPath(import.meta.url));
-    writeFileSync(clock, "0");
-    let calls = 0;
-    const timers = [afterMinutes(0.001, () => calls++, { DOTIME_FAKE_CLOCK: clock }), afterMinutes(0.001, () => calls++, { DOTIME_HOME: outsideTemp, DOTIME_FAKE_CLOCK: clock })];
-    await until(() => calls === 2, 2000);
-    const slow = afterMinutes(30, () => calls++, { DOTIME_HOME: outsideTemp, DOTIME_FAKE_CLOCK: clock });
-    writeFileSync(clock, "30");
-    await pause(150);
-    assert.equal(calls, 2);
-    for (const timer of [...timers, slow]) clearTimeout(timer);
+    afterMinutes(99_999, () => calls++, timers.schedule);
+    const total = 99_999 * 60_000;
+    assert.deepEqual(timers.set.map((t) => t.ms), [MAX_TIMER_MS]);
+    timers.fireNext();
+    timers.fireNext();
+    assert.deepEqual([calls, timers.set.map((t) => t.ms)], [0, [MAX_TIMER_MS, MAX_TIMER_MS, total - 2 * MAX_TIMER_MS]]);
+    timers.fireNext();
+    assert.equal(calls, 1);
 });

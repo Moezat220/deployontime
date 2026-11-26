@@ -1,7 +1,7 @@
 // The health gate. A new job may start only while load, free memory, free disk and battery are inside their limits.
 // healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading.
-import { isSandbox } from "./settings.mjs";
 import { probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
+import { readJson, writeJsonAtomic } from "./files.mjs";
 
 /** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
  *  the health settings. */
@@ -48,11 +48,20 @@ export function readBattery(probe = probePowerText) {
     } catch { return null; }
 }
 
-/** The current reading. Inside a sandbox state folder, DOTIME_FAKE_HEALTH (JSON) stands in for it. */
-export function readHealth({ env = process.env, probes = {} } = {}) {
-    if (env.DOTIME_FAKE_HEALTH && isSandbox(env)) {
-        try { return JSON.parse(env.DOTIME_FAKE_HEALTH); } catch { /* fall through to the real reading */ }
-    }
+/** The current reading: { load, cores, freePct, diskGB, battery }. probes replaces single readings. */
+export function readHealth({ probes = {} } = {}) {
     const read = { load: probeLoad, memory: probeMemoryFreePct, disk: probeDiskFreeGB, battery: readBattery, ...probes };
     return { ...read.load(), freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
+}
+
+/** A reading at most maxAgeMs old, shared through a file in the state folder, so jobs that wait at the same time
+ *  take one reading per poll between them instead of one each. A cache that cannot be read or written only means
+ *  a fresh reading. */
+export function cachedHealth(file, maxAgeMs, read = readHealth, now = Date.now()) {
+    const saved = readJson(file, null);
+    const age = now - saved?.at;
+    if (saved?.reading && age >= 0 && age < maxAgeMs) return saved.reading;
+    const reading = read();
+    try { writeJsonAtomic(file, { at: now, reading }); } catch { /* the next poll reads again */ }
+    return reading;
 }

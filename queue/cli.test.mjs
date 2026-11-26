@@ -1,13 +1,14 @@
-// The end-to-end tests start the real cli.mjs. Each one gets its own state folder inside the temp folder, a made-up
-// health reading, short timers from that folder's config.json, and notices that go to the log file only. Signals are
-// sent only to processes started here.
+// The end-to-end tests start the real cli.mjs. Each one gets its own state folder inside the temp folder, short timers
+// and health limits so wide that no reading of this computer shuts the gate, both from that folder's config.json,
+// and notices that go to the log file only. Tests that need a made-up health reading or a clock that jumps ahead
+// run the same command in this process instead, in run.test.mjs. Signals are sent only to processes started here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, makeRepo, pause, settingEnv, tempDir, track, until } from "./testkit.mjs";
+import { cleanEnv, isolateProcess, makeRepo, settingEnv, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("cli");
 const { historyRow, main, statusLines } = await import("./cli.mjs");
@@ -17,12 +18,13 @@ const { alive } = await import("./proctree.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url)), NODE = process.execPath, MINUTE = 60_000;
-const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
+const WIDE_OPEN = { loadPerCore: 1000, minFreeMemPct: 0, minFreeDiskGB: 0, minBatteryPct: 0 };
 
-function sandbox({ config = {}, health = CALM, env = {} } = {}) {
+function sandbox({ config = {}, env = {} } = {}) {
     const home = tempDir("cli-home"), work = tempDir("cli-work");
-    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, ...config, limits: { killGraceMs: 250, orphanCheckMs: 80, ...config.limits } }));
-    return { home, work, env: cleanEnv(home, { DOTIME_FAKE_HEALTH: JSON.stringify(health), ...env }), clock: join(home, "fake-minutes") };
+    const limits = { killGraceMs: 250, orphanCheckMs: 80, ...config.limits };
+    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, ...config, health: { ...WIDE_OPEN, ...config.health }, limits }));
+    return { home, work, env: cleanEnv(home, env) };
 }
 function start(box, args, { cwd = box.work, env = box.env } = {}) {
     const child = track(spawn(NODE, [CLI, ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] }));
@@ -32,7 +34,6 @@ function start(box, args, { cwd = box.work, env = box.env } = {}) {
     return { child, seen, done: new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal, ...seen }))) };
 }
 const cli = (box, args, options) => start(box, args, options).done;
-const withClock = (box) => ({ env: { ...box.env, DOTIME_FAKE_CLOCK: box.clock } });
 const journal = (box) => { try { return readFileSync(join(box.home, "journal.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)); } catch { return []; } };
 const slots = (box) => { try { return readdirSync(join(box.home, "slots")).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(box.home, "slots", name), "utf8"))); } catch { return []; } };
 const count = (text, part) => text.split(part).length - 1;
@@ -146,79 +147,6 @@ test("run: a caller's environment cannot raise the slot count", async () => {
     assert.deepEqual([result.code, result.stdout], [75, ""]);
     assert.equal(result.stderr.includes('no free slot: 1 of 1 taken, by "docs-site: build"'), true);
     assert.equal((await cli(box, ["status"], { env: pushy })).stdout.startsWith("slots: 1 of 1 taken"), true);
-});
-
-test("run: when the wait limit runs out, exit 75 names each health reading that kept the gate shut", async () => {
-    const box = sandbox({ config: { health: { loadPerCore: 2, minFreeDiskGB: 12 } }, health: { load: 50, cores: 4, freePct: 70, diskGB: 0 } });
-    const result = await cli(box, ["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"]);
-    assert.deepEqual([result.code, result.stdout], [75, ""]);
-    const why = "load too high: 50.0 now, 8.0 allowed; disk too low: 0.0 GB free, 12 GB needed";
-    assert.equal(result.stderr.includes(`in line: position 1, 0 min waited, wait limit 0.01 min; ${why}\n`), true);
-    assert.equal(result.stderr.endsWith(`gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit\n`), true);
-    const [line] = journal(box);
-    assert.deepEqual([line.outcome, line.exit, Object.keys(line.waitBy).sort(), line.startedAt], ["gave-up", 75, ["disk", "load"], null]);
-    assert.deepEqual(readdirSync(join(box.home, "line")), []);
-    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: shut; ${why}\n`);
-});
-
-test("run: exit 124 at the run limit stops the whole process group", async () => {
-    const box = sandbox(), pidFile = join(box.work, "child.pid");
-    const run = start(box, ["run", "--label", "shop-api: e2e", "--max-run", "3", "--", NODE, "-e", withChild(pidFile)], withClock(box));
-    await until(() => existsSync(pidFile));
-    const jobChild = pidIn(pidFile);
-    writeFileSync(box.clock, "2");
-    await pause(200);
-    assert.deepEqual([run.child.exitCode, alive(jobChild)], [null, true]);
-    writeFileSync(box.clock, "3");
-    const result = await run.done;
-    assert.equal(result.code, 124);
-    assert.equal(result.stderr.includes('run limit: stopping "shop-api: e2e", KILL follows TERM after 0.25 s; ran 3 min against a limit of 3 min, set by the --max-run flag\n'), true);
-    assert.equal(result.stderr.includes("timed out: exit 124, stopped after 3 min; hint: "), true);
-    await until(() => !alive(jobChild), 3000);
-    assert.deepEqual([journal(box).map((line) => [line.outcome, line.exit]), slots(box)], [[["timed-out", 124]], []]);
-});
-
-test("run: with --priority the limit only warns, and the stop comes at double the limit", async () => {
-    const box = sandbox(), pidFile = join(box.work, "job.pid");
-    const run = start(box, ["run", "--priority", "--label", "mobile-app: store upload", "--max-run", "4", "--", NODE, "-e", savePid(pidFile)], withClock(box));
-    await until(() => existsSync(pidFile));
-    const job = pidIn(pidFile);
-    assert.deepEqual([slots(box)[0].priority, slots(box)[0].limitMin, slots(box)[0].killMin], [true, 4, 8]);
-    writeFileSync(box.clock, "4");
-    await until(() => run.seen.stderr.includes("priority warning"));
-    writeFileSync(box.clock, "7");
-    await pause(300);
-    assert.deepEqual([run.child.exitCode, alive(job), slots(box).length], [null, true, 1]);
-    assert.equal(run.seen.stderr, 'dotime-queue: priority warning: hard stop at 8 min, the 4 min limit (set by the --max-run flag) was passed by "mobile-app: store upload"\n');
-    writeFileSync(box.clock, "8");
-    const result = await run.done;
-    assert.equal(result.code, 124);
-    assert.equal(result.stderr.includes('run limit: stopping "mobile-app: store upload"') && result.stderr.includes("ran 8 min against a limit of 4 min"), true);
-    await until(() => !alive(job), 3000);
-    const [line] = journal(box);
-    assert.deepEqual([line.outcome, line.priority, typeof line.warnedAt], ["timed-out", true, "string"]);
-});
-
-test("run: the long-run notice fires once", async () => {
-    const box = sandbox({ config: { limits: { longRunUnmeasuredMin: 20 } } }), release = join(box.work, "release");
-    const run = start(box, ["run", "--label", "docs-site: build", "--max-run", "50", "--", NODE, "-e", untilFile(release)], withClock(box));
-    await until(() => slots(box)[0]?.pgid);
-    writeFileSync(box.clock, "19");
-    await pause(200);
-    assert.equal(existsSync(join(box.home, "notify.log")), false);
-    writeFileSync(box.clock, "20");
-    await until(() => existsSync(join(box.home, "notices.json")));
-    for (const minutes of ["21", "35", "49"]) { writeFileSync(box.clock, minutes); await pause(120); }
-    writeFileSync(release, "");
-    const result = await run.done;
-    assert.equal(result.code, 0);
-    assert.equal(count(result.stderr, "long run:"), 1);
-    assert.equal(result.stderr.includes('long run: "docs-site: build" of project docs-site, pid '), true);
-    const logged = readFileSync(join(box.home, "notify.log"), "utf8").split("\n").filter(Boolean);
-    assert.deepEqual(logged.map((line) => line.split("\t")[1]), ["dotime: job running long"]);
-    const stored = Object.values(JSON.parse(readFileSync(join(box.home, "notices.json"), "utf8")));
-    assert.deepEqual(stored.map((entry) => [entry.type, entry.label, entry.waiting]), [["long-run", "docs-site: build", []]]);
-    assert.equal(typeof journal(box)[0].longRunAt, "string");
 });
 
 test("run: when the queue process is killed, its job is stopped", async () => {

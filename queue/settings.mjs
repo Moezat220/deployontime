@@ -2,8 +2,8 @@
 // file is shared by all callers on the machine, so one caller cannot loosen a limit for itself. The environment only
 // selects the state folder, the time zone and the notice channel.
 import { realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readJson } from "./files.mjs";
 
@@ -41,14 +41,6 @@ const NUMBER_RULES = {
 export const defaultHome = () => join(homedir(), ".dotime");
 export const homeDir = (env = process.env) => (env.DOTIME_HOME ? resolve(env.DOTIME_HOME) : defaultHome());
 
-const realOrNull = (p) => { try { return realpathSync(p); } catch { return null; } };
-/** True only for a state folder that exists inside the system temp folder. Test-only switches need this. */
-export function isSandbox(env = process.env) {
-    if (!env.DOTIME_HOME) return false;
-    const home = realOrNull(env.DOTIME_HOME), tmp = realOrNull(tmpdir());
-    return !!home && !!tmp && home.startsWith(tmp + sep) && home !== realOrNull(defaultHome());
-}
-
 /** True when this module file is the script node was started with, also through a symlink. */
 export function isMainModule(moduleUrl, script = process.argv[1]) {
     try { return pathToFileURL(realpathSync(script)).href === moduleUrl; } catch { return false; }
@@ -65,6 +57,7 @@ export function paths(env = process.env) {
         notices: join(home, "notices.json"),
         notifyLog: join(home, "notify.log"),
         reaperState: join(home, "reaper-state.json"),
+        healthCache: join(home, "health.json"),
         scheduleRules: join(home, "schedule-check.json"),
         scheduleLog: join(home, "schedule-check.jsonl"),
     };

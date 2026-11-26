@@ -1,11 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { settingEnv, tempDir } from "./testkit.mjs";
-import { DEFAULTS, defaultHome, homeDir, isMainModule, isSandbox, loadSettings, paths, timeZone } from "./settings.mjs";
+import { DEFAULTS, defaultHome, homeDir, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const collect = () => { const seen = []; return { seen, warn: (text) => seen.push(text) }; };
@@ -16,18 +15,6 @@ test("homeDir: uses DOTIME_HOME, else the default folder", () => {
     assert.equal(homeDir({ DOTIME_HOME: dir }), dir);
     assert.equal(homeDir({}), defaultHome());
     assert.ok(defaultHome().endsWith(".dotime"));
-});
-
-test("isSandbox: true only for an existing folder inside the system temp folder", () => {
-    const inside = tempDir("settings"), link = join(inside, "elsewhere");
-    symlinkSync(HERE, link);
-    assert.equal(isSandbox({ DOTIME_HOME: inside }), true);
-    assert.equal(isSandbox({}), false);
-    assert.equal(isSandbox({ DOTIME_HOME: defaultHome() }), false);
-    assert.equal(isSandbox({ DOTIME_HOME: HERE }), false);
-    assert.equal(isSandbox({ DOTIME_HOME: tmpdir() }), false);
-    assert.equal(isSandbox({ DOTIME_HOME: join(inside, "not-created") }), false);
-    assert.equal(isSandbox({ DOTIME_HOME: link }), false);
 });
 
 test("isMainModule: compares real paths, so a symlink to the script still matches", () => {

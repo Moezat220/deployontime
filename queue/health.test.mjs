@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
-import { healthVerdict, parsePower, powerState, readBattery, readHealth } from "./health.mjs";
+import { cachedHealth, healthVerdict, parsePower, powerState, readBattery, readHealth } from "./health.mjs";
 
 const LIMITS = { loadPerCore: 2, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
 const roomy = { load: 1.5, cores: 4, freePct: 45, diskGB: 120, battery: null };
@@ -71,15 +71,25 @@ test("readBattery: null whenever the reading is incomplete or the probe fails", 
 
 test("readHealth: combines the probes it is given", () => {
     const probes = { load: () => ({ load: 0.8, cores: 6 }), memory: () => 71, disk: () => 0, battery: () => null };
-    assert.deepEqual(readHealth({ env: {}, probes }), { load: 0.8, cores: 6, freePct: 71, diskGB: 0, battery: null });
+    assert.deepEqual(readHealth({ probes }), { load: 0.8, cores: 6, freePct: 71, diskGB: 0, battery: null });
 });
 
-test("readHealth: DOTIME_FAKE_HEALTH is used only when the state folder is inside the temp folder", () => {
-    const probes = { load: () => ({ load: 0.8, cores: 6 }), memory: () => 71, disk: () => 300, battery: () => null };
-    const fake = JSON.stringify({ load: 55, cores: 2, freePct: 4, diskGB: 2 });
-    const outsideTemp = dirname(fileURLToPath(import.meta.url));
-    assert.equal(readHealth({ env: { DOTIME_HOME: tempDir("health"), DOTIME_FAKE_HEALTH: fake }, probes }).load, 55);
-    assert.equal(readHealth({ env: { DOTIME_HOME: outsideTemp, DOTIME_FAKE_HEALTH: fake }, probes }).load, 0.8);
-    assert.equal(readHealth({ env: { DOTIME_FAKE_HEALTH: fake }, probes }).load, 0.8);
-    assert.equal(readHealth({ env: { DOTIME_HOME: tempDir("health"), DOTIME_FAKE_HEALTH: "{broken" }, probes }).load, 0.8);
+test("cachedHealth: one reading per poll time, shared through the cache file", () => {
+    const file = join(tempDir("health"), "health.json");
+    let readings = 0;
+    const read = () => ({ load: ++readings, cores: 4, freePct: 50, diskGB: 80, battery: null });
+    assert.equal(cachedHealth(file, 3000, read, 10_000).load, 1);
+    assert.equal(cachedHealth(file, 3000, read, 12_999).load, 1, "a second waiter within the poll time");
+    assert.equal(cachedHealth(file, 3000, read, 13_000).load, 2, "a new reading once the poll time has passed");
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { at: 13_000, reading: { load: 2, cores: 4, freePct: 50, diskGB: 80, battery: null } });
+    assert.equal(cachedHealth(file, 3000, read, 9_000).load, 3, "a reading from the future is not trusted");
+});
+
+test("cachedHealth: a broken or unwritable cache only means a fresh reading", () => {
+    const dir = tempDir("health"), broken = join(dir, "health.json"), blocked = join(dir, "folder");
+    writeFileSync(broken, "{");
+    mkdirSync(join(blocked, "health.json"), { recursive: true });
+    const read = () => ({ load: 0.5, cores: 4, freePct: 50, diskGB: 80, battery: null });
+    assert.equal(cachedHealth(broken, 3000, read, 1000).load, 0.5);
+    assert.equal(cachedHealth(join(blocked, "health.json"), 3000, read, 1000).load, 0.5);
 });
