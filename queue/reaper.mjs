@@ -19,8 +19,8 @@ import { readJson, writeJsonAtomic } from "./files.mjs";
 import { HOUR, MINUTE } from "./units.mjs";
 import { probeGroupOf, probeLoad, probeProcessCpu, probeProcessTable, probeSwapPct } from "./probes.mjs";
 
-// Minimum time between two notices of the same sort.
-const REPEAT = { stray: HOUR, overload: HOUR, lowDisk: 6 * HOUR };
+// Minimum time between two notices of the same sort; for a failed stop, of the same process group.
+const REPEAT = { stray: HOUR, overload: HOUR, lowDisk: 6 * HOUR, stopFailed: HOUR };
 const OVERLOAD_RUNS = 2;
 
 /** Returns a Map from process group id to its rows. */
@@ -50,11 +50,16 @@ export function serverOnly(procs, server, isServerCmd = () => false) {
 // Each check below takes the readings of this run (ctx) and the state the previous run left, and returns
 // { state, lines } with the state keys it owns, plus what reap() needs to sum up the run.
 
-/** Idle dev servers: a server group that stayed idle for the window is stopped. State: samples, the CPU samples
- *  per process group. */
+/** Idle dev servers: a server group that stayed idle for the window is stopped. A stop that fails sends a notice,
+ *  at most one per group per REPEAT.stopFailed. State: samples, the CPU samples per process group, and
+ *  stopFailedTold, the time of the last failed-stop notice per process group. */
 export async function checkIdleServers(ctx, state) {
     const { groups, holders, now, dry, settings, myPgid, isDevServer, keep, stopIdle, notify } = ctx;
     const samples = { ...state.samples };
+    const stopFailedTold = {};
+    for (const [pgid, at] of Object.entries(state.stopFailedTold ?? {})) {
+        if (groups.has(Number(pgid))) stopFailedTold[pgid] = at;
+    }
     const lines = [];
     const stopped = [];
     const failed = [];
@@ -97,7 +102,12 @@ export async function checkIdleServers(ctx, state) {
             const result = await stopIdle(pgid, procs);
             if (result?.stopped === false) {
                 failed.push(what);
-                lines.push(`stop failed: idle dev server ${what}, ${result.why}`);
+                const text = `stop failed: idle dev server ${what}, ${result.why}`;
+                lines.push(text);
+                if (now - (stopFailedTold[pgid] ?? 0) > REPEAT.stopFailed) {
+                    notify("dotime: dev server stop failed", text);
+                    stopFailedTold[pgid] = now;
+                }
                 continue;
             }
             delete samples[pgid];
@@ -109,7 +119,7 @@ export async function checkIdleServers(ctx, state) {
         lines.push(`${dry ? "dry run, would stop after idling" : "stopped after idling"}: ${stopped.join("; ")}`);
         if (!dry) notify("dotime: dev servers stopped", stopped.join("; "));
     }
-    return { state: { samples }, lines, stopped, failed, watched };
+    return { state: { samples, stopFailedTold }, lines, stopped, failed, watched };
 }
 
 /** Large test runs that bypassed the queue: reported, never stopped, with at most one notice per REPEAT.stray.

@@ -343,9 +343,11 @@ It stops a dev server only when all of these hold:
 - no process in the group holds a slot, runs a one-shot test command, or matches `reaper.keepPattern`, and the group
   is not the reaper's own.
 
-It then sends TERM to the group and, `limits.killGraceMs` later, KILL to what is left. CPU use is compared between
-reaper runs, so one run by hand only takes a sample: idle servers show up only after runs have covered a whole idle
-window.
+It then sends TERM to the group and, `limits.killGraceMs` later, KILL to what is left. When a signal is refused,
+for example for a server that runs as another user, the reaper prints `stop failed: idle dev server ...` with the
+reason, keeps the server under watch, and sends a notice, at most one an hour for the same process group. CPU use
+is compared between reaper runs, so one run by hand only takes a sample: idle servers show up only after runs have
+covered a whole idle window.
 
 Each run also:
 

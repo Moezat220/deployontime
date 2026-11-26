@@ -258,9 +258,18 @@ test("reap: an idle server whose stop was refused is reported as a failed stop, 
     const early = await pass(serverGroup(300), {}, { now: NOW - SAMPLE_AGE * MINUTE });
     const refused = async () => ({ stopped: false, why: "TERM refused (EPERM)" });
     const late = await pass(serverGroup(302), early.state, { stop: refused });
-    assert.deepEqual([late.stopped, late.notices], [[], []]);
-    assert.deepEqual(late.lines, [`stop failed: idle dev server node next (process group 2400, 2.0 s of CPU in ${SAMPLE_AGE} min, 384 MB of memory), TERM refused (EPERM)`]);
+    const text = `stop failed: idle dev server node next (process group 2400, 2.0 s of CPU in ${SAMPLE_AGE} min, 384 MB of memory), TERM refused (EPERM)`;
+    assert.deepEqual(late.stopped, []);
+    assert.deepEqual(late.lines, [text]);
     assert.equal(late.state.samples[2400].length, 2, "the server stays under watch");
+    assert.deepEqual(late.notices, [["dotime: dev server stop failed", text]]);
+    // One notice per group within the hour, and the next after it.
+    const again = await pass(serverGroup(303), late.state, { stop: refused, now: NOW + 30 * MINUTE });
+    assert.deepEqual([again.lines.length, again.notices], [1, []]);
+    const later = await pass(serverGroup(304), again.state, { stop: refused, now: NOW + 61 * MINUTE });
+    assert.equal(later.notices.length, 1);
+    // A group that is gone is forgotten.
+    assert.deepEqual((await pass([], later.state)).state.stopFailedTold, {});
 });
 
 test("reap checks: each one returns only the state keys it owns", async () => {
@@ -270,7 +279,7 @@ test("reap checks: each one returns only the state keys it owns", async () => {
         cpuPs: () => "", keep: null, isDevServer: () => false, stopIdle: assert.fail,
     };
     const state = { samples: {}, streak: 0, lastOverload: 0 };
-    assert.deepEqual(Object.keys((await checkIdleServers(ctx, state)).state), ["samples"]);
+    assert.deepEqual(Object.keys((await checkIdleServers(ctx, state)).state), ["samples", "stopFailedTold"]);
     assert.deepEqual(Object.keys(checkStrayRuns(ctx, state).state), ["strayTold"]);
     assert.deepEqual(Object.keys(checkIdleSlots(ctx, state).state), ["slotIdle"]);
     assert.deepEqual(Object.keys(checkOverload(ctx, state).state), ["streak", "lastOverload"]);
