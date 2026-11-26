@@ -1,6 +1,8 @@
 // Helpers shared by the test files: temp folders and started processes that are cleaned up when the test file
 // ends (also after a failed assertion or a signal), a state folder of their own, and git commands cut off from the
-// configuration and hooks of whoever runs the tests.
+// configuration and hooks of whoever runs the tests. Every test file imports this module first. Importing it already
+// points DOTIME_HOME at a fresh temp folder and sends notices to the log file only, so a test that forgets
+// isolateProcess() still never touches the real state folder.
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -66,6 +68,9 @@ export function tempDir(name) {
     return dir;
 }
 
+process.env.DOTIME_HOME = tempDir("home");
+process.env.DOTIME_NOTIFY = "log";
+
 // Test git runs see none of the developer's git setup: no global or system config, no global ignore or attributes
 // file. GIT_CEILING_DIRECTORIES: a test folder that is not a repository never finds one above the temp folder (TMPDIR
 // may sit inside a checkout). GIT_OPTIONAL_LOCKS=0 keeps a status check read-only, so a test that only looks at a
@@ -77,16 +82,6 @@ export const GIT_ENV = Object.freeze({
     GIT_AUTHOR_NAME: "tester", GIT_AUTHOR_EMAIL: "tester", GIT_COMMITTER_NAME: "tester", GIT_COMMITTER_EMAIL: "tester",
 });
 const QUEUE_ENV = { DOTIME_TZ: "UTC", DOTIME_NOTIFY: "log" };
-
-// An older git ignores some of the variables above without a word and would read the developer's own settings, so
-// the tests refuse to run unless git reports no settings file at all under GIT_ENV.
-{
-    // from a fresh folder of its own: the ceiling stops git below the temp folder, not at it
-    const probe = mkdtempSync(join(realpathSync(tmpdir()), "dotime-gitcheck-"));
-    const seen = spawnSync("git", ["config", "--list", "--show-origin"], { cwd: probe, env: { ...Object.fromEntries(Object.entries(process.env).filter(([n]) => !n.startsWith("GIT_"))), ...GIT_ENV }, encoding: "utf8" });
-    rmSync(probe, { recursive: true, force: true });
-    if (seen.error || /^file:/m.test(seen.stdout ?? "")) throw new Error("git still reads a settings file under the test settings; use a newer git to run the tests");
-}
 
 // GIT_DIR, GIT_INDEX_FILE and friends are set when the tests run inside a git hook; inherited, they would point
 // the test repositories at the developer's own repository. Every GIT_ variable is dropped before GIT_ENV is added.
@@ -107,7 +102,24 @@ export function isolateProcess(name) {
     return home;
 }
 
+// An older git ignores some of the variables above without a word and would read the developer's own settings, so
+// the first git command of a test file refuses to run unless git reports no settings file at all under GIT_ENV.
+let gitChecked = false;
+function checkGitIsolation() {
+    if (gitChecked) return;
+    // from a fresh folder of its own: the ceiling stops git below the temp folder, not at it
+    const probe = mkdtempSync(join(realpathSync(tmpdir()), "dotime-gitcheck-"));
+    const env = { ...gitFree(), ...GIT_ENV };
+    const seen = spawnSync("git", ["config", "--list", "--show-origin"], { cwd: probe, env, encoding: "utf8" });
+    rmSync(probe, { recursive: true, force: true });
+    if (seen.error || /^file:/m.test(seen.stdout ?? "")) {
+        throw new Error("git still reads a settings file under the test settings; use a newer git to run the tests");
+    }
+    gitChecked = true;
+}
+
 export function git(cwd, ...args) {
+    checkGitIsolation();
     const ran = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-C", cwd, ...args], { env: { ...gitFree(), ...GIT_ENV }, encoding: "utf8" });
     if (ran.status !== 0) throw new Error(`git ${args[0]} did not succeed`);
     return ran.stdout;

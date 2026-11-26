@@ -1,3 +1,4 @@
+import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { idleText, isServer, psSeconds, sampleKeepMs, SAMPLING, serverIdleVerdict, sinceReset, slotIdleVerdict, TEST_RUN_RE } from "./idle.mjs";

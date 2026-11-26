@@ -1,3 +1,4 @@
+import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STRAY, strayRuns, TEST_RE } from "./stray.mjs";

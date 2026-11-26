@@ -1,3 +1,4 @@
+import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clockTime, dateTime, dayOf, dayStart, minutesSince, shiftDay, zoneOffset } from "./clock.mjs";

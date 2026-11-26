@@ -1,4 +1,7 @@
-// The checks run on made-up jobs. Only the last test starts the real script, with --dry, which reads and never writes.
+// judge, checkAll and the other checks run on made-up jobs, readers and rules. readRules reads rules files made in
+// temp folders. The last two tests start the real script: once without --dry, to see that a broken rules file is
+// named on stderr, in the notice and in the log line; and once through a symlink with --dry, to see that it still
+// runs and writes nothing to the state folder.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
