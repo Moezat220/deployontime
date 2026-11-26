@@ -120,12 +120,14 @@ export async function waitForSlot(job, deps) {
 }
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
- *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal }, where journal is the writer from
- *  journalWriter(). deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes,
- *  fn) is the long timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, addNotice(key, entry, file)
- *  stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT, TERM, HUP and exit events
- *  are watched. Every handler it adds is removed at the end. A run limit whose last KILL is
- *  refused is reported, and journalled with stopFailed, as a stop that failed. */
+ *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver }, where journal is the writer
+ *  from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in place,
+ *  so the caller can remove the ones it had until then without a moment in which a signal finds none.
+ *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
+ *  timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, addNotice(key, entry, file) stores a notice,
+ *  gitState(cwd) reads the commit, and signals is the process whose INT, TERM, HUP and exit events are watched. Every
+ *  handler it adds is removed at the end. A run limit whose last KILL is refused is reported, and journalled with
+ *  stopFailed, as a stop that failed. */
 export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
     const killGraceMs = settings.limits.killGraceMs;
@@ -158,6 +160,7 @@ export function runJob(job, slot, deps) {
     const onExit = () => { if (child.exitCode === null && child.signalCode === null) signalJob("SIGTERM"); };
     for (const [signal, handler] of forwarders) signals.on(signal, handler);
     signals.on("exit", onExit);
+    job.handOver?.();
 
     let pastLimit = false;
     let longRunAt = null;
@@ -349,15 +352,14 @@ export async function runCommand(args, ctx, deps) {
         ...(priority ? { priority: true } : {}),
     };
     const waitDeps = { ...deps, sleep: (ms) => Promise.race([deps.sleep(ms), woken]), leaving: () => leaving };
-    let waited;
+    // The leave handlers stay until runJob has added its own: with no listener at all, a signal would end the
+    // process at once, with no journal line and the slot left behind. A signal that arrives while the job is being
+    // started reaches the handlers of the job and is passed on to it.
+    const dropLeavers = () => { for (const [signal, handler] of leavers) signals.off(signal, handler); };
     try {
-        waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files }, waitDeps);
-    } finally {
-        for (const [signal, handler] of leavers) signals.off(signal, handler);
-    }
-    journal.note({ tally: waited.tally });
-    slot = waited.slot ?? null;
-    try {
+        const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files }, waitDeps);
+        journal.note({ tally: waited.tally });
+        slot = waited.slot ?? null;
         if (waited.left || leaving) {
             journal.finish("left", EXIT.left, { signal: waited.left ?? leaving });
             return EXIT.left;
@@ -369,10 +371,11 @@ export async function runCommand(args, ctx, deps) {
         rmSync(ticket, { force: true });
         const job = {
             pid, label, project, cwd, cmd, priority, kind, limit, waitFrom: waited.waitFrom,
-            settings, files, tz, journal,
+            settings, files, tz, journal, handOver: dropLeavers,
         };
         return await runJob(job, slot, deps);
     } finally {
+        dropLeavers();
         leaveLine();
         signals.off("exit", leaveLine);
     }

@@ -363,3 +363,32 @@ test("run: a signal while waiting comes back as exit 130 through the return valu
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal]), [["left", 130, "SIGINT"]]);
     assert.deepEqual([readdirSync(join(box.home, "line")), d.signals.eventNames()], [[], []]);
 });
+
+/** A stand-in for how a process takes a signal: with no listener the process ends at once, as Node's default does,
+ *  and with one the listeners present when the code running now has finished receive it, as a real signal is
+ *  delivered between steps of the event loop. */
+function signalStandIn() {
+    const signals = new EventEmitter();
+    signals.endedBy = null;
+    signals.arrive = (signal) => {
+        if (signals.listenerCount(signal) === 0) signals.endedBy = signal;
+        else setImmediate(() => signals.emit(signal));
+    };
+    return signals;
+}
+
+test("run: a signal while the commit is read for a job that just got its slot stops the job and frees the slot", async () => {
+    const box = sandbox(), signals = signalStandIn();
+    let reads = 0;
+    const slowGit = (cwd) => {
+        if (++reads === 2) signals.arrive("SIGINT");
+        return gitState(cwd);
+    };
+    const d = makeDeps(box, { gitState: slowGit, signals });
+    const args = ["run", "--label", "docs-site: build", "--", NODE, "-e", "setTimeout(() => {}, 1500)"];
+    const code = await runCommand(args, box.ctx, d.deps);
+    assert.equal(signals.endedBy, null, "the signal found no listener and would have ended the process");
+    assert.equal(code, 1);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal]), [["stopped", 1, "SIGINT"]]);
+    assert.deepEqual([slots(box), readdirSync(join(box.home, "line")), signals.eventNames()], [[], [], []]);
+});
