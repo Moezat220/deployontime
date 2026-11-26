@@ -105,7 +105,7 @@ An option that is not in this table, an option without its value or with an empt
 or any other word in front of the `--` is refused with exit 2, for example `dotime-queue: unknown option --max-runn`.
 A word that starts with `--` is not taken as the value of the option in front of it: `--label --priority` is refused
 because `--label` has no value. To give such a value, join it to the option with `=`: `--label=--priority`. The
-refusal message says so. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
+refusal message says so, with the value in single quotes when a shell would split or change it. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
 only the options shown for it.
 
 `run` started in a folder that was removed checks its options first, as above. When they are fine, it says

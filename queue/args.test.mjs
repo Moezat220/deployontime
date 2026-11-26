@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FLAGS, flagError, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRunArgs, USAGE } from "./args.mjs";
+import { FLAGS, flagError, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRunArgs, shellWord, USAGE } from "./args.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 test("flagError: accepts each subcommand's own flags in both spellings", () => {
@@ -40,6 +40,27 @@ test("flagError: a word that looks like a flag is never taken as a value, and th
     assert.equal(flagError(["passed", "--match", "--cwd", "/srv/shop-api"]), 'option --match needs a value; for the value "--cwd", write --match=--cwd');
     assert.equal(flagError(["run", "--kind", "--", "make"]), "option --kind needs a value");
     assert.equal(flagError(["run", "--max-wait", "-1", "--", "make"]), null);
+});
+
+test("flagError: the hint quotes a value that a shell would split or change", () => {
+    assert.equal(
+        flagError(["run", "--label", "--docs site: build", "--", "make"]),
+        `option --label needs a value; for the value "--docs site: build", write --label='--docs site: build'`,
+    );
+    assert.equal(
+        flagError(["run", "--after-fix", "--it's fixed", "--", "make"]),
+        `option --after-fix needs a value; for the value "--it's fixed", write --after-fix='--it'\\''s fixed'`,
+    );
+});
+
+test("shellWord: leaves a plain word as it is and quotes the rest", () => {
+    assert.equal(shellWord("--priority"), "--priority");
+    assert.equal(shellWord("/srv/shop-api"), "/srv/shop-api");
+    assert.equal(shellWord("two words"), "'two words'");
+    assert.equal(shellWord("tab\there"), "'tab\there'");
+    assert.equal(shellWord("$HOME"), "'$HOME'");
+    assert.equal(shellWord("it's"), `'it'\\''s'`);
+    assert.equal(shellWord(""), "''");
 });
 
 test("flagError: the --name=value spelling may carry a value that starts with --", () => {

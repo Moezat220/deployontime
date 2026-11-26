@@ -18,6 +18,12 @@ export const USAGE = [
     "  dotime-queue help",
 ].join("\n");
 
+/** text as one shell word: as it is when it holds only characters a shell leaves alone, else in single quotes. */
+export function shellWord(text) {
+    if (/^[\w@%+=:,./-]+$/.test(text)) return text;
+    return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
 /** Per subcommand: flags that take a value, and flags that stand alone. */
 export const FLAGS = Object.freeze({
     run: { values: ["--label", "--max-wait", "--max-run", "--kind", "--after-fix"], switches: ["--priority"] },
@@ -57,7 +63,7 @@ export function flagError(args, table = FLAGS) {
             const value = joined ? word.slice(eq + 1) : words[++i];
             if (value === undefined || value === "") return `option ${name} needs a value`;
             if (!joined && value.startsWith("--")) {
-                return `option ${name} needs a value; for the value "${value}", write ${name}=${value}`;
+                return `option ${name} needs a value; for the value "${value}", write ${name}=${shellWord(value)}`;
             }
             continue;
         }
