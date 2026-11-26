@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
-import { cachedHealth, healthVerdict, parsePower, powerState, readBattery, readHealth } from "./health.mjs";
+import { cachedHealth, healthVerdict, MAX_SHARED_READING_MS, parsePower, powerState, readBattery, readHealth } from "./health.mjs";
 
 const LIMITS = { loadPerCore: 2, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
 const roomy = { load: 1.5, cores: 4, freePct: 45, diskGB: 120, battery: null };
@@ -92,4 +92,15 @@ test("cachedHealth: a broken or unwritable cache only means a fresh reading", ()
     const read = () => ({ load: 0.5, cores: 4, freePct: 50, diskGB: 80, battery: null });
     assert.equal(cachedHealth(broken, 3000, read, 1000).load, 0.5);
     assert.equal(cachedHealth(join(blocked, "health.json"), 3000, read, 1000).load, 0.5);
+});
+
+test("cachedHealth: a shared reading older than 5 seconds is read fresh, also with a long poll time", () => {
+    const file = join(tempDir("health-cache-age"), "health.json");
+    let calls = 0;
+    const read = () => ({ load: ++calls, cores: 4, freePct: 60, diskGB: 80, battery: null });
+    const pollMs = 300_000;
+    assert.equal(MAX_SHARED_READING_MS, 5000);
+    assert.equal(cachedHealth(file, pollMs, read, 50_000).load, 1);
+    assert.equal(cachedHealth(file, pollMs, read, 54_999).load, 1, "still young enough to share");
+    assert.equal(cachedHealth(file, pollMs, read, 55_000).load, 2, "5 seconds old: read fresh");
 });

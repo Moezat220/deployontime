@@ -64,13 +64,17 @@ export function readHealth({ probes = {} } = {}) {
     return { ...read.load(), freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
 }
 
-/** A reading at most maxAgeMs old, shared through a file in the state folder, so jobs that wait at the same time
- *  take one reading per poll between them instead of one each. A cache that cannot be read or written only means
- *  a fresh reading. */
+/** The oldest shared reading a job may start on, whatever the poll time. */
+export const MAX_SHARED_READING_MS = 5000;
+
+/** A reading shared through a file in the state folder, so jobs that wait at the same time take one reading per
+ *  poll between them instead of one each. A saved reading is used while it is younger than maxAgeMs (the poll
+ *  time) and than MAX_SHARED_READING_MS; an older one is read fresh. A cache that cannot be read or written only
+ *  means a fresh reading. */
 export function cachedHealth(file, maxAgeMs, read = readHealth, now = Date.now()) {
     const saved = readJson(file, null);
     const age = now - saved?.at;
-    if (saved?.reading && age >= 0 && age < maxAgeMs) return saved.reading;
+    if (saved?.reading && age >= 0 && age < Math.min(maxAgeMs, MAX_SHARED_READING_MS)) return saved.reading;
     const reading = read();
     try { writeJsonAtomic(file, { at: now, reading }); } catch { /* the next poll reads again */ }
     return reading;

@@ -507,7 +507,7 @@ Environment variables:
 | `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
-| `health.json` | The last health reading of a waiting job, which other waiting jobs reuse for up to `pollMs`. |
+| `health.json` | The last health reading of a waiting job. Other waiting jobs reuse it for up to `pollMs`, and never once it is 5 seconds old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
 A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
@@ -545,7 +545,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
 | `slots.mjs` | Slot and waiting-line files: snapshot, join, take, release, update. | library | Reads and writes `slots/` and `line/`; runs `ps` for process ages. |
 | `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
-| `health.mjs` | The health gate: judges a reading, takes one, shares it for `pollMs`. | library | Runs the health probes; reads and writes `health.json`. |
+| `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json`. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |
 | `kinds.mjs` | Job kinds and command stems. | library | None. |
 | `failstop.mjs` | The stop for a check that failed twice on unchanged code. | library | None. |
