@@ -30,7 +30,7 @@ export function parseProcessTable(text) {
 /** Returns a Map from process group id to its rows. */
 export function groupRows(rows) {
     const groups = new Map();
-    for (const row of rows) groups.set(row.pgid, [...(groups.get(row.pgid) ?? []), row]);
+    for (const row of rows) (groups.get(row.pgid) ?? groups.set(row.pgid, []).get(row.pgid)).push(row);
     return groups;
 }
 /** A command line cut down to its program name and first argument, with folders removed. */

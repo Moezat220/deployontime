@@ -175,6 +175,20 @@ test("clockMinutes: overlapping waits count once, and time with a job running is
     assert.deepEqual(clockMinutes([null, [5, 5]], [null]), { waitWallMin: 0, blockedOnlyMin: 0 });
 });
 
+test("summarize: median and p90 waits are nearest-rank percentiles, the same as the run limits use", () => {
+    const lines = Array.from({ length: 10 }, (_, i) => run({ queuedAt: iso(i), startedAt: iso(i), endedAt: iso(i + 1), waitMin: i + 1 }));
+    const { all } = summarize(lines, START, START + 60 * MINUTE);
+    assert.deepEqual([all.waitMedian, all.waitP90], [5, 9]);
+    assert.deepEqual([summarize([], START, START + MINUTE).all.waitMedian, summarize([], START, START + MINUTE).all.waitP90], [0, 0]);
+});
+
+test("summarize: time grows in step with the journal, also when one project has every line", () => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => ({ project: "mobile-app", label: "mobile-app: lint", outcome: "ran", exit: 0, queuedAt: iso(i / 1000), waitMin: 0 }));
+    const began = performance.now(), { byProject } = summarize(rows, START, START + 60 * MINUTE);
+    assert.equal(byProject["mobile-app"].jobs, 50_000);
+    assert.ok(performance.now() - began < 1500, "50000 lines took too long");
+});
+
 test("summarize: totals per project, most waiting first, inside the time range", () => {
     const lines = [
         run({ queuedAt: iso(0), startedAt: iso(6), endedAt: iso(10), waitMin: 6, waitBy: { slots: 6 }, runMin: 4 }),

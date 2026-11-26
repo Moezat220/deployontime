@@ -60,3 +60,10 @@ test("strayRuns: thresholds can be passed in, and the largest run comes first", 
     assert.deepEqual(strayRuns(rows, { minMB: 100_000, minProcs: 4 }).map((r) => r.rootPid), [8000, 7000]);
     assert.deepEqual(strayRuns(rows, { minMB: 100_000, minProcs: 40 }), []);
 });
+
+test("strayRuns: time grows in step with the rows, also when one process has them all as children", () => {
+    const rows = [runner(9000, 1), ...workers(9000, 50_000, 1, 20_000)];
+    const began = performance.now(), [found] = strayRuns(rows);
+    assert.deepEqual([found.rootPid, found.procs], [9000, 50_001]);
+    assert.ok(performance.now() - began < 1500, "50000 rows took too long");
+});

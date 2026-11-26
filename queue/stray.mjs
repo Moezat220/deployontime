@@ -15,7 +15,7 @@ const MAX_DEPTH = 64;
 export function strayRuns(rows, { holders = [], minMB = STRAY.minMB, minProcs = STRAY.minProcs } = {}) {
     const byPid = new Map(rows.map((row) => [row.pid, row]));
     const children = new Map();
-    for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+    for (const row of rows) (children.get(row.ppid) ?? children.set(row.ppid, []).get(row.ppid)).push(row);
     const queuePids = new Set(holders.flatMap((h) => [h.pid, h.pgid]).filter(Number.isInteger));
     const lineage = (row) => {
         const chain = [];

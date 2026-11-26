@@ -46,6 +46,13 @@ test("groupRows: collects rows under their process group", () => {
     assert.deepEqual([...groups].map(([pgid, rows]) => [pgid, rows.map((r) => r.pid)]), [[2400, [2400, 2401]], [2500, [2500]]]);
 });
 
+test("groupRows: time grows in step with the rows, also when one group holds them all", () => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => ({ pid: 10_000 + i, ppid: 1, pgid: 4200, cmd: "node worker.js" }));
+    const began = performance.now(), groups = groupRows(rows);
+    assert.equal(groups.get(4200).length, 50_000);
+    assert.ok(performance.now() - began < 1500, "50000 rows took too long");
+});
+
 test("shortCommand: program name and first argument without their folders", () => {
     assert.equal(shortCommand(SERVER), "node next");
     assert.equal(shortCommand("/opt/tools/bin/python3 -m http.server"), "python3 -m");

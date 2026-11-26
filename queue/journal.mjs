@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { paths, timeZone } from "./settings.mjs";
 import { dateTime, dayOf, dayStart, shiftDay } from "./clock.mjs";
 import { jobProject, readOnlyGit } from "./project.mjs";
+import { pctl } from "./stats.mjs";
 
 const MINUTE = 60_000;
 const oneDecimal = (x) => Math.round(x * 10) / 10;
@@ -146,11 +147,6 @@ export function clockMinutes(waits, runs = []) {
     return { waitWallMin: minutes(wall), blockedOnlyMin: minutes(blocked) };
 }
 
-function quantile(values, q) {
-    if (!values.length) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
-}
 function totals(rows, until) {
     const waits = rows.map((row) => row.waitMin), waitBy = {};
     for (const row of rows) for (const [gate, min] of Object.entries(row.waitBy ?? {})) waitBy[gate] = oneDecimal((waitBy[gate] ?? 0) + min);
@@ -158,7 +154,7 @@ function totals(rows, until) {
     return {
         jobs: rows.length, waited: count((row) => row.waitMin >= 1), waitMinTotal: oneDecimal(waits.reduce((a, b) => a + b, 0)),
         ...clockMinutes(rows.map((row) => waitInterval(row, until)), rows.map((row) => runInterval(row, until))),
-        waitMedian: quantile(waits, 0.5), waitP90: quantile(waits, 0.9), runMinTotal: oneDecimal(rows.reduce((sum, row) => sum + (row.runMin ?? 0), 0)),
+        waitMedian: pctl(waits, 0.5) ?? 0, waitP90: pctl(waits, 0.9) ?? 0, runMinTotal: oneDecimal(rows.reduce((sum, row) => sum + (row.runMin ?? 0), 0)),
         gaveUp: count((row) => row.outcome === "gave-up"), failed: count(isFailedRun), stopped: count(isStopped),
         timedOut: count((row) => row.outcome === "timed-out"), refused: count((row) => row.outcome === "refused"), waitBy,
     };
@@ -168,7 +164,10 @@ function totals(rows, until) {
 export function summarize(lines, since = 0, until = Infinity) {
     const rows = parseLines(lines).filter((row) => Date.parse(row.queuedAt) >= since && Date.parse(row.queuedAt) < until);
     const groups = new Map();
-    for (const row of rows) groups.set(lineProject(row), [...(groups.get(lineProject(row)) ?? []), row]);
+    for (const row of rows) {
+        const name = lineProject(row);
+        (groups.get(name) ?? groups.set(name, []).get(name)).push(row);
+    }
     const perProject = [...groups].map(([name, group]) => [name, totals(group, until)])
         .sort((a, b) => b[1].waitWallMin - a[1].waitWallMin || b[1].waitMinTotal - a[1].waitMinTotal);
     return { all: totals(rows, until), byProject: Object.fromEntries(perProject) };
