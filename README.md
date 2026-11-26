@@ -1,11 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo-light.svg" alt="Deploy on time" width="440">
-  </picture>
+  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime: ship AI-written code to production, safely, one change at a time. Stage 1, share the machine, is available now; validate and deploy come next.">
 </p>
-
-<p align="center"><strong>Ship AI-written code to production, safely, one change at a time.</strong></p>
 
 <p align="center">
   <a href="https://github.com/Moezat220/deployontime/actions/workflows/test.yml"><img src="https://github.com/Moezat220/deployontime/actions/workflows/test.yml/badge.svg" alt="tests"></a>
@@ -24,9 +19,6 @@
 </p>
 
 <br>
-
-DeployOnTime is being built as the whole path from an agent's change to a safe live release. The machine queue is
-the first part, and it works on its own.
 
 **Ready to use today: the machine queue** (macOS). It lets several coding agents share one computer without
 overloading it. The next parts are on the [roadmap](#roadmap).
@@ -156,7 +148,7 @@ The machine queue is complete and usable on its own. These pieces come next, in 
 
 | Next | What it will do |
 | --- | --- |
-| Release engine | Carry an agent's pull request through checks to a safe live release |
+| Release engine | Validate an agent's pull request with checks, then deploy it as a safe live release (stages 02 and 03 in the banner) |
 | Install and quickstart | Set everything up with one command, with a trial mode that changes nothing |
 | Linux and Docker | Run the queue outside macOS |
 
