@@ -9,7 +9,8 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { after } from "node:test";
 
-const created = [], started = new Map();
+const created = [];
+const started = new Map();
 const KILL_WAIT_MS = 300;
 
 /** The start time `ps` reports for a pid, or "" when the pid is gone. A pid whose start time has changed belongs
