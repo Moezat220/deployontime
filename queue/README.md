@@ -1,28 +1,78 @@
-# dotime-queue
+# Machine queue
 
-One queue for the heavy jobs on a computer that several coding agents use at the same time: test suites, builds,
-end-to-end runs.
+Machine queue is one waiting line for the heavy jobs on a Mac that several coding agents use at the same time:
+full test suites, builds, end-to-end runs. Its command is `dotime-queue`. The messages of `run` and its
+warnings start with `dotime-queue:`, and the titles of its notices start with `dotime:`.
 
-What it does for every job:
+**Nothing is queued unless you ask.** Only a command started as `dotime-queue run ... -- <command>` (or
+`node queue/cli.mjs run ... -- <command>`) waits in the line, is held by the gate and runs under a time limit. A
+`npm test` that an agent runs directly is not held, not limited and not recorded. A single test file, a lint or a
+typecheck of a few files finishes quickly and does not need the queue.
+
+What the queue does for every job started through it:
 
 1. **Line.** Jobs queue up first come, first served. Only a set number hold a slot at the same time (2 by
    default).
 2. **Gate.** The first in line starts only when a slot is free and the computer has room: load, free memory, free
-   disk, battery.
+   disk, and the battery when the computer runs on it. See [Health gate](#health-gate).
 3. **Limit.** The job runs under a time limit. At the limit, the job and everything it started are stopped.
 4. **Journal.** Each run leaves a record of its wait, its run time and its result. Later runs use that record.
 
-Requirements: macOS, Node 22 or newer, git 2.31 or newer. Nothing to install besides this folder.
+**State folder.** The queue keeps its state in one folder: `~/.dotime` by default, or the folder that the
+`DOTIME_HOME` variable names. Callers share one queue only when they use the same folder. A state folder may only
+be used by processes on one computer that see the same process list: the queue decides whether a job is still alive
+by its process id. A container, a virtual machine or a second computer must therefore not point at the same folder;
+it would take the host's jobs for finished, delete their slots and let too many jobs run. Each user account has its
+own `~/.dotime`, and two computers must not share one.
+
+**Your repository.** The queue never edits your repository. It runs read-only git commands and reads files to
+tell whether the code changed between runs. The commands you run through it do what they always do. The queue
+opens no network connection; only a `DOTIME_NOTIFY_CMD` that you set can send notices elsewhere.
+
+## Install
+
+Requirements: macOS only, because the queue reads `pmset`, `memory_pressure`, `launchctl` and `ps`. Node 22 or
+newer. git 2.31 or newer.
+
+```
+git clone https://github.com/Moezat220/deployontime.git
+cd deployontime
+npm link
+dotime-queue status
+```
+
+`npm link`, run in the repository's top folder, puts `dotime-queue` on your path. No npm packages are downloaded:
+the queue has no dependencies. The first line of `dotime-queue status` should read `slots: 0 of 2 taken, 0 waiting`.
+
+Without `npm link`, call `node <path to the clone>/queue/cli.mjs` from any folder. The `queue/` folder needs nothing
+outside itself. The examples below use `dotime-queue`.
+
+To uninstall:
+
+```
+npm uninstall -g deployontime
+rm -rf ~/.dotime        # or the folder DOTIME_HOME names
+```
+
+If you scheduled the [reaper](#reaper), also remove it from your scheduler (for cron, see
+[the end of that section](#scheduling-the-reaper-with-cron)).
 
 ## Quick start
 
 ```
-node queue/cli.mjs run --label "shop-api: unit tests" -- npm test
-node queue/cli.mjs status
+dotime-queue run --label "shop-api: unit tests" -- npm test
+dotime-queue status
 ```
 
-The package also exposes the command as `dotime-queue` once `npm link` in the repository's top folder puts it on your path; the
-examples below use that name.
+Worth knowing before the first run:
+
+- The text before the colon in the label is the project. Run limits and history are kept per project.
+- A new command gets the limit its kind has learned in that project, which can be as short as 10 minutes, or 30
+  minutes until the kind has five passed runs. For a longer one, pass `--max-run <min>`. See [Run limits](#run-limits).
+- A question mark in the task part of the label makes a debug job, stopped after 15 minutes:
+  `"shop-api: does login work?"` is one.
+- A job waits in line at most 60 minutes, then exits 75. That is not a test failure.
+- Times are printed in UTC unless `DOTIME_TZ` names another zone.
 
 ## Commands
 
@@ -32,27 +82,41 @@ examples below use that name.
 dotime-queue run --label "<project>: <task>" [options] -- <command> [args]
 ```
 
-Waits for a slot, runs the command with its input and output passed through (in a process group of its own, so
-without a controlling terminal), and exits with the command's exit code.
+Waits for a slot, runs the command, and exits with the command's exit code. Input and output pass through as
+usual. Stopping a job stops every process it started, because `run` starts the job in a new session with a process group
+of its own. The job therefore has no controlling terminal: a program that opens `/dev/tty`, for example to ask for a
+password, cannot do so.
 
 | Option | Effect |
 | --- | --- |
-| `--label "<project>: <task>"` | Names the job. The text in front of the colon is its project. Without a label the job is called `unnamed`. |
-| `--max-wait <min>` | Leaves the line after this many minutes with exit 75. `0` waits without limit. Default: the `maxWaitMin` setting. |
-| `--max-run <min>` | Sets the run limit for this job. |
-| `--kind <name>` | Sets the job kind in place of the guessed one. |
-| `--after-fix "<note>"` | Runs a check that would be refused for failing twice on unchanged code. The note is stored in the journal. |
-| `--priority` | Joins the line at the front. Slots and the health gate still apply. |
+| `--label "<project>: <task>"` | Names the job. The text before the colon is its project. Default: `unnamed`. |
+| `--max-wait <min>` | Leave the line after this many minutes, exit 75. `0`: no limit. Default: `maxWaitMin`. |
+| `--max-run <min>` | Run limit for this job. Needed for a new command that runs longer than its kind's learned limit. |
+| `--kind <name>` | Job kind, in place of the guessed one. See [Projects and kinds](#projects-and-kinds). |
+| `--after-fix "<note>"` | Runs a check that would be refused with exit 3. The note is stored in the journal. |
+| `--priority` | Joins the line at the front. Slots and the gate still apply. For a person's urgent run. |
 
-Options go in front of the `--`. Everything behind it is the job's command.
+Options go in front of the `--`. Everything behind it is the job's command. Keep `--priority` out of agent
+instructions: an agent that uses it every time puts itself in front of everyone else.
 
-While it waits, `run` prints its position and what holds it, at each change of position and at least once a minute.
+While it waits, `run` prints its position and what holds it, at each change of position and again after each
+minute of waiting.
 
-Signals: before the job has started, Ctrl-C or TERM takes it out of the line and `run` exits 130. While the job runs, INT, TERM and HUP are passed
-on to the whole job, and the run is journalled as `stopped`, which is neither a pass nor a failure. A stop signal
-(HUP, INT, KILL or TERM) that the queue did not send is journalled as `stopped` as well, for example when the system ends a job because memory ran
-out, so it does not count towards the repeated-failure stop. Exit status 128 plus a stop signal's number counts the
-same way, because that is how a shell script reports a child it lost to that signal. Any other signal that ends a job counts as a failure. If the queue process itself dies, the job notices within `limits.orphanCheckMs` and stops.
+**Ctrl-C.** While the job waits, Ctrl-C or TERM takes it out of the line and `run` exits 130. While the job runs,
+INT, TERM and HUP are passed on to the whole job, and the run is journalled as `stopped`: neither a pass nor a
+failure.
+
+Details:
+
+- A stop signal that the queue did not send (HUP, INT, KILL or TERM) also makes the run `stopped`, for example when
+  the system ends a job because memory ran out. So does exit status 128 plus a stop signal's number, because that
+  is how a shell script reports a child it lost to that signal. Stopped runs never count towards
+  [Repeated failures](#repeated-failures).
+- Any other signal that ends a job counts as a failure.
+- A job ended by a signal makes `run` exit 1, not 128 plus the signal's number as a shell would. The exceptions are
+  SIGUSR1 and signals Node does not die by, such as SIGPIPE: those give 128 plus the number. A script that looks
+  for 130 or 143 should look for the `stopped:` line that `run` prints instead.
+- If the `run` process itself dies, the job notices within about 2 seconds (`limits.orphanCheckMs`) and stops.
 
 ### `status`
 
@@ -60,8 +124,9 @@ same way, because that is how a shell script reports a child it lost to that sig
 dotime-queue status
 ```
 
-Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and whether
-the gate is open.
+Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
+gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
+with nothing after it does the same.
 
 ### `passed`
 
@@ -69,15 +134,20 @@ the gate is open.
 dotime-queue passed [--match <text>] [--cwd <dir>]
 ```
 
-Answers "did this check already pass on exactly this code?". It looks only at runs that began with a clean tree on
-the commit the folder is at now, and skips runs that were stopped or timed out, since those say nothing about the code.
-If the newest of what is left exited 0, it prints a `stamp:` line and exits 0. In every other case it prints a
-`no stamp:` line that says why and exits 1. `--match` keeps only runs whose label or command contains the text, in any letter case.
-`--cwd` asks about another folder.
+Answers "did this check already pass on exactly this code?". `run` never asks this by itself and never skips a job.
+An agent that wants to skip a check that is already green must call `passed` first, and skip only on exit 0.
 
-A stamp needs a clean working tree, both now and when the run started. One exception: an untracked entry named
-`node_modules` that is not a folder (in practice a symlink) does not make the tree dirty. Git's usual `node_modules/`
-ignore rule matches folders only, so such a link is listed by `git status` even though it is not source code.
+It works only on a clean, committed tree: the folder must have no uncommitted or untracked changes now, and the run
+it finds must have started with none. With local changes it always prints `no stamp:` and exits 1.
+
+It looks at runs started in a repository of the same name, on the commit the folder is at now, that began with a
+clean tree. Runs that were stopped or timed out are skipped, since they say nothing about the code. If the newest
+of what is left exited 0, it prints a `stamp:` line and exits 0. In every other case it prints a `no stamp:` line
+that says why and exits 1. `--match` keeps only runs whose label or command contains the text, in any letter case;
+without it, the newest run of any check counts. `--cwd` asks about another folder.
+
+Note: an untracked entry named `node_modules` that is not a folder (in practice a link) does not count as a change.
+Git's usual `node_modules/` ignore rule matches folders only, so git lists such a link.
 
 ### `history`
 
@@ -85,58 +155,80 @@ ignore rule matches folders only, so such a link is listed by `git status` even 
 dotime-queue history [--days <n> | --day <YYYY-MM-DD>]
 ```
 
-Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time (summed per
-job, and as time on the clock) and the gates that caused the waiting. `--days` covers the last n calendar days
-including today (default 7); `--day` covers one day. Days are counted in the `DOTIME_TZ` zone.
+Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time and the gates
+that caused the waiting. The waiting columns answer three questions. `sum`: how much waiting all jobs did
+together. `clock`: how long the line was not empty. `clock with no job running`: how much of that time jobs were
+waiting while none of this row's jobs ran, for example because the health gate was shut.
+`--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
+the `DOTIME_TZ` zone, UTC by default.
 
 ## Projects and kinds
 
-The project of a job is the label text in front of the colon, when that text is 40 characters or fewer. Without that, it is the name of the git repository the
-job runs in (a linked worktree counts as its main repository), and outside git the name of the folder.
+The project of a job is the label text before the colon. That text may be at most 40 characters: a longer one is
+not taken as a project name, so a sentence with a colon in it does not make a new project. Without a project in the
+label, the project is the name of the git repository the job runs in (a linked worktree counts as its main
+repository), and outside git the name of the folder.
 
 The kind groups similar jobs for the run limit. It is read from the label's task part (the text after the project
-prefix) and, only when that matches nothing, from the command. In each, it is the first match in this list:
+prefix) and, only when that matches nothing, from the command. In each, it is the first match in this list, read
+from the top: `deploy tests` is a `deploy` job, and `build tests` is a `test` job.
 
 | Kind | Words |
 | --- | --- |
-| `debug` | `debug`, `repro`, `bisect`, `probe` (in the command not followed by `=`, so `DEBUG=1` does not count), or a question mark in the label |
+| `debug` | `debug`, `repro`, `bisect`, `probe`, or a question mark in the label's task part. See below. |
 | `deploy` | `deploy`, `release`, `publish` |
 | `test` | `test`, `tests`, `check`, `suite`, `spec`, `e2e`, `vitest`, `jest`, `playwright`, `node --test` |
 | `build` | `build`, `bundle`, `compile` |
 | `lint` | `lint`, `typecheck`, `tsc`, `format` |
 | `other` | anything else |
 
+In the command, a `debug` word followed by `=` does not count, so `DEBUG=1` does not make a debug job.
+
 ## Run limits
 
-History decides the limit when `--max-run` is absent. Only runs that passed count, taken from the job's own project
-and at most `limits.windowDays` days old:
+Without `--max-run`, the journal decides the limit. Only passed runs count (exit 0), from the job's own project,
+at most `limits.windowDays` (14) days old:
 
-- With at least `limits.minSamples` runs of the same command: `limits.p90Factor` times their 90th percentile.
-- Otherwise, with that many runs of the same kind: the same formula over those runs.
-- Otherwise: `limits.defaultMin`.
+- With at least `limits.minSamples` (5) passed runs of the same command: `limits.p90Factor` (1.5) times their 90th
+  percentile.
+- Otherwise, with that many passed runs of the same kind: the same formula over those runs.
+- Otherwise: `limits.defaultMin`, 30 minutes.
 
-In the last two cases, a command with a few passed runs of its own raises the limit to `limits.p90Factor` times the
-longest of them, when that is more. A measured limit is never below `limits.floorMin`. A `debug` job gets
-`limits.debugMin` instead (still only when `--max-run` is absent).
+A measured limit is never below `limits.floorMin` (10 minutes). A `debug` job gets `limits.debugMin` (15 minutes)
+instead. Even before it has 5 passed runs, a command's own runs count: when 1.5 times its longest passed run is more
+than the limit above, that becomes the limit. Passed runs under `--max-run` count as history too.
+
+**The 30-minute trap.** Until a command, or its kind in that project, has enough passed runs, its limit is
+`limits.defaultMin`, 30 minutes. A command that normally takes longer is stopped at 30 minutes every time. A stopped
+run is not a pass, so it never builds a history and the limit never grows. Two such stops on unchanged code also
+lead to a refusal (see [Repeated failures](#repeated-failures)). The fix: pass `--max-run <min>` to that command, or
+raise `limits.defaultMin` in `config.json`.
 
 Two commands count as the same when they have the same stem: the program and its task, without paths, flags and
-variable assignments (`npm run build -- --watch` and `npm run build` share the stem `npm run build`).
+variable assignments (`npm run build -- --watch` and `npm run build` share the stem `npm run build`). Labels and
+`--kind` do not split a stem: `npm test -- a.test.js` and `npm test` are both `npm test`. Many quick partial runs
+can pull the learned limit of the full suite down; if that happens, give the full suite `--max-run`.
 
 A job that reaches its limit ends `run` with exit 124. Before that, its whole process group receives TERM and,
-`limits.killGraceMs` later, KILL. With `--priority` the stop moves out to `limits.priorityGrace` times the limit,
-and reaching the limit itself only prints a warning.
+`limits.killGraceMs` (10 seconds) later, KILL. With `--priority` the stop moves out to `limits.priorityGrace` (2)
+times the limit, and reaching the limit itself only prints a warning.
 
-A job that runs past its long-run mark gets one notice and keeps running. The mark is `limits.longRunFactor` times
-the 75th percentile of the same runs (at least `limits.floorMin`), or `limits.longRunUnmeasuredMin` when there are
-fewer than `limits.minSamples` of them. A command with a few passed runs of its own raises the mark to `limits.longRunFactor` times their 75th
-percentile, when that is more. No notice is sent when the mark is not earlier than the stop.
+**Long-run notice.** A job that runs much longer than usual gets one notice and keeps running. `run` prints it,
+and it goes out as a [notice](#notices): to `notify.log`, as a desktop notice, and into `notices.json`. The mark
+is `limits.longRunFactor` (2) times the 75th percentile of the same runs (at least `limits.floorMin`), or
+`limits.longRunUnmeasuredMin` (20 minutes) when there are fewer than 5 of them. A command with a few passed runs of
+its own raises the mark to 2 times their 75th percentile, when that is more. No notice is sent when the mark is not
+earlier than the stop.
 
 ## Repeated failures
 
-When the same check failed twice in a row within `limits.failWindowHours`, and neither the commit nor the
-uncommitted and untracked files have changed since, a third run is refused with exit 3. Change the code, or pass
-`--after-fix "<note>"`. Runs that were stopped by a signal do not count. Earlier runs belong to a check when they
-carry its label; runs under another label still belong when command, project and folder are all identical.
+When the same check failed twice in a row within `limits.failWindowHours` (6), and neither the commit nor the
+uncommitted and untracked files have changed since, a third run is refused: `run` prints a `refused:` line and
+exits 3. The way out: change the code, or pass `--after-fix "<note>"` in front of the `--`. A failure is a non-zero
+exit or a stop at the run limit. Runs that were stopped by a signal do not count.
+
+Renaming the label does not reset the count. Earlier runs belong to a check when they carry its label, and runs
+under another label still belong when command, project and folder are all identical.
 
 What is compared between the failures and the new run:
 
@@ -147,23 +239,26 @@ What is compared between the failures and the new run:
   take the total past 32 MB, counts by its size and modification time;
 - files the job's command mentions by path: their content, when they are smaller than 4 MB.
 
+All of this is hashed on the computer; the journal keeps only a short hash.
+
 Two groups of untracked files are skipped, because a check rewrites them itself: files inside a folder named in
 `outputDirs`, at any depth, and files ending in `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif`, `.ico`, `.bmp`,
-`.mp4`, `.webm`, `.mov`, `.pdf`, `.zip`, `.gz`, `.tgz` or `.log`. Tracked files are never skipped.
+`.mp4`, `.webm`, `.mov`, `.pdf`, `.zip`, `.gz`, `.tgz` or `.log`. Tracked files are never skipped. If your fix
+changes only such untracked files, the code counts as unchanged: pass `--after-fix "<note>"`.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| the job's own | The job ran and ended by itself. A job ended by a signal gives 1, except for SIGUSR1 and signals Node does not die by (such as SIGPIPE): 128 plus the signal's number. |
+| the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
 | 2 | The command line was not understood. |
-| 3 | Refused: the same check failed twice on unchanged code. |
-| 75 | Gave up waiting after `--max-wait`. |
+| 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
+| 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |
 | 127 | The job's command could not be started. |
 | 130 | Left the line because of a signal. |
 
-`passed` exits 0 with a stamp and 1 without. `schedule-check.mjs` exits 1 when it cannot read the job list.
+`passed` exits 0 with a stamp and 1 without.
 
 ## Message format
 
@@ -171,40 +266,96 @@ Every message has the same shape: clauses separated by `; `, each clause a topic
 commas. Durations are written as `12 min`, percentages as `20%`, sizes as `40 GB`, clock times on a 24-hour clock
 with the zone name.
 
+Sample lines. Each is one line on screen; the stamp line is wrapped here, and `<date and time>` stands for a value.
+
 ```
-dotime-queue: in line: position 2, 3 min waited, wait limit 60 min; no free slot: 2 of 2 taken, by "shop-api: unit tests" and "docs-site: build"
-dotime-queue: gave up: exit 75, position 1, 60 min waited; memory too low: 9% free, 20% needed; hint: --max-wait 0 waits without limit
-stamp: commit 0a1b2c3d, passed 4 min ago by "shop-api: unit tests", command npm test, run time 2.5 min, tree clean at start, finished <YYYY-MM-DD HH:MM> UTC
+dotime-queue: in line: position 2, 3 min waited, wait limit 60 min; no free slot: 2 of 2 taken, by "shop-api: e2e"
+and "docs-site: build"
+dotime-queue: gave up: exit 75, position 1, 60 min waited; memory too low: 9% free, 20% needed; hint: --max-wait 0
+waits without limit
+stamp: commit 0a1b2c3d, passed 4 min ago by "shop-api: unit tests", command npm test, run time 2.5 min, tree clean
+at start, finished <date and time> UTC
 ```
 
-A reading the computer cannot give (no battery, a tool that fails) never shuts the gate. A reading of 0, such as a
-full disk, does.
+## Health gate
+
+The gate is checked only before a job starts. A running job is never stopped because the computer got busy.
+
+| Reading | Taken from | Holds a job when |
+| --- | --- | --- |
+| Load | 1-minute load average per core | above `health.loadPerCore` |
+| Free memory | the free percentage that `memory_pressure` reports | below `health.minFreeMemPct` |
+| Free disk | `df` for the disk that holds `/` | below `health.minFreeDiskGB` |
+| Battery | `pmset -g batt` | at or below `health.minBatteryPct` while on battery |
+
+If the charger cannot keep up and the charge keeps falling, the battery limit applies as if unplugged.
+
+When a value cannot be read, such as on a computer with no battery or when a tool does not answer, that check is
+left out and never holds a job, so it protects nothing until it can be read again. A reading of 0, such as a full
+disk, is a real value and does shut the gate.
 
 ## Reaper
 
 ```
-node queue/reaper.mjs          # from a scheduler, every few minutes
+node queue/reaper.mjs          # one run; schedule it to run every few minutes
 node queue/reaper.mjs --dry    # print what a run would do, change nothing
 ```
 
-Each run:
+The reaper is optional. It runs only if you schedule it, and the queue works without it.
 
-- stops dev-server process groups that are older than `idle.serverIdleMin` minutes and used less than
-  `idle.serverCpuS` seconds of CPU in that time (TERM, then KILL);
+**When it runs, it can stop idle dev servers anywhere on this computer**, also ones you started yourself and not
+through the queue, in any project. It stops nothing else. To protect a server, add a part of its command line to
+`reaper.keepPattern` (see [Settings](#settings)). To see first what it would do, run it with `--dry`.
+
+It stops a dev server only when all of these hold:
+
+- its command matches `reaper.serverPattern` (by default `vite`, `vitest`, `next dev`, `wrangler dev`,
+  `webpack serve`, `webpack-dev-server` and `nodemon`);
+- its process group is older than `idle.serverIdleMin` (30) minutes and used less than `idle.serverCpuS` (10)
+  seconds of CPU in that time;
+- its process group holds nothing but the server and its launchers (details below), so nothing else is stopped
+  with it;
+- no process in the group holds a slot, runs a one-shot test command, or matches `reaper.keepPattern`, and the group
+  is not the reaper's own.
+
+It then sends TERM to the group and, `limits.killGraceMs` later, KILL to what is left. CPU use is compared between
+reaper runs, so one run by hand only takes a sample: idle servers show up only after runs have covered a whole idle
+window.
+
+Each run also:
+
 - sends one notice for a job that used less than `idle.slotCpuS` seconds of CPU in `idle.slotIdleMin` minutes while
   holding a slot;
-- reports large test runs that were not started through the queue, at most one notice an hour;
+- reports a large test run that was not started through the queue: 5 or more test processes, or 2 or more that
+  together use 2 GB of memory or more. It is left running, with at most one notice an hour;
 - reports an overloaded computer when two runs in a row see it, at most once an hour;
 - reports low disk space, at most every six hours.
 
-Only idle dev servers are ever stopped. A dev server is a process whose command matches `reaper.serverPattern`. The
-reaper stops the server's whole process group, so it does so only when that group holds nothing else: the server,
-the processes it started, and the processes above it that are package-script launchers (`npm`, `npx`, `pnpm`, `yarn`,
-`bun`, or the script `node` runs for one of them, and `sh -c`, `bash -c`, `zsh -c`) or name a dev server themselves. The server is the innermost matching process, so a launcher that
-names the server is never taken for it. An idle server that shares its group with another program is reported and
-left running. A group is never stopped when it
-holds a slot, runs a one-shot test command, matches `reaper.keepPattern`, or is the
-reaper's own. A test run counts as started through the queue when it descends from a process that holds a slot.
+A test run counts as started through the queue when it descends from a process that holds a slot.
+
+What "nothing but the server and its launchers" means: the server, the processes it started, and the processes
+above it that are package-script launchers (`npm`, `npx`, `pnpm`, `yarn`, `bun`, or the script `node` runs for one
+of them, and `sh -c`, `bash -c`, `zsh -c`) or name a dev server themselves. The server is the innermost matching
+process, so a launcher that names the server is never taken for it. An idle server that shares its group with
+another program is reported and left running.
+
+### Scheduling the reaper with cron
+
+Run `crontab -e` and add these two lines:
+
+```
+PATH=/usr/bin:/bin:/usr/sbin
+*/5 * * * * /path/to/node /path/to/deployontime/queue/reaper.mjs >> "$HOME/Library/Logs/dotime-reaper.log" 2>&1
+```
+
+Replace `/path/to/node` with what `command -v node` prints, and the second path with the place of your clone. The
+`PATH` line lets the reaper find the system tools it reads (`sysctl` lives in `/usr/sbin`); it applies to every
+line below it in your crontab. If you use `DOTIME_HOME`, add a `DOTIME_HOME=...` line the same way. If the clone
+sits in a folder that macOS protects, such as Documents, cron may be refused access to it; a clone elsewhere in your
+home folder avoids that. Notices always reach `notify.log`, also when no desktop notice shows.
+
+To stop it, run `crontab -e` again and delete the reaper line, plus the `PATH` and `DOTIME_HOME` lines if nothing
+else in your crontab needs them.
 
 ## Scheduled-job report
 
@@ -212,9 +363,12 @@ reaper's own. A test run counts as started through the queue when it descends fr
 node queue/schedule-check.mjs [--dry] [--json]
 ```
 
-Reads the job files in `~/Library/LaunchAgents` and checks each job: loaded, last exit code accepted, scripts
-present, log as recent as the schedule implies. It changes nothing. Problems go out as one notice; `--dry` only
-prints. Optional rules in `$DOTIME_HOME/schedule-check.json`:
+An optional extra, separate from the queue: a health report on your own scheduled jobs. It reads every job file in
+`~/Library/LaunchAgents`, not only ones made for this project, and checks each job: loaded, last exit code
+accepted, scripts present, log as recent as the schedule implies. It changes no job; it only adds to its own log
+files in the state folder. Problems go out as one notice;
+`--dry` only prints. It exits 1 when it cannot read the job list from `launchctl`. Optional rules in
+`$DOTIME_HOME/schedule-check.json`, where `skip` leaves jobs out:
 
 ```json
 { "skip": ["com.example.*"], "okExit": { "com.example.sync": [0, 2] }, "maxLogAgeH": { "com.example.weekly": 200 } }
@@ -222,8 +376,9 @@ prints. Optional rules in `$DOTIME_HOME/schedule-check.json`:
 
 ## Notices
 
-A notice is always appended to `$DOTIME_HOME/notify.log`. It is also shown as a desktop notice and, when
-`DOTIME_NOTIFY_CMD` is set, handed to that command through `/bin/sh`, with the texts in the environment variables
+A notice is always appended to `$DOTIME_HOME/notify.log`. It is also shown as a macOS desktop notice through
+`osascript`; if none appear, look at the notification settings in System Settings. When `DOTIME_NOTIFY_CMD` is set,
+the notice is also handed to that command through `/bin/sh`, with the texts in the environment variables
 `DOTIME_TITLE` and `DOTIME_MESSAGE`:
 
 ```
@@ -235,18 +390,27 @@ export DOTIME_NOTIFY_CMD='printf "%s: %s\n" "$DOTIME_TITLE" "$DOTIME_MESSAGE" >>
 
 ## Settings
 
-Settings live in `$DOTIME_HOME/config.json`. That one file applies to every caller on the computer, and environment
-variables cannot change a setting. A caller can still ask for more for one job through the flags of `run`
-(`--max-run`, `--priority`, `--after-fix`, described above), and `DOTIME_HOME` points to a whole other state folder
-with its own settings and its own slots.
+Settings live in `$DOTIME_HOME/config.json`. The file is optional: create it only to change a default. The queue
+creates the state folder itself the first time it runs.
+
+The settings apply to every caller that uses the state folder. That is on purpose: one agent cannot loosen a limit
+for the others. No environment variable changes a setting. A caller can ask for more for one job only, through the
+flags of `run`: `--max-run`, `--priority` and `--after-fix`, described above. `DOTIME_HOME` does not change a setting
+either: it picks a whole other state folder, with its own settings, slots and journal.
 
 ```json
 { "slots": 3, "health": { "minFreeDiskGB": 25 }, "idle": { "serverIdleMin": 45 } }
 ```
 
-A value that does not fit is replaced by its default, with one warning on stderr: a wrong type, a negative number,
-a number the table rules out ("Above 0": 0 is too low; "At least 1": anything under 1 is too low), a time in
-milliseconds (a key ending in `Ms`) above 2147483647, about 24 days, or a pattern that does not compile. An unknown name is skipped, also with one warning.
+A value that does not fit is replaced by its default, with one warning on stderr. A value does not fit when it is:
+
+- of the wrong type;
+- a negative number;
+- a number the table rules out. "Above 0": 0 is too low. "At least 1": anything under 1 is too low;
+- a time in milliseconds (a key ending in `Ms`) above 2147483647, about 24 days;
+- a pattern that does not compile.
+
+An unknown name is skipped, also with one warning.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -254,7 +418,7 @@ milliseconds (a key ending in `Ms`) above 2147483647, about 24 days, or a patter
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core. Above 0. |
-| `health.minFreeMemPct` | 20 | Gate shuts below this free memory. |
+| `health.minFreeMemPct` | 20 | Gate shuts below this free memory, in percent, as `memory_pressure` reports it. |
 | `health.minFreeDiskGB` | 10 | Gate shuts below this free disk space. |
 | `health.minBatteryPct` | 15 | Gate shuts at or below this charge while running on battery. |
 | `limits.defaultMin` | 30 | Run limit with fewer than `limits.minSamples` passed runs. Above 0. |
@@ -279,11 +443,17 @@ milliseconds (a key ending in `Ms`) above 2147483647, about 24 days, or a patter
 | `reaper.overloadDiskGB` | 5 | Overload below this free disk space. |
 | `reaper.lowDiskGB` | 20 | Early low-disk notice below this. |
 | `reaper.serverPattern` | see below | Regular expression for dev-server commands. |
-| `reaper.keepPattern` | `/Applications/\|LaunchAgents` | Regular expression for commands the reaper never stops: by default, programs inside `/Applications/` and scripts kept in a `LaunchAgents` folder. |
-| `outputDirs` | see below | Folder names whose untracked files are left out when code is compared between failed runs. |
+| `reaper.keepPattern` | `/Applications/\|LaunchAgents` | Commands the reaper never stops. See below. |
+| `outputDirs` | see below | Folder names whose untracked files are left out when failed runs are compared. |
 
-Default `reaper.serverPattern`: `vite`, `vitest` in watch mode, `next dev`, `wrangler dev`, `webpack serve`,
-`webpack-dev-server` and `nodemon`.
+Default `reaper.serverPattern`: `vite` (but not `vite build`), `vitest`, `next dev`, `wrangler dev`,
+`webpack serve`, `webpack-dev-server` and `nodemon`. A one-shot test run, such as `vitest run`, `vitest --run`,
+`node --test`, `playwright test` or `jest` without `--watch`, is never taken for a dev server.
+
+Default `reaper.keepPattern`: the regular expression `/Applications/` or `LaunchAgents`, written as one pattern with
+a `|` between the two. Programs inside `/Applications/` and scripts kept in a `LaunchAgents` folder are never
+stopped. To protect your own server too, add a part of its command line, for example
+`{ "reaper": { "keepPattern": "/Applications/|LaunchAgents|docs-site" } }`.
 
 Default `outputDirs`: `node_modules`, `dist`, `build`, `out`, `coverage`, `.cache`, `.next`, `.turbo`, `.wrangler`,
 `.vercel`, `test-results`, `playwright-report`.
@@ -293,7 +463,7 @@ Environment variables:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DOTIME_HOME` | `~/.dotime` | The state folder. Callers share a queue only when they use the same folder. |
-| `DOTIME_TZ` | `UTC` | Time zone for printed times and for calendar days. |
+| `DOTIME_TZ` | `UTC` | Time zone (an IANA zone name) for printed times and for calendar days. |
 | `DOTIME_NOTIFY` | not set | `log`: notices go to the log file only. |
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
 
@@ -301,16 +471,20 @@ Environment variables:
 
 | File | Content |
 | --- | --- |
-| `config.json` | Settings. |
-| `slots/`, `line/` | One small file per running and per waiting job. A file whose process has ended, or whose pid now belongs to a process that started later, is removed. |
+| `config.json` | Settings. Optional. |
+| `slots/`, `line/` | One small file per running and per waiting job. Files of ended processes are removed. |
 | `journal.jsonl` | One line per job. |
 | `notices.json` | Long-run and idle-slot notices. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
-The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large: the
-queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no history.
+A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
+
+The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
+the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no
+history. For the same reason, on a computer that starts fresh for every job, such as many CI runners, the queue
+never has a history.
 
 These files stay on the computer, but they hold working folders, full command lines, job labels and the labels and
 log paths of scheduled jobs. Keep that in mind before sharing them, and when `DOTIME_NOTIFY_CMD` forwards notices to
@@ -318,11 +492,14 @@ another service.
 
 ## Tests
 
+From the repository's top folder:
+
 ```
-node --test                      # everything
+npm test                         # everything (the same as node --test)
 node --test queue/slots.test.mjs # one file
 ```
 
 The tests use two switches that exist only for them: `DOTIME_FAKE_HEALTH` (a health reading as JSON) and
-`DOTIME_FAKE_CLOCK` (path of a file whose number stands in for the minutes passed since a job started). Both are honoured only when the real path of
-`DOTIME_HOME` is inside the real path of `os.tmpdir()`. With any other state folder they are ignored.
+`DOTIME_FAKE_CLOCK` (path of a file whose number stands in for the minutes passed since a job started). Both are
+honoured only when the real path of `DOTIME_HOME` is inside the real path of `os.tmpdir()`. With any other state
+folder they are ignored.
