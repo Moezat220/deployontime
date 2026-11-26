@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime, the autonomous software factory: multi-agent, AI orchestration, security checks. Stage 1, share the machine, is available now; orchestration is planned; validate and deploy come next.">
+  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime, an open-source software factory: you hand a task to the DeployOnTime orchestrator, which plans it, builds it with coding agents, validates it, runs security checks and delivers a finished feature for you to review. Available now: the machine queue for macOS. The orchestrator is planned; validate, secure and deliver come next.">
 </p>
 
 <p align="center">
