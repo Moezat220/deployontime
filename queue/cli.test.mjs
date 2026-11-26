@@ -330,3 +330,30 @@ test("status: changes nothing in the state folder, also with the slot file of a 
     assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: open\n`);
     assert.deepEqual([readdirSync(box.home).sort(), existsSync(slot)], [["config.json", "slots"], true]);
 });
+
+test("status, history and passed --cwd: work from a folder that was removed", async () => {
+    const box = sandbox();
+    const gone = join(box.work, "removed-worktree");
+    const repo = makeRepo(join(box.work, "shop-api"));
+    // The shell enters the folder and removes it, then starts the queue there.
+    const fromGone = (args) => {
+        const words = [NODE, CLI, ...args].map((word) => JSON.stringify(word)).join(" ");
+        mkdirSync(gone);
+        const script = `cd ${JSON.stringify(gone)} && rmdir ${JSON.stringify(gone)} && exec ${words}`;
+        return new Promise((resolve) => {
+            const child = track(spawn("/bin/sh", ["-c", script], { env: box.env, stdio: ["ignore", "pipe", "pipe"] }));
+            const seen = { stdout: "", stderr: "" };
+            child.stdout.on("data", (text) => { seen.stdout += text; });
+            child.stderr.on("data", (text) => { seen.stderr += text; });
+            child.on("close", (code) => resolve({ code, ...seen }));
+        });
+    };
+    const history = await fromGone(["history", "--days", "1"]);
+    assert.deepEqual([history.code, history.stderr], [0, ""]);
+    assert.equal(history.stdout.endsWith(", jobs 0\n"), true);
+    const status = await fromGone(["status"]);
+    assert.deepEqual([status.code, status.stderr], [0, ""]);
+    const passed = await fromGone(["passed", "--cwd", repo]);
+    assert.deepEqual([passed.code, passed.stderr], [1, ""]);
+    assert.equal(passed.stdout.startsWith("no stamp: "), true);
+});

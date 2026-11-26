@@ -15,7 +15,6 @@ import { EXIT, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
-
 /** The lines `status` prints. gate: the reason the gate is shut, or "". */
 export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
@@ -62,9 +61,9 @@ export function cmdStatus({ settings, files }, { readHealth: read = readHealth, 
     return 0;
 }
 
-function cmdPassed(args, { files, tz }) {
-    const dir = opt(args, "--cwd") || process.cwd();
-    const folder = { project: folderProject(dir), ...gitState(dir) };
+/** Prints the pass stamp of the folder in ctx.cwd and returns 0, or 1 when there is none. */
+function cmdPassed(args, { files, tz, cwd }) {
+    const folder = { project: folderProject(cwd), ...gitState(cwd) };
     const found = findStamp(readLines(files.journal), folder, opt(args, "--match") || "", { tz });
     console.log(found.text);
     return found.stamp ? 0 : 1;
@@ -102,10 +101,11 @@ export async function main(args = process.argv.slice(2)) {
         say(badFlag);
         return EXIT.usage;
     }
-    // The settings, the state folder and the zone are read once here and handed to the command.
-    const ctx = { settings: loadSettings(), files: paths(), tz: timeZone(), cwd: process.cwd() };
+    // The settings, the state folder and the zone are read once here and handed to the command. The current folder
+    // is read only by the commands that use it, so status and history still work in a folder that was removed.
+    const ctx = { settings: loadSettings(), files: paths(), tz: timeZone() };
     if (command === "status") return cmdStatus(ctx);
-    if (command === "passed") return cmdPassed(args, ctx);
+    if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
     if (command === "history") return cmdHistory(args, ctx);
     const { settings, files } = ctx;
     const deps = realDeps({
@@ -114,7 +114,7 @@ export async function main(args = process.argv.slice(2)) {
         notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
         after: afterMinutes,
     });
-    return runCommand(args, ctx, deps);
+    return runCommand(args, { ...ctx, cwd: process.cwd() }, deps);
 }
 
 if (isMainModule(import.meta.url)) process.exit(await main());
