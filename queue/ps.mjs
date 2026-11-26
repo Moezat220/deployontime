@@ -46,3 +46,9 @@ export function parseProcessTable(text) {
     }
     return rows;
 }
+
+/** The process group id from `ps -o pgid= -p <pid>`, or null when the text holds no positive whole number. */
+export function parseGroupId(text) {
+    const value = String(text ?? "").trim();
+    return /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : null;
+}

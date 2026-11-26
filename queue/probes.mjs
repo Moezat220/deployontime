@@ -3,6 +3,7 @@
 // null or empty text instead of throwing.
 import { spawnSync } from "node:child_process";
 import { cpus, loadavg } from "node:os";
+import { parseGroupId } from "./ps.mjs";
 
 const BIG_OUTPUT = 32 * 1024 * 1024;
 
@@ -61,10 +62,8 @@ export const probeProcessAges = (pids) => {
     if (!pids.length) return "";
     return runTool("ps", ["-o", "pid=,etime=", "-p", pids.join(",")]);
 };
-export function probeGroupOf(pid) {
-    const pgid = Number(runTool("ps", ["-o", "pgid=", "-p", String(pid)], 3000).trim());
-    return Number.isInteger(pgid) && pgid > 0 ? pgid : null;
-}
+/** The process group of a pid, or null when ps has no answer. */
+export const probeGroupOf = (pid) => parseGroupId(runTool("ps", ["-o", "pgid=", "-p", String(pid)], 3000));
 
 /** Shows a desktop notice. The texts travel as script arguments, so they are never run as script code. */
 export function showDesktopNotice(title, message, { run = spawnSync, platform = process.platform } = {}) {

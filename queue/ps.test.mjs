@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isolateProcess } from "./testkit.mjs";
 
 isolateProcess("ps");
-const { parseElapsed, parseProcessTable, psRows, psSeconds } = await import("./ps.mjs");
+const { parseElapsed, parseGroupId, parseProcessTable, psRows, psSeconds } = await import("./ps.mjs");
 
 const MINUTE = 60_000;
 const SERVER = "node /srv/shop-api/node_modules/.bin/next dev -p 4100";
@@ -35,4 +35,9 @@ test("psRows: one row per process line, with CPU time in seconds", () => {
         { pid: 4100, ppid: 1, pgid: 4100, cpu: 3.75 }, { pid: 4101, ppid: 4100, pgid: 4100, cpu: 720 }, { pid: 4102, ppid: 4101, pgid: 4102, cpu: 0 },
     ]);
     assert.deepEqual(psRows(undefined), []);
+});
+
+test("parseGroupId: the group id ps prints, or null for empty or unusable text", () => {
+    assert.equal(parseGroupId("  4100\n"), 4100);
+    assert.deepEqual([parseGroupId(""), parseGroupId(null), parseGroupId("0"), parseGroupId("PGID\n4100")], [null, null, null, null]);
 });
