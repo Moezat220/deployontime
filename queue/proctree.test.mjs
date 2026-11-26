@@ -71,7 +71,7 @@ test("stopGroup: ends a started group, with KILL for a process that ignores TERM
     ), { group: true });
     const exited = new Promise((done) => stubborn.once("exit", (code, signal) => done(signal)));
     await new Promise((done) => stubborn.stdout.once("data", done));
-    await stopGroup(stubborn.pid, [{ pid: stubborn.pid }], { graceMs: 150 });
+    assert.deepEqual(await stopGroup(stubborn.pid, [{ pid: stubborn.pid }], { graceMs: 150 }), { stopped: true });
     assert.equal(await exited, "SIGKILL");
     await until(() => !alive(stubborn.pid), 3000);
 });

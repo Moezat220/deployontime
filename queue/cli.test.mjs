@@ -242,7 +242,7 @@ test("run: a signal while running stops the job and is journalled as stopped", a
     const job = pidIn(pidFile);
     run.child.kill("SIGTERM");
     const result = await run.done;
-    assert.notEqual(result.code, 0);
+    assert.equal(result.code, 1);
     assert.equal(result.stderr, "dotime-queue: stopped: signal SIGTERM, 0 min run, journalled as stopped and not as failed\n");
     await until(() => !alive(job), 3000);
     const [line] = journal(box);
