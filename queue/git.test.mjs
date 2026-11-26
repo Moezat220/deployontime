@@ -35,10 +35,15 @@ test("repoName: the repository folder, the main one for a linked worktree, null 
 });
 
 test("porcelainClean: clean for no output and for untracked node_modules links only", () => {
-    for (const status of ["?? notes.txt\n", "A  node_modules\n", "?? node_modules.bak\n", " D node_modules\n", "?? node_modules\n M lib/price.js\n", " M lib/price.js\n", "?? tools/cache/node_modules/\n"]) {
+    for (const status of [
+        "?? notes.txt\n", "A  node_modules\n", "?? node_modules.bak\n", " D node_modules\n",
+        "?? node_modules\n M lib/price.js\n", " M lib/price.js\n", "?? tools/cache/node_modules/\n",
+    ]) {
         assert.equal(porcelainClean(status), false, JSON.stringify(status));
     }
-    for (const status of ["?? packages/ui/node_modules\n", "?? packages/ui/node_modules\n?? node_modules\n", "?? node_modules\n", ""]) assert.equal(porcelainClean(status), true, JSON.stringify(status));
+    for (const status of [
+        "?? packages/ui/node_modules\n", "?? packages/ui/node_modules\n?? node_modules\n", "?? node_modules\n", "",
+    ]) assert.equal(porcelainClean(status), true, JSON.stringify(status));
 });
 
 test("gitState: null answers outside a repository", () => {
@@ -63,9 +68,15 @@ test("gitState: a node_modules symlink escapes the `node_modules/` ignore rule, 
 });
 
 test("readOnlyGit: no index lock, no watcher program, and the caller's own settings kept", () => {
-    assert.deepEqual(readOnlyGit({ KEEP: "1" }), { KEEP: "1", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false" });
+    assert.deepEqual(readOnlyGit({ KEEP: "1" }), {
+        KEEP: "1", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor",
+        GIT_CONFIG_VALUE_0: "false",
+    });
     const added = readOnlyGit({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.pager", GIT_CONFIG_VALUE_0: "cat" });
-    assert.deepEqual([added.GIT_CONFIG_COUNT, added.GIT_CONFIG_KEY_0, added.GIT_CONFIG_KEY_1, added.GIT_CONFIG_VALUE_1], ["2", "core.pager", "core.fsmonitor", "false"]);
+    assert.deepEqual(
+        [added.GIT_CONFIG_COUNT, added.GIT_CONFIG_KEY_0, added.GIT_CONFIG_KEY_1, added.GIT_CONFIG_VALUE_1],
+        ["2", "core.pager", "core.fsmonitor", "false"],
+    );
 });
 
 test("the queue's git calls do not start a watcher program named in the repository's settings", async () => {

@@ -34,15 +34,28 @@ function start(box, args, { cwd = box.work, env = box.env } = {}) {
     return { child, seen, done: new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal, ...seen }))) };
 }
 const cli = (box, args, options) => start(box, args, options).done;
-const journal = (box) => { try { return readFileSync(join(box.home, "journal.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)); } catch { return []; } };
-const slots = (box) => { try { return readdirSync(join(box.home, "slots")).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(box.home, "slots", name), "utf8"))); } catch { return []; } };
+const journal = (box) => {
+    try {
+        return readFileSync(join(box.home, "journal.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    } catch { return []; }
+};
+const slots = (box) => {
+    try {
+        return readdirSync(join(box.home, "slots"))
+            .filter((name) => name.endsWith(".json"))
+            .map((name) => JSON.parse(readFileSync(join(box.home, "slots", name), "utf8")));
+    } catch { return []; }
+};
 const count = (text, part) => text.split(part).length - 1;
 
 // Job scripts, run with `node -e`.
 const FOREVER = "setInterval(() => {}, 1000)";
-const untilFile = (file) => `const fs = require("node:fs"); const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
+const untilFile = (file) => `const fs = require("node:fs"); `
+    + `const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
 const savePid = (file) => `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); ${FOREVER}`;
-const withChild = (file) => `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
+const withChild = (file) => `const c = require("node:child_process").spawn(`
+    + `process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); `
+    + `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
 const pidIn = (file) => Number(readFileSync(file, "utf8"));
 
 // ---- functions ----
@@ -58,10 +71,16 @@ test("statusLines: one line per running job, per waiting job and for the gate", 
     const now = Date.UTC(2031, 5, 9, 10, 0);
     const holders = [
         { label: "docs-site: build", pid: 3101, startedAt: now - 23 * MINUTE, kind: "build", limitMin: 30, killMin: 30, longRunMin: 20 },
-        { label: "mobile-app: store upload", pid: 3102, startedAt: now - 9 * MINUTE, kind: "deploy", limitMin: 12, killMin: 24, longRunMin: 20, priority: true },
+        {
+            label: "mobile-app: store upload", pid: 3102, startedAt: now - 9 * MINUTE, kind: "deploy",
+            limitMin: 12, killMin: 24, longRunMin: 20, priority: true,
+        },
         { label: "shop-api: lint", pid: 3103, at: now - 2 * MINUTE },
     ];
-    const queue = [{ label: "shop-api: integration suite", pid: 3104, at: now - 6 * MINUTE, priority: true }, { label: "docs-site: link check", pid: 3105, at: now - 30_000 }];
+    const queue = [
+        { label: "shop-api: integration suite", pid: 3104, at: now - 6 * MINUTE, priority: true },
+        { label: "docs-site: link check", pid: 3105, at: now - 30_000 },
+    ];
     assert.deepEqual(statusLines({ holders, queue, gate: "no free slot: 3 of 3 taken", max: 3, now }), [
         "slots: 3 of 3 taken, 2 waiting",
         'running "docs-site: build": pid 3101, kind build, 23 min so far, limit 30 min, 7 min left, past the 20 min long-run mark',
@@ -78,8 +97,16 @@ test("statusLines: an empty queue with an open gate", () => {
 });
 
 test("historyRow: how jobs ended, then how long they waited, then what held them back", () => {
-    const totals = { jobs: 9, waited: 4, waitMinTotal: 31.5, waitWallMin: 18, blockedOnlyMin: 2.5, waitMedian: 0.5, waitP90: 11, gaveUp: 1, failed: 2, stopped: 0, timedOut: 1, refused: 3, waitBy: { slots: 27, disk: 4.5 } };
-    assert.equal(historyRow("shop-api", totals), "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1; waited: jobs 4, sum 31.5 min, clock 18 min, clock with no job running 2.5 min, median 0.5 min, p90 11 min; held by: slots 27 min, disk 4.5 min");
+    const totals = {
+        jobs: 9, waited: 4, waitMinTotal: 31.5, waitWallMin: 18, blockedOnlyMin: 2.5, waitMedian: 0.5, waitP90: 11,
+        gaveUp: 1, failed: 2, stopped: 0, timedOut: 1, refused: 3, waitBy: { slots: 27, disk: 4.5 },
+    };
+    assert.equal(
+        historyRow("shop-api", totals),
+        "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1; "
+            + "waited: jobs 4, sum 31.5 min, clock 18 min, clock with no job running 2.5 min, median 0.5 min, p90 11 min; "
+            + "held by: slots 27 min, disk 4.5 min",
+    );
     assert.equal(historyRow("docs-site", { ...totals, waitBy: {} }).endsWith("; held by: nothing"), true);
 });
 
@@ -87,11 +114,17 @@ test("historyRow: how jobs ended, then how long they waited, then what held them
 
 test("run: passes the job's output and exit code through and writes one journal line", async () => {
     const box = sandbox();
-    const result = await cli(box, ["run", "--label", "mobile-app: bundle", "--", NODE, "-e", "console.log('bundled'); console.error('1 warning'); process.exit(4)"]);
+    const result = await cli(box, [
+        "run", "--label", "mobile-app: bundle", "--",
+        NODE, "-e", "console.log('bundled'); console.error('1 warning'); process.exit(4)",
+    ]);
     assert.deepEqual([result.code, result.stdout, result.stderr], [4, "bundled\n", "1 warning\n"]);
     const lines = journal(box);
     assert.equal(lines.length, 1);
-    assert.deepEqual([lines[0].outcome, lines[0].exit, lines[0].projectKey, lines[0].kind, lines[0].limitMin, lines[0].priority], ["ran", 4, "mobile-app", "build", DEFAULTS.limits.defaultMin, false]);
+    assert.deepEqual(
+        [lines[0].outcome, lines[0].exit, lines[0].projectKey, lines[0].kind, lines[0].limitMin, lines[0].priority],
+        ["ran", 4, "mobile-app", "build", DEFAULTS.limits.defaultMin, false],
+    );
     assert.deepEqual([slots(box), readdirSync(join(box.home, "line"))], [[], []]);
 });
 
@@ -132,7 +165,10 @@ test("run: with the only slot taken, the next job waits, says why, and starts wh
     assert.equal((await cli(box, ["status"])).stdout.includes('waiting 1 "shop-api: lint": pid '), true);
     writeFileSync(release, "");
     assert.deepEqual([(await first.done).code, (await second.done).code], [0, 0]);
-    assert.equal(second.seen.stderr.startsWith(`dotime-queue: in line: position 1, 0 min waited, wait limit ${DEFAULTS.maxWaitMin} min; no free slot: 1 of 1 taken, by "docs-site: build"\n`), true);
+    assert.equal(second.seen.stderr.startsWith(
+        `dotime-queue: in line: position 1, 0 min waited, wait limit ${DEFAULTS.maxWaitMin} min; `
+            + `no free slot: 1 of 1 taken, by "docs-site: build"\n`,
+    ), true);
     const [build, lint] = ["docs-site: build", "shop-api: lint"].map((label) => journal(box).find((line) => line.label === label));
     assert.equal(Date.parse(lint.startedAt) >= Date.parse(build.endedAt), true);
     assert.deepEqual(Object.keys(lint.waitBy), ["slots"]);
@@ -166,12 +202,17 @@ test("run: the same check is refused after failing twice, unless --after-fix is 
     for (const attempt of [1, 2]) assert.equal((await cli(box, ["run", ...label, ...failing])).code, 4, `attempt ${attempt}`);
     const refused = await cli(box, ["run", ...label, ...failing]);
     assert.equal(refused.code, 3);
-    assert.equal(refused.stderr.startsWith('dotime-queue: refused: exit 3; same check failed twice on unchanged code: "shop-api: integration suite", exit 4 at '), true);
+    assert.equal(refused.stderr.startsWith(
+        'dotime-queue: refused: exit 3; same check failed twice on unchanged code: "shop-api: integration suite", exit 4 at ',
+    ), true);
     assert.equal(refused.stderr.includes("--after-fix"), true);
     const allowed = await cli(box, ["run", ...label, "--after-fix", "raised the database pool size", ...failing]);
     assert.equal(allowed.code, 4);
     assert.equal(allowed.stderr, 'dotime-queue: --after-fix accepted: note "raised the database pool size", the check had failed twice on unchanged code\n');
-    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.afterFix ?? null]), [["ran", 4, null], ["ran", 4, null], ["refused", 3, null], ["ran", 4, "raised the database pool size"]]);
+    assert.deepEqual(
+        journal(box).map((line) => [line.outcome, line.exit, line.afterFix ?? null]),
+        [["ran", 4, null], ["ran", 4, null], ["refused", 3, null], ["ran", 4, "raised the database pool size"]],
+    );
 });
 
 test("run: an edit to the script it runs lifts the refusal", async () => {
@@ -224,7 +265,11 @@ test("passed: finds a stamp for a clean commit that passed, and none once the tr
     assert.equal((await cli(box, ["run", "--label", "shop-api: integration suite", "--", NODE, "-e", "process.exit(0)"], { cwd: repo })).code, 0);
     const found = await cli(box, ["passed", "--match", "integration"], { cwd: repo });
     assert.equal(found.code, 0);
-    assert.equal(/^stamp: commit [0-9a-f]{8}, passed 0 min ago by "shop-api: integration suite", command .+, run time 0 min, tree clean at start, finished \d{4}-\d\d-\d\d \d\d:\d\d UTC\n$/.test(found.stdout), true);
+    assert.equal(
+        new RegExp('^stamp: commit [0-9a-f]{8}, passed 0 min ago by "shop-api: integration suite", command .+, '
+            + "run time 0 min, tree clean at start, finished \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\n$").test(found.stdout),
+        true,
+    );
     assert.deepEqual([(await cli(box, ["passed", "--match", "lint", "--cwd", repo])).code, (await cli(box, ["passed", "--cwd", box.work])).code], [1, 1]);
     writeFileSync(join(repo, "src", "cart.js"), "export const items = [1];\n");
     const dirty = await cli(box, ["passed", "--cwd", repo]);
@@ -248,7 +293,11 @@ test("history: one row for all projects and one per project", async () => {
     const rows = today.stdout.trimEnd().split("\n");
     assert.equal(today.code, 0);
     assert.equal(/^history: \d{4}-\d\d-\d\d so far, zone UTC, jobs 2$/.test(rows[0]), true);
-    assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), ["all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0", "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0", "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0"]);
+    assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), [
+        "all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0",
+        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0",
+        "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0",
+    ]);
     assert.equal((await cli(box, ["history", "--day", "2040-01-01"])).stdout, "history: 2040-01-01, zone UTC, jobs 0\n");
 });
 
@@ -267,7 +316,11 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     const emptyMatch = await cli(box, ["passed", "--match", ""]);
     assert.deepEqual([emptyMatch.code, emptyMatch.stdout, emptyMatch.stderr], [2, "", "dotime-queue: option --match needs a value\n"]);
     const labelAsValue = await cli(box, ["run", "--label", "--priority", "--", NODE, "-e", "console.log('started')"]);
-    assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [2, "", 'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority\n']);
+    assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [
+        2,
+        "",
+        'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority\n',
+    ]);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
     const statusFlag = await cli(box, ["status", "--all"]);

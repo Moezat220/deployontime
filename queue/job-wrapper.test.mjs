@@ -73,7 +73,10 @@ test("wrapperEnd: an error on the report stream ends the wait and is not thrown"
 });
 
 test("wrapper: a command that cannot start is reported on descriptor 3 and ends with exit 127", async () => {
-    const child = track(spawn(process.execPath, [WRAPPER, String(process.pid), "dotime-command-that-is-not-installed"], { env: cleanEnv(HOME), stdio: ["ignore", "pipe", "pipe", "pipe"] }));
+    const child = track(spawn(process.execPath, [WRAPPER, String(process.pid), "dotime-command-that-is-not-installed"], {
+        env: cleanEnv(HOME),
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+    }));
     let report = "", stderr = "";
     child.stdio[3].on("data", (text) => { report += text; });
     child.stderr.on("data", (text) => { stderr += text; });

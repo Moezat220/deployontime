@@ -23,9 +23,12 @@ const NOW = Date.UTC(2031, 3, 7, 9, 0);
 
 // Job scripts, run with `node -e`.
 const FOREVER = "setInterval(() => {}, 1000)";
-const untilFile = (file) => `const fs = require("node:fs"); const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
+const untilFile = (file) => "const fs = require(\"node:fs\"); "
+    + `const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
 const savePid = (file) => `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); ${FOREVER}`;
-const withChild = (file) => `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
+const withChild = (file) => "const c = require(\"node:child_process\")"
+    + `.spawn(process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); `
+    + `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
 const pidIn = (file) => Number(readFileSync(file, "utf8"));
 const count = (lines, part) => lines.filter((line) => line.includes(part)).length;
 
@@ -38,8 +41,18 @@ function sandbox(config = {}) {
     };
     return { home, work, ctx: { settings, files: paths({ DOTIME_HOME: home }), tz: "UTC", cwd: work } };
 }
-const journal = (box) => { try { return readFileSync(box.ctx.files.journal, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)); } catch { return []; } };
-const slots = (box) => { try { return readdirSync(join(box.home, "slots")).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(box.home, "slots", name), "utf8"))); } catch { return []; } };
+const journal = (box) => {
+    try {
+        return readFileSync(box.ctx.files.journal, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    } catch { return []; }
+};
+const slots = (box) => {
+    try {
+        return readdirSync(join(box.home, "slots"))
+            .filter((name) => name.endsWith(".json"))
+            .map((name) => JSON.parse(readFileSync(join(box.home, "slots", name), "utf8")));
+    } catch { return []; }
+};
 
 /** A timer in minutes that fires only when the test says how many minutes have passed. advanceTo() returns the
  *  marks it fired, so a test can see that a moment was reached and nothing was due. */
@@ -81,9 +94,18 @@ const settle = (promise) => {
 
 // ---- planJob ----
 
-const passedRun = (fields = {}) => ({ projectKey: "docs-site", label: "docs-site: build", cmd: "pnpm run build", kind: "build", outcome: "ran", exit: 0, runMin: 8, endedAt: new Date(NOW - 60 * MINUTE).toISOString(), ...fields });
-const failedRun = (minutesAgo) => ({ projectKey: "shop-api", label: "shop-api: unit tests", cmd: "pnpm test", cwd: "/srv/shop-api", outcome: "ran", exit: 4, head: "ab12cd34ef", fingerprint: "f00d", endedAt: new Date(NOW - minutesAgo * MINUTE).toISOString() });
-const request = (fields = {}) => ({ label: "docs-site: build", command: "pnpm run build", maxRun: null, priority: false, afterFix: null, project: "docs-site", cwd: "/srv/docs-site", head: "ab12cd34ef", fingerprint: "f00d", queuedAt: NOW, tz: "UTC", ...fields });
+const passedRun = (fields = {}) => ({
+    projectKey: "docs-site", label: "docs-site: build", cmd: "pnpm run build", kind: "build", outcome: "ran", exit: 0, runMin: 8,
+    endedAt: new Date(NOW - 60 * MINUTE).toISOString(), ...fields,
+});
+const failedRun = (minutesAgo) => ({
+    projectKey: "shop-api", label: "shop-api: unit tests", cmd: "pnpm test", cwd: "/srv/shop-api", outcome: "ran", exit: 4,
+    head: "ab12cd34ef", fp: "f00d", endedAt: new Date(NOW - minutesAgo * MINUTE).toISOString(),
+});
+const request = (fields = {}) => ({
+    label: "docs-site: build", command: "pnpm run build", maxRun: null, priority: false, afterFix: null, project: "docs-site",
+    cwd: "/srv/docs-site", head: "ab12cd34ef", fingerprint: "f00d", queuedAt: NOW, tz: "UTC", ...fields,
+});
 
 test("planJob: the limit comes from the journal rows, and the details name it", () => {
     const rows = Array.from({ length: 5 }, () => passedRun());
@@ -106,7 +128,10 @@ test("planJob: refuses a check that failed twice on unchanged code, unless --aft
 
 // ---- waitForSlot ----
 
-const waiter = (box, fields = {}) => ({ pid: process.pid, label: "shop-api: lint", maxWait: 60, slotMeta: { kind: "lint" }, settings: box.ctx.settings, files: box.ctx.files, ...fields });
+const waiter = (box, fields = {}) => ({
+    pid: process.pid, label: "shop-api: lint", maxWait: 60, slotMeta: { kind: "lint" },
+    settings: box.ctx.settings, files: box.ctx.files, ...fields,
+});
 
 test("waitForSlot: takes a free slot at once when the gate is open", async () => {
     const box = sandbox(), clock = fakeClock(), said = [];
@@ -152,9 +177,15 @@ test("waitForSlot: leaves the line when a signal asks for it", async () => {
 function startJob(box, cmd, fields = {}) {
     const d = makeDeps(box, fields.deps);
     const slot = takeSlot(process.pid, "docs-site: build", 1, {}, box.ctx.files);
-    const writer = journalWriter({ label: "docs-site: build", folder: "docs-site", cwd: box.work, priority: false, queuedAt: Date.now(), command: cmd.join(" "), details: { kind: "build" }, file: box.ctx.files.journal, now: Date.now });
+    const writer = journalWriter({
+        label: "docs-site: build", folder: "docs-site", cwd: box.work, priority: false, queuedAt: Date.now(),
+        command: cmd.join(" "), details: { kind: "build" }, file: box.ctx.files.journal, now: Date.now,
+    });
     const limit = { limitMin: 30, killMin: 30, longRunMin: 20, notifyLongRun: false, basis: "the default" };
-    const job = { pid: process.pid, label: "docs-site: build", project: "docs-site", cwd: box.work, cmd, priority: false, kind: "build", limit, waitFrom: Date.now(), ...box.ctx, journal: writer };
+    const job = {
+        pid: process.pid, label: "docs-site: build", project: "docs-site", cwd: box.work, cmd, priority: false, kind: "build",
+        limit, waitFrom: Date.now(), ...box.ctx, journal: writer,
+    };
     return { ...d, slot, run: settle(runJob(job, slot, d.deps)) };
 }
 
@@ -220,7 +251,8 @@ test("run: exit 124 at the run limit stops the whole process group", async () =>
     assert.deepEqual([run.done, alive(jobChild)], [false, true]);
     assert.deepEqual(d.clock.advanceTo(3), [3]);
     assert.equal(await run.result, 124);
-    assert.equal(d.said.includes('run limit: stopping "shop-api: e2e", KILL follows TERM after 0.25 s; ran 3 min against a limit of 3 min, set by the --max-run flag'), true);
+    assert.equal(d.said.includes('run limit: stopping "shop-api: e2e", KILL follows TERM after 0.25 s; '
+        + "ran 3 min against a limit of 3 min, set by the --max-run flag"), true);
     assert.equal(d.said.some((line) => line.startsWith("timed out: exit 124, stopped after 3 min; hint: ")), true);
     await until(() => !alive(jobChild), 3000);
     assert.deepEqual([journal(box).map((line) => [line.outcome, line.exit]), slots(box)], [[["timed-out", 124]], []]);
@@ -254,7 +286,11 @@ test("run: a run-limit stop whose KILL is refused is reported and journalled as 
 
 test("run: with --priority the limit only warns, and the stop comes at double the limit", async () => {
     const box = sandbox(), pidFile = join(box.work, "job.pid"), d = makeDeps(box);
-    const run = settle(runCommand(["run", "--priority", "--label", "mobile-app: store upload", "--max-run", "4", "--", NODE, "-e", savePid(pidFile)], box.ctx, d.deps));
+    const run = settle(runCommand(
+        ["run", "--priority", "--label", "mobile-app: store upload", "--max-run", "4", "--", NODE, "-e", savePid(pidFile)],
+        box.ctx,
+        d.deps,
+    ));
     await until(() => existsSync(pidFile));
     const job = pidIn(pidFile);
     assert.deepEqual([slots(box)[0].priority, slots(box)[0].limitMin, slots(box)[0].killMin], [true, 4, 8]);
@@ -264,7 +300,8 @@ test("run: with --priority the limit only warns, and the stop comes at double th
     assert.deepEqual(d.said, ['priority warning: hard stop at 8 min, the 4 min limit (set by the --max-run flag) was passed by "mobile-app: store upload"']);
     assert.deepEqual(d.clock.advanceTo(8), [8]);
     assert.equal(await run.result, 124);
-    assert.equal(d.said.some((line) => line.includes('run limit: stopping "mobile-app: store upload"') && line.includes("ran 8 min against a limit of 4 min")), true);
+    assert.equal(d.said.some((line) => line.includes('run limit: stopping "mobile-app: store upload"')
+        && line.includes("ran 8 min against a limit of 4 min")), true);
     await until(() => !alive(job), 3000);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.priority, typeof line.warnedAt], ["timed-out", true, "string"]);

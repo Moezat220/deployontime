@@ -15,7 +15,12 @@ const { checkAll, globMatch, judge, LIST_ERROR, maxLogAgeMs, readRules, reportTe
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR, NOW = Date.UTC(2032, 4, 21, 6, 0);
 const LABEL = "com.example.cleanup";
-const hourly = { Label: LABEL, ProgramArguments: ["/opt/tools/bin/node", "/opt/tasks/cleanup.mjs", "--older-than", "30"], StartInterval: 3600, StandardOutPath: "/var/log/tasks/cleanup.log" };
+const hourly = {
+    Label: LABEL,
+    ProgramArguments: ["/opt/tools/bin/node", "/opt/tasks/cleanup.mjs", "--older-than", "30"],
+    StartInterval: 3600,
+    StandardOutPath: "/var/log/tasks/cleanup.log",
+};
 const facts = (fields = {}) => ({ label: LABEL, plist: hourly, loaded: true, exit: 0, logMtime: NOW - 40 * MINUTE, scriptsMissing: [], ...fields });
 const problems = (fields, rules = {}) => judge(facts(fields), rules, NOW, "UTC").problems;
 
@@ -36,11 +41,24 @@ test("readRules: a rules file that is broken or cannot be read is reported; a mi
     mkdirSync(folder);
     writeFileSync(list, "[]");
     for (const file of [join(dir, "absent.json"), broken, folder, list]) assert.deepEqual(readRules(file, { warn }), { skip: [], okExit: {} }, file);
-    assert.deepEqual(seen, [`rules file ignored: ${broken} is not valid JSON`, `rules file ignored: ${folder} could not be read (EISDIR)`, `rules file ignored: ${list} needs one JSON object`]);
+    assert.deepEqual(seen, [
+        `rules file ignored: ${broken} is not valid JSON`,
+        `rules file ignored: ${folder} could not be read (EISDIR)`,
+        `rules file ignored: ${list} needs one JSON object`,
+    ]);
 });
 
 test("globMatch: * stands for any text, everything else is literal", () => {
-    const cases = [["org.sample.*", "org.sample.agent", true], ["org.sample.*", "org.samples.agent", false], ["*.cleanup", LABEL, true], ["com.*.clean*", LABEL, true], [LABEL, LABEL, true], [LABEL, `${LABEL}.old`, false], ["com.example.c+", "com.example.cc", false], ["comXexample.cleanup", LABEL, false]];
+    const cases = [
+        ["org.sample.*", "org.sample.agent", true],
+        ["org.sample.*", "org.samples.agent", false],
+        ["*.cleanup", LABEL, true],
+        ["com.*.clean*", LABEL, true],
+        [LABEL, LABEL, true],
+        [LABEL, `${LABEL}.old`, false],
+        ["com.example.c+", "com.example.cc", false],
+        ["comXexample.cleanup", LABEL, false],
+    ];
     for (const [pattern, label, expected] of cases) assert.equal(globMatch(pattern, label), expected, `${pattern} on ${label}`);
 });
 
@@ -65,7 +83,9 @@ test("maxLogAgeMs: null for a job without a schedule", () => {
 
 test("scriptsOf: absolute script paths among the arguments, not the interpreter or its options", () => {
     assert.deepEqual(scriptsOf(hourly), ["/opt/tasks/cleanup.mjs"]);
-    assert.deepEqual(scriptsOf({ ProgramArguments: ["/bin/zsh", "/opt/tasks/rotate.zsh", "tasks/relative.sh", "/opt/tasks/data.json", 7] }), ["/opt/tasks/rotate.zsh"]);
+    assert.deepEqual(scriptsOf({
+        ProgramArguments: ["/bin/zsh", "/opt/tasks/rotate.zsh", "tasks/relative.sh", "/opt/tasks/data.json", 7],
+    }), ["/opt/tasks/rotate.zsh"]);
     assert.deepEqual(scriptsOf({ Program: "/opt/tasks/report.py" }), ["/opt/tasks/report.py"]);
     assert.deepEqual(scriptsOf({}), []);
 });
@@ -77,7 +97,8 @@ test("judge: a loaded job with a good exit and a fresh log has no problems", () 
 
 test("judge: names each kind of problem", () => {
     assert.deepEqual(problems({ loaded: false, exit: null }), ["not loaded in the scheduler"]);
-    assert.deepEqual(problems({ scriptsMissing: ["/opt/tasks/cleanup.mjs", "/opt/tasks/lib.mjs"] }), ["script not found: /opt/tasks/cleanup.mjs, /opt/tasks/lib.mjs"]);
+    assert.deepEqual(problems({ scriptsMissing: ["/opt/tasks/cleanup.mjs", "/opt/tasks/lib.mjs"] }),
+        ["script not found: /opt/tasks/cleanup.mjs, /opt/tasks/lib.mjs"]);
     assert.deepEqual(problems({ exit: 78 }), ["last run exit code 78"]);
     assert.deepEqual(problems({ exit: -15 }), ["last run ended by signal 15"]);
     assert.deepEqual(problems({ logMtime: NOW - 4 * HOUR }), ["log not written since 2032-05-21 02:00 UTC"]);
@@ -85,7 +106,11 @@ test("judge: names each kind of problem", () => {
 });
 
 test("judge: several problems are listed together, and an unloaded job is not blamed for its exit code or log file", () => {
-    assert.deepEqual(problems({ exit: 1, logMtime: NOW - 9 * HOUR, scriptsMissing: ["/opt/tasks/cleanup.mjs"] }), ["script not found: /opt/tasks/cleanup.mjs", "last run exit code 1", "log not written since 2032-05-20 21:00 UTC"]);
+    assert.deepEqual(problems({ exit: 1, logMtime: NOW - 9 * HOUR, scriptsMissing: ["/opt/tasks/cleanup.mjs"] }), [
+        "script not found: /opt/tasks/cleanup.mjs",
+        "last run exit code 1",
+        "log not written since 2032-05-20 21:00 UTC",
+    ]);
     assert.deepEqual(problems({ loaded: false, exit: 1, logMtime: null }), ["not loaded in the scheduler"]);
 });
 
@@ -124,7 +149,12 @@ test("checkAll: judges each job file in name order, honouring skip rules", () =>
         results: [
             { label: LABEL, ok: true, problems: [], log: "/var/log/tasks/cleanup.log" },
             { label: "c-broken.plist", ok: false, problems: ["job file unreadable"], log: null },
-            { label: "d-mirror", ok: false, problems: ["not loaded in the scheduler", "script not found: /opt/tasks/mirror.sh"], log: "/var/log/tasks/mirror.err" },
+            {
+                label: "d-mirror",
+                ok: false,
+                problems: ["not loaded in the scheduler", "script not found: /opt/tasks/mirror.sh"],
+                log: "/var/log/tasks/mirror.err",
+            },
         ],
     });
     assert.equal(checkAll(readers({ rules: {} })).results.length, 4);
@@ -152,7 +182,11 @@ test("reportText: null when all jobs are fine, else one line naming the broken o
     const fine = { label: LABEL, ok: true, problems: [] };
     assert.equal(reportText([]), null);
     assert.equal(reportText([fine, fine]), null);
-    assert.equal(reportText([fine, { label: "d-mirror", ok: false, problems: ["not loaded in the scheduler", "log file not found"] }, { label: "e-report", ok: false, problems: ["last run exit code 2"] }]),
+    assert.equal(reportText([
+        fine,
+        { label: "d-mirror", ok: false, problems: ["not loaded in the scheduler", "log file not found"] },
+        { label: "e-report", ok: false, problems: ["last run exit code 2"] },
+    ]),
         "scheduled jobs with problems: 2 of 3; d-mirror: not loaded in the scheduler, log file not found; e-report: last run exit code 2");
 });
 
@@ -165,7 +199,11 @@ test("reportText: warnings come first, and alone they still make a notice", () =
 test("main: a broken rules file is named in the notice and in the log, not only on stderr", () => {
     const home = tempDir("schedule-home"), user = tempDir("schedule-user");
     writeFileSync(join(home, "schedule-check.json"), "{");
-    const ran = spawnSync(process.execPath, [fileURLToPath(new URL("./schedule-check.mjs", import.meta.url))], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
+    const ran = spawnSync(process.execPath, [fileURLToPath(new URL("./schedule-check.mjs", import.meta.url))], {
+        env: cleanEnv(home, { HOME: user }),
+        encoding: "utf8",
+        timeout: 60_000,
+    });
     const warning = `rules file ignored: ${join(home, "schedule-check.json")} is not valid JSON`;
     assert.equal(ran.stderr.includes(warning), true, ran.stderr);
     assert.equal(readFileSync(join(home, "notify.log"), "utf8").includes("rules file ignored:"), true, "no notice names the rules file");

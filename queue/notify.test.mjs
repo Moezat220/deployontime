@@ -10,7 +10,11 @@ import { cleanText, notify, runNotifyCommand } from "./notify.mjs";
 const AT = Date.UTC(2032, 1, 2, 3, 4, 5);
 function channels() {
     const calls = [];
-    return { calls, desktop: (...args) => { calls.push(["desktop", ...args]); return true; }, command: (...args) => { calls.push(["command", ...args.slice(0, 3)]); return true; } };
+    return {
+        calls,
+        desktop: (...args) => { calls.push(["desktop", ...args]); return true; },
+        command: (...args) => { calls.push(["command", ...args.slice(0, 3)]); return true; }
+    };
 }
 
 test("cleanText: one printable line, limited in length", () => {
@@ -41,7 +45,10 @@ test("runNotifyCommand: false when the command fails", () => {
 
 test("notify: writes the log line and uses both other channels", () => {
     const home = tempDir("notify"), c = channels();
-    const sent = notify("dotime: job running long", "mobile-app: bundle\nstill going", { env: { DOTIME_NOTIFY_CMD: "relay --quiet" }, logFile: join(home, "notify.log"), desktop: c.desktop, command: c.command, now: AT });
+    const sent = notify("dotime: job running long", "mobile-app: bundle\nstill going", {
+        env: { DOTIME_NOTIFY_CMD: "relay --quiet" }, logFile: join(home, "notify.log"),
+        desktop: c.desktop, command: c.command, now: AT
+    });
     assert.deepEqual(sent, { logged: true, desktop: true, command: true });
     assert.deepEqual(c.calls, [
         ["desktop", "dotime: job running long", "mobile-app: bundle still going"],
@@ -52,7 +59,10 @@ test("notify: writes the log line and uses both other channels", () => {
 
 test("notify: DOTIME_NOTIFY=log stops after the log line", () => {
     const home = tempDir("notify"), c = channels();
-    const sent = notify("first", "one", { env: { DOTIME_NOTIFY: "log", DOTIME_NOTIFY_CMD: "relay" }, logFile: join(home, "notify.log"), desktop: c.desktop, command: c.command, now: AT });
+    const sent = notify("first", "one", {
+        env: { DOTIME_NOTIFY: "log", DOTIME_NOTIFY_CMD: "relay" }, logFile: join(home, "notify.log"),
+        desktop: c.desktop, command: c.command, now: AT
+    });
     assert.deepEqual(sent, { logged: true, desktop: false, command: null });
     assert.deepEqual(c.calls, []);
 });
@@ -75,8 +85,18 @@ test("notify: a channel that throws does not stop the others", () => {
     writeFileSync(blocker, "");
     const boom = () => { throw new Error("channel down"); };
     const c = channels();
-    assert.deepEqual(notify("fourth", "four", { env: { DOTIME_NOTIFY_CMD: "relay" }, logFile: join(blocker, "notify.log"), desktop: boom, command: c.command }), { logged: false, desktop: false, command: true });
-    assert.deepEqual(notify("fifth", "five", { env: { DOTIME_NOTIFY_CMD: "relay" }, logFile: join(blocker, "notify.log"), desktop: c.desktop, command: boom }), { logged: false, desktop: true, command: false });
+    assert.deepEqual(
+        notify("fourth", "four", {
+            env: { DOTIME_NOTIFY_CMD: "relay" }, logFile: join(blocker, "notify.log"), desktop: boom, command: c.command
+        }),
+        { logged: false, desktop: false, command: true }
+    );
+    assert.deepEqual(
+        notify("fifth", "five", {
+            env: { DOTIME_NOTIFY_CMD: "relay" }, logFile: join(blocker, "notify.log"), desktop: c.desktop, command: boom
+        }),
+        { logged: false, desktop: true, command: false }
+    );
 });
 
 test("cleanText: an empty home folder setting leaves the text alone", () => {

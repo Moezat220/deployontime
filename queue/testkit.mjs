@@ -77,7 +77,9 @@ process.env.DOTIME_NOTIFY = "log";
 // repository never leaves a changed index file behind.
 export const GIT_ENV = Object.freeze({
     GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "core.excludesFile", GIT_CONFIG_VALUE_0: "/dev/null", GIT_CONFIG_KEY_1: "core.attributesFile", GIT_CONFIG_VALUE_1: "/dev/null",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "core.excludesFile", GIT_CONFIG_VALUE_0: "/dev/null",
+    GIT_CONFIG_KEY_1: "core.attributesFile", GIT_CONFIG_VALUE_1: "/dev/null",
     GIT_CEILING_DIRECTORIES: realpathSync(tmpdir()), GIT_OPTIONAL_LOCKS: "0",
     GIT_AUTHOR_NAME: "tester", GIT_AUTHOR_EMAIL: "tester", GIT_COMMITTER_NAME: "tester", GIT_COMMITTER_EMAIL: "tester",
 });
@@ -120,7 +122,10 @@ function checkGitIsolation() {
 
 export function git(cwd, ...args) {
     checkGitIsolation();
-    const ran = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-C", cwd, ...args], { env: { ...gitFree(), ...GIT_ENV }, encoding: "utf8" });
+    const ran = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-C", cwd, ...args], {
+        env: { ...gitFree(), ...GIT_ENV },
+        encoding: "utf8",
+    });
     if (ran.status !== 0) throw new Error(`git ${args[0]} did not succeed`);
     return ran.stdout;
 }

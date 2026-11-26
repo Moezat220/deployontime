@@ -5,7 +5,10 @@ import { FLAGS, flagError, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRu
 import { DEFAULTS } from "./settings.mjs";
 
 test("flagError: accepts each subcommand's own flags in both spellings", () => {
-    assert.equal(flagError(["run", "--priority", "--label", "docs-site: build", "--max-wait=5", "--max-run", "40", "--kind", "build", "--after-fix", "raised the pool size", "--", "make"]), null);
+    assert.equal(flagError([
+        "run", "--priority", "--label", "docs-site: build", "--max-wait=5", "--max-run", "40", "--kind", "build",
+        "--after-fix", "raised the pool size", "--", "make",
+    ]), null);
     assert.equal(flagError(["passed", "--match", "lint", "--cwd=/srv/shop-api"]), null);
     assert.equal(flagError(["history", "--days", "3"]), null);
     assert.equal(flagError(["status"]), null);
@@ -30,7 +33,10 @@ test("flagError: an empty value is refused like a missing one", () => {
 });
 
 test("flagError: a word that looks like a flag is never taken as a value, and the message says how to give one", () => {
-    assert.equal(flagError(["run", "--label", "--priority", "--", "make"]), 'option --label needs a value; for the value "--priority", write --label=--priority');
+    assert.equal(
+        flagError(["run", "--label", "--priority", "--", "make"]),
+        'option --label needs a value; for the value "--priority", write --label=--priority',
+    );
     assert.equal(flagError(["passed", "--match", "--cwd", "/srv/shop-api"]), 'option --match needs a value; for the value "--cwd", write --match=--cwd');
     assert.equal(flagError(["run", "--kind", "--", "make"]), "option --kind needs a value");
     assert.equal(flagError(["run", "--max-wait", "-1", "--", "make"]), null);
@@ -66,7 +72,10 @@ test("FLAGS: lists the subcommands the usage text names", () => {
 
 test("opt: reads a flag in either spelling, in front of the -- only", () => {
     const args = ["run", "--label", "mobile-app: bundle", "--kind=build", "--after-fix=", "--", "make", "--kind", "lint", "--label=inner"];
-    assert.deepEqual([opt(args, "--label"), opt(args, "--kind"), opt(args, "--after-fix"), opt(args, "--max-run")], ["mobile-app: bundle", "build", "", undefined]);
+    assert.deepEqual(
+        [opt(args, "--label"), opt(args, "--kind"), opt(args, "--after-fix"), opt(args, "--max-run")],
+        ["mobile-app: bundle", "build", "", undefined],
+    );
     assert.equal(opt(["passed", "--match", "suite"], "--match"), "suite");
 });
 
@@ -96,16 +105,36 @@ test("parseMaxWait: takes the minutes from either spelling, and the fallback wit
 });
 
 test("parseRunArgs: reads every flag in front of the -- and the command behind it", () => {
-    const args = ["run", "--priority", "--label", "  mobile-app: store upload ", "--max-wait=7", "--max-run", "40", "--kind", "deploy", "--after-fix", " rotated the signing key ", "--", "make", "upload", "--priority", "--label", "inner"];
-    assert.deepEqual(parseRunArgs(args, DEFAULTS), { label: "mobile-app: store upload", cmd: ["make", "upload", "--priority", "--label", "inner"], priority: true, maxWait: 7, maxRun: 40, kind: "deploy", afterFix: "rotated the signing key" });
+    const args = [
+        "run", "--priority", "--label", "  mobile-app: store upload ", "--max-wait=7", "--max-run", "40", "--kind", "deploy",
+        "--after-fix", " rotated the signing key ", "--", "make", "upload", "--priority", "--label", "inner",
+    ];
+    assert.deepEqual(parseRunArgs(args, DEFAULTS), {
+        label: "mobile-app: store upload",
+        cmd: ["make", "upload", "--priority", "--label", "inner"],
+        priority: true,
+        maxWait: 7,
+        maxRun: 40,
+        kind: "deploy",
+        afterFix: "rotated the signing key",
+    });
 });
 
 test("parseRunArgs: fills in defaults for flags that are left out", () => {
-    assert.deepEqual(parseRunArgs(["run", "--", "make"], { ...DEFAULTS, maxWaitMin: 25 }), { label: "unnamed", cmd: ["make"], priority: false, maxWait: 25, maxRun: null, kind: undefined, afterFix: null });
+    assert.deepEqual(
+        parseRunArgs(["run", "--", "make"], { ...DEFAULTS, maxWaitMin: 25 }),
+        { label: "unnamed", cmd: ["make"], priority: false, maxWait: 25, maxRun: null, kind: undefined, afterFix: null },
+    );
 });
 
 test("parseRunArgs: the usage text for a missing command, a short message for a bad number", () => {
-    for (const args of [["run"], ["run", "--label", "docs-site: build"], ["run", "--label", "docs-site: build", "--"], ["start", "--", "make"], []]) assert.equal(parseRunArgs(args, DEFAULTS).error, USAGE);
+    for (const args of [
+        ["run"],
+        ["run", "--label", "docs-site: build"],
+        ["run", "--label", "docs-site: build", "--"],
+        ["start", "--", "make"],
+        [],
+    ]) assert.equal(parseRunArgs(args, DEFAULTS).error, USAGE);
     assert.equal(parseRunArgs(["run", "--max-wait", "-1", "--", "make"], DEFAULTS).error, "--max-wait wants a number of minutes, 0 or more; 0 means no limit");
     assert.equal(parseRunArgs(["run", "--max-run=0", "--", "make"], DEFAULTS).error, "--max-run wants a positive number of minutes");
 });

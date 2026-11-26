@@ -150,4 +150,3 @@ test("updateSlot: merges fields for the holder and refuses anyone else", () => {
     assert.deepEqual([stored.pid, stored.kind, stored.pgid, stored.startedAt], [821, "build", 8210, 77]);
     assert.deepEqual(readdirSync(dirs.slots), ["slot-0.json"]);
 });
-

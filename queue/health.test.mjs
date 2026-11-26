@@ -28,8 +28,14 @@ test("healthVerdict: a reading of 0 shuts the gate, an unknown reading does not"
 });
 
 test("healthVerdict: a low battery counts only while the computer runs on it", () => {
-    assert.deepEqual(texts({ ...roomy, battery: { onBattery: true, pct: 30, plugged: false } }), ["battery too low: 30% left, more than 30% needed, not plugged in"]);
-    assert.deepEqual(texts({ ...roomy, battery: { onBattery: true, pct: 6, plugged: true } }), ["battery too low: 6% left, more than 30% needed, plugged in but still draining"]);
+    assert.deepEqual(
+        texts({ ...roomy, battery: { onBattery: true, pct: 30, plugged: false } }),
+        ["battery too low: 30% left, more than 30% needed, not plugged in"],
+    );
+    assert.deepEqual(
+        texts({ ...roomy, battery: { onBattery: true, pct: 6, plugged: true } }),
+        ["battery too low: 6% left, more than 30% needed, plugged in but still draining"],
+    );
     assert.equal(healthVerdict({ ...roomy, battery: { onBattery: true, pct: 31, plugged: false } }, LIMITS).ok, true);
     assert.equal(healthVerdict({ ...roomy, battery: { onBattery: false, pct: 2, plugged: true } }, LIMITS).ok, true);
 });

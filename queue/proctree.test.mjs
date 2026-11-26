@@ -37,7 +37,9 @@ test("jobCpu: sums the job's processes, and is null when its leader is gone", ()
 
 test("killTree: stops a started job together with a child that left its group", async () => {
     const child = "setInterval(() => {}, 1000)";
-    const leaderCode = `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}], { detached: true, stdio: "ignore" }); console.log(c.pid); setInterval(() => {}, 1000);`;
+    const leaderCode =
+        `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}], ` +
+        `{ detached: true, stdio: "ignore" }); console.log(c.pid); setInterval(() => {}, 1000);`;
     const leader = track(spawn(process.execPath, ["-e", leaderCode], { detached: true, stdio: ["ignore", "pipe", "ignore"] }), { group: true });
     const exited = new Promise((done) => leader.once("exit", done));
     const strayChild = track(await new Promise((done) => leader.stdout.once("data", (text) => done(Number(String(text).trim())))), { group: true });
@@ -62,7 +64,11 @@ test("killTree: names each refused signal, and passes over processes that are go
 });
 
 test("stopGroup: ends a started group, with KILL for a process that ignores TERM", async () => {
-    const stubborn = track(spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);'], { detached: true, stdio: ["ignore", "pipe", "ignore"] }), { group: true });
+    const stubborn = track(spawn(
+        process.execPath,
+        ["-e", 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);'],
+        { detached: true, stdio: ["ignore", "pipe", "ignore"] }
+    ), { group: true });
     const exited = new Promise((done) => stubborn.once("exit", (code, signal) => done(signal)));
     await new Promise((done) => stubborn.stdout.once("data", done));
     await stopGroup(stubborn.pid, [{ pid: stubborn.pid }], { graceMs: 150 });

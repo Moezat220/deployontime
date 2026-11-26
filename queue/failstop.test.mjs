@@ -13,7 +13,10 @@ const NOW = Date.UTC(2031, 8, 3, 7, 0);
 const L = { ...DEFAULTS.limits, failWindowHours: 6 };
 const ago = (ms) => new Date(NOW - ms).toISOString();
 const SUITE = "shop-api: integration suite";
-const failure = (minutesAgo, fields = {}) => JSON.stringify({ projectKey: "shop-api", label: SUITE, cmd: "pnpm run test:integration", cwd: "/srv/shop-api", outcome: "ran", exit: 7, head: "ab12cd34ef", fp: "f00d", endedAt: ago(minutesAgo * MINUTE), ...fields });
+const failure = (minutesAgo, fields = {}) => JSON.stringify({
+    projectKey: "shop-api", label: SUITE, cmd: "pnpm run test:integration", cwd: "/srv/shop-api", outcome: "ran",
+    exit: 7, head: "ab12cd34ef", fp: "f00d", endedAt: ago(minutesAgo * MINUTE), ...fields,
+});
 const job = { label: SUITE, cmd: "pnpm run test:integration", project: "shop-api", cwd: "/srv/shop-api", head: "ab12cd34ef", fingerprint: "f00d", at: NOW };
 const verdict = (lines, thisJob = job) => failStop(lines, thisJob, L, "UTC");
 const TWICE = [failure(95), failure(40)];
@@ -63,7 +66,8 @@ test("failStop: skips runs that someone stopped when it looks for the last two",
 test("failStop: refuses the third run on unchanged code and tells how the two before it ended", () => {
     assert.deepEqual(verdict([failure(40, { outcome: "timed-out", exit: 124 }), failure(95)]), {
         refuse: true,
-        reason: `same check failed twice on unchanged code: "${SUITE}", commit ab12cd34, exit 7 at 05:25 UTC, then run limit hit at 06:20 UTC; hint: change the code, or pass --after-fix "<note>" before the -- to run it anyway`,
+        reason: `same check failed twice on unchanged code: "${SUITE}", commit ab12cd34, exit 7 at 05:25 UTC, `
+            + `then run limit hit at 06:20 UTC; hint: change the code, or pass --after-fix "<note>" before the -- to run it anyway`,
     });
     assert.equal(verdict([failure(95, { head: undefined }), failure(40, { head: undefined })]).reason.includes("commit"), false);
 });

@@ -8,7 +8,10 @@ import { DEFAULTS, defaultHome, homeDir, isMainModule, loadSettings, paths, time
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const collect = () => { const seen = []; return { seen, warn: (text) => seen.push(text) }; };
-const load = (config, env = {}) => { const c = collect(); return { settings: loadSettings(env, { configText: JSON.stringify(config), warn: c.warn }), warnings: c.seen }; };
+const load = (config, env = {}) => {
+    const c = collect();
+    return { settings: loadSettings(env, { configText: JSON.stringify(config), warn: c.warn }), warnings: c.seen };
+};
 
 test("homeDir: uses DOTIME_HOME, else the default folder", () => {
     const dir = tempDir("settings");
@@ -75,7 +78,12 @@ test("loadSettings: environment variables cannot change a setting", () => {
 });
 
 test("loadSettings: a zero or negative limit falls back to its default with a warning", () => {
-    const bad = { slots: 0, pollMs: -50, idle: { serverIdleMin: 0, slotIdleMin: -3 }, limits: { defaultMin: 0, debugMin: -1, floorMin: 0, priorityGrace: 0.5, minSamples: 0 } };
+    const bad = {
+        slots: 0,
+        pollMs: -50,
+        idle: { serverIdleMin: 0, slotIdleMin: -3 },
+        limits: { defaultMin: 0, debugMin: -1, floorMin: 0, priorityGrace: 0.5, minSamples: 0 },
+    };
     const { settings, warnings } = load(bad);
     assert.deepEqual(settings, DEFAULTS);
     assert.equal(warnings.length, 9);
@@ -85,9 +93,13 @@ test("loadSettings: a zero or negative limit falls back to its default with a wa
 
 test("loadSettings: a time in milliseconds longer than one timer can hold falls back to its default", () => {
     const { settings, warnings } = load({ pollMs: 2 ** 31, limits: { killGraceMs: 1e12, orphanCheckMs: 2 ** 31 - 1 } });
-    assert.deepEqual([settings.pollMs, settings.limits.killGraceMs, settings.limits.orphanCheckMs], [DEFAULTS.pollMs, DEFAULTS.limits.killGraceMs, 2 ** 31 - 1]);
+    assert.deepEqual(
+        [settings.pollMs, settings.limits.killGraceMs, settings.limits.orphanCheckMs],
+        [DEFAULTS.pollMs, DEFAULTS.limits.killGraceMs, 2 ** 31 - 1],
+    );
     assert.equal(warnings.length, 2);
-    assert.equal(warnings.includes(`setting ignored: pollMs is ${2 ** 31}, needs a number above 0 and at most ${2 ** 31 - 1}, default ${DEFAULTS.pollMs} kept`), true);
+    assert.equal(warnings.includes(`setting ignored: pollMs is ${2 ** 31}, `
+        + `needs a number above 0 and at most ${2 ** 31 - 1}, default ${DEFAULTS.pollMs} kept`), true);
 });
 
 test("loadSettings: zero stays allowed where it switches a check off", () => {
@@ -98,9 +110,18 @@ test("loadSettings: zero stays allowed where it switches a check off", () => {
 });
 
 test("loadSettings: wrong types, unknown names and bad patterns are named and ignored", () => {
-    const { settings, warnings } = load({ slots: "three", health: 5, limit: { defaultMin: 5 }, reaper: { serverPattern: "(unclosed", keepPattern: "" }, outputDirs: ["a/b"] });
+    const { settings, warnings } = load({
+        slots: "three",
+        health: 5,
+        limit: { defaultMin: 5 },
+        reaper: { serverPattern: "(unclosed", keepPattern: "" },
+        outputDirs: ["a/b"],
+    });
     assert.deepEqual(settings, DEFAULTS);
-    assert.deepEqual(warnings.map((w) => w.split(":")[1].trim().split(" ")[0]).sort(), ["health", "limit", "outputDirs", "reaper.keepPattern", "reaper.serverPattern", "slots"]);
+    assert.deepEqual(
+        warnings.map((w) => w.split(":")[1].trim().split(" ")[0]).sort(),
+        ["health", "limit", "outputDirs", "reaper.keepPattern", "reaper.serverPattern", "slots"],
+    );
 });
 
 test("loadSettings: a config file that is not a JSON object is ignored as a whole", () => {
@@ -125,15 +146,23 @@ test("loadSettings: the built-in warning is printed once per process for the sam
 });
 
 test("DEFAULTS: output folders and dev-server pattern cover the common tools", () => {
-    for (const dir of ["dist", "build", "coverage", ".cache", ".next", ".turbo", ".wrangler", ".vercel"]) assert.equal(DEFAULTS.outputDirs.includes(dir), true, dir);
+    for (const dir of ["dist", "build", "coverage", ".cache", ".next", ".turbo", ".wrangler", ".vercel"]) {
+        assert.equal(DEFAULTS.outputDirs.includes(dir), true, dir);
+    }
     const server = new RegExp(DEFAULTS.reaper.serverPattern);
-    for (const command of ["node bin/vite", "next dev", "wrangler dev --port 8800", "webpack serve", "nodemon api.js"]) assert.equal(server.test(command), true, command);
+    for (const command of ["node bin/vite", "next dev", "wrangler dev --port 8800", "webpack serve", "nodemon api.js"]) {
+        assert.equal(server.test(command), true, command);
+    }
 });
 
 test("README settings table: every number setting has a row, and each row's marking is what the code enforces", async () => {
     const { readFileSync } = await import("node:fs");
     const rows = readFileSync(join(HERE, "README.md"), "utf8").split("\n").map((l) => /^\| `([\w.]+)` \| ([\d.]+) \| (.*) \|$/.exec(l)).filter(Boolean);
-    const numberKeys = Object.entries(DEFAULTS).flatMap(([k, v]) => (typeof v === "number" ? [k] : v && typeof v === "object" && !Array.isArray(v) ? Object.entries(v).filter(([, x]) => typeof x === "number").map(([n]) => `${k}.${n}`) : []));
+    const numberKeys = Object.entries(DEFAULTS).flatMap(([k, v]) => (typeof v === "number"
+        ? [k]
+        : v && typeof v === "object" && !Array.isArray(v)
+            ? Object.entries(v).filter(([, x]) => typeof x === "number").map(([n]) => `${k}.${n}`)
+            : []));
     assert.deepEqual(rows.map(([, key]) => key).sort(), numberKeys.sort());
     const refused = (key, value) => {
         const config = {}, path = key.split(".");

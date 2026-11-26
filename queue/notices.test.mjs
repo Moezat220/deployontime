@@ -15,24 +15,48 @@ const SUITE = "shop-api: integration suite";
 const SLOT_IDLE = { ...DEFAULTS.idle, slotIdleMin: 10, slotCpuS: 5 };
 const holder = { pid: 3300, pgid: 3301, label: SUITE, project: "shop-api", startedAt: NOW - 40 * MINUTE, killMin: 90 };
 const cpuTable = (seconds, pgid = 3301) => `${pgid} 3300 ${pgid} 0:${seconds.toFixed(2).padStart(5, "0")}\n`;
-const step = (state, minutesFromNow, ps, holders = [holder], idle = SLOT_IDLE) => slotIdleStep({ holders, ps, state, now: NOW + minutesFromNow * MINUTE, idle, tz: "UTC" });
+const step = (state, minutesFromNow, ps, holders = [holder], idle = SLOT_IDLE) =>
+    slotIdleStep({ holders, ps, state, now: NOW + minutesFromNow * MINUTE, idle, tz: "UTC" });
 
 test("longRunAlert: names the job, the jobs it holds up, its limit and the stop time", () => {
     const startedAt = NOW - 22 * MINUTE, waiting = [{ label: "shop-api: lint", at: NOW - 7 * MINUTE }, { label: "mobile-app: bundle", at: NOW - 30_000 }];
-    const alert = longRunAlert({ label: "docs-site: build", project: "docs-site", pid: 6340, minutes: 22, longRunBasis: "the 20 min setting for jobs without history", limitMin: 30, killMin: 30, startedAt, waiting, now: NOW, tz: "UTC" });
+    const alert = longRunAlert({
+        label: "docs-site: build", project: "docs-site", pid: 6340, minutes: 22,
+        longRunBasis: "the 20 min setting for jobs without history", limitMin: 30, killMin: 30,
+        startedAt, waiting, now: NOW, tz: "UTC"
+    });
     assert.equal(alert.title, "dotime: job running long");
-    assert.equal(alert.message, 'long run: "docs-site: build" of project docs-site, pid 6340, holding up "shop-api: lint" (7 min) and "mobile-app: bundle" (1 min), 22 min in its slot, long-run mark from the 20 min setting for jobs without history, limit 30 min, hard stop at 07:08 UTC');
+    assert.equal(
+        alert.message,
+        'long run: "docs-site: build" of project docs-site, pid 6340, holding up "shop-api: lint" (7 min) and ' +
+            '"mobile-app: bundle" (1 min), 22 min in its slot, long-run mark from the 20 min setting for jobs ' +
+            'without history, limit 30 min, hard stop at 07:08 UTC'
+    );
     assert.equal(alert.key, `long-run:6340:${startedAt}`);
-    assert.deepEqual(alert.entry, { type: "long-run", project: "docs-site", label: "docs-site: build", pid: 6340, minutes: 22, detail: "mark from the 20 min setting for jobs without history, limit 30 min, hard stop at 07:08 UTC", waiting: ["shop-api: lint", "mobile-app: bundle"], at: NOW });
+    assert.deepEqual(alert.entry, {
+        type: "long-run", project: "docs-site", label: "docs-site: build", pid: 6340, minutes: 22,
+        detail: "mark from the 20 min setting for jobs without history, limit 30 min, hard stop at 07:08 UTC",
+        waiting: ["shop-api: lint", "mobile-app: bundle"], at: NOW
+    });
 });
 
 test("idleAlert: names the job, its CPU use, and when its limit is reached if it has one", () => {
-    const startedAt = NOW - 35 * MINUTE, base = { label: "mobile-app: bundle", project: "mobile-app", pid: 5160, usedS: 1.7, minutes: 12, startedAt, now: NOW, tz: "UTC" };
+    const startedAt = NOW - 35 * MINUTE, base = {
+        label: "mobile-app: bundle", project: "mobile-app", pid: 5160, usedS: 1.7, minutes: 12,
+        startedAt, now: NOW, tz: "UTC"
+    };
     const alert = idleAlert({ ...base, killMin: 60 });
     assert.equal(alert.title, "dotime: slot held by a quiet job");
-    assert.equal(alert.message, 'idle slot: "mobile-app: bundle" of project mobile-app, pid 5160, holding up no other job, 1.7 s of CPU in 12 min, not stopped, limit reached at 07:25 UTC');
+    assert.equal(
+        alert.message,
+        'idle slot: "mobile-app: bundle" of project mobile-app, pid 5160, holding up no other job, ' +
+            '1.7 s of CPU in 12 min, not stopped, limit reached at 07:25 UTC'
+    );
     assert.equal(alert.key, `idle-slot:5160:${startedAt}`);
-    assert.deepEqual(alert.entry, { type: "idle-slot", project: "mobile-app", label: "mobile-app: bundle", pid: 5160, minutes: 12, usedS: 1.7, detail: "1.7 s of CPU in 12 min", waiting: [], at: NOW });
+    assert.deepEqual(alert.entry, {
+        type: "idle-slot", project: "mobile-app", label: "mobile-app: bundle", pid: 5160, minutes: 12, usedS: 1.7,
+        detail: "1.7 s of CPU in 12 min", waiting: [], at: NOW
+    });
     assert.equal(idleAlert(base).message.includes("limit reached"), false);
 });
 
@@ -75,7 +99,10 @@ test("slotIdleStep: samples are kept long enough for a longer idle window", () =
 test("slotIdleCheck: sends and stores each alert, except on a dry run", () => {
     const state = { [`3300:${holder.startedAt}`]: { samples: [{ t: NOW - 11 * MINUTE, cpu: 20 }] } };
     const sent = [], stored = [];
-    const check = (dry) => slotIdleCheck({ holders: [holder], state, now: NOW, dry, notify: (title) => sent.push(title), ps: () => cpuTable(20.4), record: (key) => stored.push(key), idle: SLOT_IDLE, tz: "UTC" });
+    const check = (dry) => slotIdleCheck({
+        holders: [holder], state, now: NOW, dry, notify: (title) => sent.push(title), ps: () => cpuTable(20.4),
+        record: (key) => stored.push(key), idle: SLOT_IDLE, tz: "UTC"
+    });
     const dry = check(true);
     assert.deepEqual([sent, stored], [[], []]);
     assert.equal(dry.lines.length === 1 && dry.lines[0].startsWith(`idle slot: "${SUITE}"`) && dry.lines[0].endsWith("(dry run, no notice sent)"), true);
@@ -92,7 +119,11 @@ test("slotIdleCheck: does not list processes when no slot is taken", () => {
 
 test("addNotice: stores an entry once per key", () => {
     const dir = join(tempDir("limits"), "deep", "notices");
-    assert.deepEqual([addNotice("long-run:1:2", { minutes: 22 }, dir), addNotice("long-run:1:2", { minutes: 44 }, dir), addNotice("idle-slot:1:2", { minutes: 12 }, dir)], [true, false, true]);
+    assert.deepEqual([
+        addNotice("long-run:1:2", { minutes: 22 }, dir),
+        addNotice("long-run:1:2", { minutes: 44 }, dir),
+        addNotice("idle-slot:1:2", { minutes: 12 }, dir)
+    ], [true, false, true]);
     assert.deepEqual(readNotices(dir), { "long-run:1:2": { minutes: 22 }, "idle-slot:1:2": { minutes: 12 } });
     assert.deepEqual(readdirSync(dir).sort(), ["idle-slot%3A1%3A2.json", "long-run%3A1%3A2.json"]);
 });

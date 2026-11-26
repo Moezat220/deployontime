@@ -5,7 +5,9 @@ import { STRAY, strayRuns } from "./stray.mjs";
 
 const MB = 1024; // rss is given in KB
 const runner = (pid, ppid, extra = {}) => ({ pid, ppid, rss: 90 * MB, cmd: "node /srv/mobile-app/node_modules/.bin/vitest run", ...extra });
-const workers = (ppid, count, rss, firstPid = 7100) => Array.from({ length: count }, (_, i) => ({ pid: firstPid + i, ppid, rss, cmd: "node /srv/mobile-app/node_modules/vitest/dist/workers/forks.js" }));
+const workers = (ppid, count, rss, firstPid = 7100) => Array.from({ length: count }, (_, i) => ({
+    pid: firstPid + i, ppid, rss, cmd: "node /srv/mobile-app/node_modules/vitest/dist/workers/forks.js",
+}));
 const bigRun = (rootPid, ppid) => [runner(rootPid, ppid), ...workers(rootPid, 3, 900 * MB)];
 
 test("strayRuns: reports a large run with its root, process count and memory", () => {
@@ -39,8 +41,14 @@ test("strayRuns: a command that only looks like the queue does not hide a run", 
 test("strayRuns: small runs, single processes, shells and other programs are ignored", () => {
     assert.deepEqual(strayRuns([runner(7000, 1), ...workers(7000, 2, 100 * MB)]), []);
     assert.deepEqual(strayRuns([runner(7000, 1, { rss: 4096 * MB })]), []);
-    assert.deepEqual(strayRuns([{ pid: 50, ppid: 1, rss: 3000 * MB, cmd: "/bin/bash -c npx vitest run" }, { pid: 51, ppid: 1, rss: 3000 * MB, cmd: "sh -c jest --ci" }]), []);
-    assert.deepEqual(strayRuns([{ pid: 60, ppid: 1, rss: 5000 * MB, cmd: "node api/server.js" }, { pid: 61, ppid: 60, rss: 5000 * MB, cmd: "node api/worker.js" }]), []);
+    assert.deepEqual(strayRuns([
+        { pid: 50, ppid: 1, rss: 3000 * MB, cmd: "/bin/bash -c npx vitest run" },
+        { pid: 51, ppid: 1, rss: 3000 * MB, cmd: "sh -c jest --ci" },
+    ]), []);
+    assert.deepEqual(strayRuns([
+        { pid: 60, ppid: 1, rss: 5000 * MB, cmd: "node api/server.js" },
+        { pid: 61, ppid: 60, rss: 5000 * MB, cmd: "node api/worker.js" },
+    ]), []);
 });
 
 test("strayRuns: many test processes count even when they are small", () => {

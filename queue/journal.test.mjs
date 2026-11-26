@@ -45,19 +45,26 @@ test("jobEnd: stopped for a stop signal, its exit code, or a signal the queue re
 });
 
 test("jobEnd: ran for an ordinary exit and for a crash signal", () => {
-    for (const end of [{ code: 0 }, { code: 2 }, { code: 127 }, { signal: "SIGABRT" }, { signal: "SIGBUS" }, {}]) assert.deepEqual(jobEnd(end), { outcome: "ran" });
+    for (const end of [{ code: 0 }, { code: 2 }, { code: 127 }, { signal: "SIGABRT" }, { signal: "SIGBUS" }, {}])
+        assert.deepEqual(jobEnd(end), { outcome: "ran" });
 });
 
 test("isStopped, isFailedRun: a stop is not a failure and a time-out is neither", () => {
-    const rows = [{ outcome: "stopped", exit: 1 }, { outcome: "ran", exit: 130 }, { outcome: "ran", exit: 137 }, { outcome: "ran", exit: 3 }, { outcome: "ran", exit: 0 }, { outcome: "timed-out", exit: 124 }, { outcome: "gave-up", exit: 75 }];
+    const rows = [
+        { outcome: "stopped", exit: 1 }, { outcome: "ran", exit: 130 }, { outcome: "ran", exit: 137 },
+        { outcome: "ran", exit: 3 }, { outcome: "ran", exit: 0 }, { outcome: "timed-out", exit: 124 },
+        { outcome: "gave-up", exit: 75 }
+    ];
     assert.deepEqual(rows.map(isStopped), [true, true, true, false, false, false, false]);
     assert.deepEqual(rows.map(isFailedRun), [false, false, false, true, false, false, false]);
 });
 
 test("record: times in minutes with one decimal, and the project key from the label", () => {
     const row = record({
-        label: "shop-api: build", project: "storefront", cwd: "/srv/storefront", priority: 1, queuedAt: START, startedAt: START + 150_000, endedAt: START + 150_000 + 7.26 * MINUTE,
-        outcome: "ran", exit: 0, tally: { slots: 120_000, load: 30_000 }, cmd: "pnpm run build", head: "0f0f0f0f0f", clean: false, extra: { kind: "build", limitMin: 30 },
+        label: "shop-api: build", project: "storefront", cwd: "/srv/storefront", priority: 1,
+        queuedAt: START, startedAt: START + 150_000, endedAt: START + 150_000 + 7.26 * MINUTE,
+        outcome: "ran", exit: 0, tally: { slots: 120_000, load: 30_000 }, cmd: "pnpm run build",
+        head: "0f0f0f0f0f", clean: false, extra: { kind: "build", limitMin: 30 },
     });
     assert.deepEqual(
         [row.v, row.project, row.projectKey, row.priority, row.waitMin, row.runMin, row.waitBy, row.queuedAt, row.kind, row.limitMin, row.clean],
@@ -97,14 +104,22 @@ const stamp = (lines, here = folder, match = "") => findStamp(lines, here, match
 test("findStamp: found for a passing clean run on the folder's commit", () => {
     const found = stamp([run()]);
     assert.equal(found.stamp.label, "mobile-app: integration suite");
-    assert.equal(found.text, 'stamp: commit 1a2b3c4d, passed 25 min ago by "mobile-app: integration suite", command npm run test:integration, run time 6.5 min, tree clean at start, finished 2031-03-14 16:30 UTC');
+    assert.equal(
+        found.text,
+        'stamp: commit 1a2b3c4d, passed 25 min ago by "mobile-app: integration suite", ' +
+            'command npm run test:integration, run time 6.5 min, tree clean at start, finished 2031-03-14 16:30 UTC'
+    );
 });
 
 test("findStamp: the match text narrows runs by label or command, in any letter case", () => {
     const lines = [run(), run({ label: "mobile-app: bundle", cmd: "npm run bundle:ios", exit: 3, endedAt: iso(4) })];
     assert.equal(stamp(lines, folder, "INTEGRATION").stamp.cmd, "npm run test:integration");
     assert.equal(stamp(lines, folder, "test:").stamp.cmd, "npm run test:integration");
-    assert.equal(stamp(lines, folder, "bundle").text, 'no stamp: newest clean run failed, "mobile-app: bundle", exit 3, commit 1a2b3c4d, ended 2031-03-14 16:34 UTC');
+    assert.equal(
+        stamp(lines, folder, "bundle").text,
+        'no stamp: newest clean run failed, "mobile-app: bundle", exit 3, commit 1a2b3c4d, ' +
+            'ended 2031-03-14 16:34 UTC'
+    );
     assert.equal(stamp(lines, folder, "lint").text, 'no stamp: no finished run on record, project mobile-app, filter "lint"');
 });
 
@@ -114,8 +129,15 @@ test("findStamp: explains each reason for not finding one", () => {
     assert.equal(stamp([run()], { ...folder, clean: false }).text, "no stamp: the working tree has uncommitted changes");
     assert.equal(stamp([run({ project: "shop-api" })]).text, "no stamp: no finished run on record, project mobile-app");
     assert.equal(stamp([], folder).stamp, null);
-    assert.equal(stamp([run()], { ...folder, head: "d00d1e55aa11" }).text, "no stamp: commit differs, folder at d00d1e55, newest run at 1a2b3c4d (ended 2031-03-14 16:30 UTC), project mobile-app");
-    assert.equal(stamp([run({ clean: false }), run({ clean: null })]).text, "no stamp: every run at 1a2b3c4d began with uncommitted changes, project mobile-app");
+    assert.equal(
+        stamp([run()], { ...folder, head: "d00d1e55aa11" }).text,
+        "no stamp: commit differs, folder at d00d1e55, newest run at 1a2b3c4d (ended 2031-03-14 16:30 UTC), " +
+            "project mobile-app"
+    );
+    assert.equal(
+        stamp([run({ clean: false }), run({ clean: null })]).text,
+        "no stamp: every run at 1a2b3c4d began with uncommitted changes, project mobile-app"
+    );
 });
 
 test("findStamp: a failure after a pass gives no stamp, a pass after a failure gives one, stops are skipped", () => {
@@ -128,7 +150,9 @@ test("findStamp: a failure after a pass gives no stamp, a pass after a failure g
 test("historyWindow: whole calendar days in the zone, ending now", () => {
     const now = Date.UTC(2031, 2, 14, 22, 10);
     assert.deepEqual(historyWindow({ days: 1, now, tz: "UTC" }), { from: Date.UTC(2031, 2, 14), to: now, title: "2031-03-14 so far, zone UTC" });
-    assert.deepEqual(historyWindow({ days: 3, now, tz: "UTC" }), { from: Date.UTC(2031, 2, 12), to: now, title: "2031-03-12 through 2031-03-14 (3 days), zone UTC" });
+    assert.deepEqual(historyWindow({ days: 3, now, tz: "UTC" }), {
+        from: Date.UTC(2031, 2, 12), to: now, title: "2031-03-12 through 2031-03-14 (3 days), zone UTC"
+    });
     assert.equal(historyWindow({ days: 0.2, now, tz: "UTC" }).from, Date.UTC(2031, 2, 14));
     // 22:10 UTC is already the next morning in Kolkata.
     assert.equal(historyWindow({ days: 1, now, tz: "Asia/Kolkata" }).title, "2031-03-15 so far, zone Asia/Kolkata");
@@ -136,7 +160,10 @@ test("historyWindow: whole calendar days in the zone, ending now", () => {
 
 test("historyWindow: a single day runs from its midnight to the next, capped at now", () => {
     const now = Date.UTC(2031, 2, 14, 22, 10);
-    assert.deepEqual(historyWindow({ day: "2031-03-11", now, tz: "Asia/Kolkata" }), { from: Date.UTC(2031, 2, 10, 18, 30), to: Date.UTC(2031, 2, 11, 18, 30), title: "2031-03-11, zone Asia/Kolkata" });
+    assert.deepEqual(historyWindow({ day: "2031-03-11", now, tz: "Asia/Kolkata" }), {
+        from: Date.UTC(2031, 2, 10, 18, 30), to: Date.UTC(2031, 2, 11, 18, 30),
+        title: "2031-03-11, zone Asia/Kolkata"
+    });
     assert.equal(historyWindow({ day: "2031-03-14", now, tz: "UTC" }).to, now);
 });
 
@@ -155,7 +182,9 @@ test("summarize: median and p90 waits are nearest-rank percentiles, the same as 
 });
 
 test("summarize: time grows in step with the journal, also when one project has every line", () => {
-    const rows = Array.from({ length: 50_000 }, (_, i) => ({ project: "mobile-app", label: "mobile-app: lint", outcome: "ran", exit: 0, queuedAt: iso(i / 1000), waitMin: 0 }));
+    const rows = Array.from({ length: 50_000 }, (_, i) => ({
+        project: "mobile-app", label: "mobile-app: lint", outcome: "ran", exit: 0, queuedAt: iso(i / 1000), waitMin: 0
+    }));
     const began = performance.now(), { byProject } = summarize(rows, START, START + 60 * MINUTE);
     assert.equal(byProject["mobile-app"].jobs, 50_000);
     assert.ok(performance.now() - began < 1500, "50000 lines took too long");
@@ -166,9 +195,18 @@ test("summarize: totals per project, most waiting first, inside the time range",
         run({ queuedAt: iso(0), startedAt: iso(6), endedAt: iso(10), waitMin: 6, waitBy: { slots: 6 }, runMin: 4 }),
         run({ queuedAt: iso(2), startedAt: iso(10), endedAt: iso(11), waitMin: 8, waitBy: { slots: 5, memory: 3 }, runMin: 1, exit: 2 }),
         run({ queuedAt: iso(3), endedAt: iso(3.5), waitMin: 0.5, waitBy: {}, runMin: 0, outcome: "refused", exit: 3 }),
-        run({ project: "docs-site", label: "docs-site: build", queuedAt: iso(1), startedAt: iso(1), endedAt: iso(4), waitMin: 0, runMin: 3, outcome: "timed-out", exit: 124 }),
-        run({ project: "docs-site", label: "docs-site: link check", queuedAt: iso(5), endedAt: iso(7), waitMin: 2, waitBy: { slots: 2 }, runMin: 0, outcome: "gave-up", exit: 75 }),
-        run({ project: "docs-site", label: "docs-site: build", queuedAt: iso(12), startedAt: iso(12), endedAt: iso(13), waitMin: 0, runMin: 1, outcome: "stopped", exit: 143 }),
+        run({
+            project: "docs-site", label: "docs-site: build", queuedAt: iso(1), startedAt: iso(1), endedAt: iso(4),
+            waitMin: 0, runMin: 3, outcome: "timed-out", exit: 124
+        }),
+        run({
+            project: "docs-site", label: "docs-site: link check", queuedAt: iso(5), endedAt: iso(7),
+            waitMin: 2, waitBy: { slots: 2 }, runMin: 0, outcome: "gave-up", exit: 75
+        }),
+        run({
+            project: "docs-site", label: "docs-site: build", queuedAt: iso(12), startedAt: iso(12), endedAt: iso(13),
+            waitMin: 0, runMin: 1, outcome: "stopped", exit: 143
+        }),
         run({ queuedAt: iso(-900), startedAt: iso(-900), endedAt: iso(-890), waitMin: 0, runMin: 10 }),
         run({ queuedAt: iso(500), startedAt: iso(500), endedAt: iso(501), waitMin: 0, runMin: 1 }),
     ];

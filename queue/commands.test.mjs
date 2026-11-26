@@ -22,11 +22,20 @@ test("LAUNCHER_RE: package managers, the script node runs for one, and a shell w
 });
 
 test("TEST_RUN_RE: matches test commands that exit by themselves", () => {
-    for (const command of ["npx vitest run", "npx vitest --run", "node --test queue/", "npx playwright test --project mobile", "node node_modules/.bin/jest"]) assert.equal(TEST_RUN_RE.test(command), true, command);
+    for (const command of [
+        "npx vitest run", "npx vitest --run", "node --test queue/", "npx playwright test --project mobile",
+        "node node_modules/.bin/jest",
+    ]) assert.equal(TEST_RUN_RE.test(command), true, command);
     for (const command of ["npx vitest", "node node_modules/.bin/jest --watch", "node server.js"]) assert.equal(TEST_RUN_RE.test(command), false, command);
 });
 
 test("STRAY_TEST_RE: recognises test runner and worker processes", () => {
-    for (const cmd of ["node node_modules/.bin/vitest run", "node node_modules/jest-worker/build/workers/processChild.js", "node node_modules/.bin/jest --runInBand", "npx playwright test", "node node_modules/@playwright/test/cli.js test"]) assert.equal(STRAY_TEST_RE.test(cmd), true, cmd);
+    for (const cmd of [
+        "node node_modules/.bin/vitest run",
+        "node node_modules/jest-worker/build/workers/processChild.js",
+        "node node_modules/.bin/jest --runInBand",
+        "npx playwright test",
+        "node node_modules/@playwright/test/cli.js test",
+    ]) assert.equal(STRAY_TEST_RE.test(cmd), true, cmd);
     for (const cmd of ["node api/server.js", "node node_modules/.bin/vite", "git status"]) assert.equal(STRAY_TEST_RE.test(cmd), false, cmd);
 });

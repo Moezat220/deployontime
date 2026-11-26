@@ -10,8 +10,14 @@ const NOW = 500 * MINUTE;
 const at = (minutesAgo, cpu) => ({ t: NOW - minutesAgo * MINUTE, cpu });
 
 test("serverTest: watch-mode tools match the default pattern, one-shot commands do not", () => {
-    const servers = ["node /srv/shop-api/node_modules/.bin/vite", "node /srv/docs-site/node_modules/.bin/next dev -p 4100", "npx wrangler dev", "node node_modules/.bin/webpack serve", "nodemon src/api.js", "node node_modules/.bin/vitest"];
-    const others = ["node node_modules/.bin/vitest run", "node --test", "node scripts/build.mjs", "next build", "wrangler deploy", "npm install", "node node_modules/.bin/vite build --watch"];
+    const servers = [
+        "node /srv/shop-api/node_modules/.bin/vite", "node /srv/docs-site/node_modules/.bin/next dev -p 4100",
+        "npx wrangler dev", "node node_modules/.bin/webpack serve", "nodemon src/api.js", "node node_modules/.bin/vitest",
+    ];
+    const others = [
+        "node node_modules/.bin/vitest run", "node --test", "node scripts/build.mjs", "next build", "wrangler deploy",
+        "npm install", "node node_modules/.bin/vite build --watch",
+    ];
     for (const command of servers) assert.equal(serverTest(PATTERN)(command), true, command);
     for (const command of others) assert.equal(serverTest(PATTERN)(command), false, command);
 });

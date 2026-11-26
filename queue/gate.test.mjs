@@ -6,7 +6,10 @@ import { blockReason, blockText, decide, gateBlocks, gateReason, shouldGiveUp } 
 const MINUTE = 60_000;
 const busy = [{ label: "mobile-app: bundle" }, { label: "shop-api: integration suite" }, { label: "docs-site: build" }];
 const lowDisk = { ok: false, blocks: [{ gate: "disk", text: "disk too low: 2.0 GB free, 12 GB needed" }] };
-const hot = { ok: false, blocks: [{ gate: "load", text: "load too high: 9.0 now, 8.0 allowed" }, { gate: "memory", text: "memory too low: 8% free, 25% needed" }] };
+const hot = { ok: false, blocks: [
+    { gate: "load", text: "load too high: 9.0 now, 8.0 allowed" },
+    { gate: "memory", text: "memory too low: 8% free, 25% needed" },
+] };
 
 test("decide: only the first in line may go, and only into a free slot", () => {
     const queue = [{ pid: 601 }, { pid: 602 }, { pid: 603 }];
@@ -22,7 +25,10 @@ test("decide: a pid that is not in line is placed behind everyone", () => {
 });
 
 test("gateBlocks: lists full slots and every failed health limit", () => {
-    assert.deepEqual(gateBlocks({ holders: busy, health: { ok: true, blocks: [] } }, 3), [{ gate: "slots", text: 'no free slot: 3 of 3 taken, by "mobile-app: bundle" and "shop-api: integration suite" and "docs-site: build"' }]);
+    assert.deepEqual(gateBlocks({ holders: busy, health: { ok: true, blocks: [] } }, 3), [{
+        gate: "slots",
+        text: 'no free slot: 3 of 3 taken, by "mobile-app: bundle" and "shop-api: integration suite" and "docs-site: build"',
+    }]);
     assert.deepEqual(gateBlocks({ holders: busy, health: hot }, 3).map((b) => b.gate), ["slots", "load", "memory"]);
     assert.deepEqual(gateBlocks({ holders: busy.slice(0, 1), health: lowDisk }, 3), lowDisk.blocks);
 });
@@ -34,7 +40,11 @@ test("gateBlocks: names the line only when nothing else is in the way", () => {
 });
 
 test("gateReason: the blocks as one sentence, empty when a job could start", () => {
-    assert.equal(gateReason({ holders: busy.slice(0, 1), health: hot }, 1), 'no free slot: 1 of 1 taken, by "mobile-app: bundle"; load too high: 9.0 now, 8.0 allowed; memory too low: 8% free, 25% needed');
+    assert.equal(
+        gateReason({ holders: busy.slice(0, 1), health: hot }, 1),
+        'no free slot: 1 of 1 taken, by "mobile-app: bundle"; load too high: 9.0 now, 8.0 allowed; '
+            + "memory too low: 8% free, 25% needed",
+    );
     assert.equal(gateReason({ holders: [], health: { ok: true, blocks: [] } }, 3), "");
     assert.equal(blockText(lowDisk.blocks), "disk too low: 2.0 GB free, 12 GB needed");
 });

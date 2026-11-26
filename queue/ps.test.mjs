@@ -22,7 +22,9 @@ test("parseElapsed: reads ps elapsed times in seconds, with and without days and
 });
 
 test("parseProcessTable: turns `ps` rows into numbers and a command, skipping other lines", () => {
-    const text = `  2400     1  2400    01:35:00   0:41.50  0.2 262144 ${SERVER}\n  2401  2400  2400       58:10   0:00.75 12.5   4096 node child.js --flag\n  PID  PPID  PGID ELAPSED TIME %CPU RSS COMMAND\n\n`;
+    const text = `  2400     1  2400    01:35:00   0:41.50  0.2 262144 ${SERVER}\n` +
+        `  2401  2400  2400       58:10   0:00.75 12.5   4096 node child.js --flag\n` +
+        `  PID  PPID  PGID ELAPSED TIME %CPU RSS COMMAND\n\n`;
     assert.deepEqual(parseProcessTable(text), [
         { pid: 2400, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu: 41.5, pcpu: 0.2, rss: 262144, cmd: SERVER },
         { pid: 2401, ppid: 2400, pgid: 2400, age: 3_490_000, cpu: 0.75, pcpu: 12.5, rss: 4096, cmd: "node child.js --flag" },

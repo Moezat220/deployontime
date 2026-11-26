@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 const HOME = isolateProcess("reaper");
-const { checkIdleServers, checkIdleSlots, checkLowDisk, checkOverload, checkStrayRuns, groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
+const {
+    checkIdleServers, checkIdleSlots, checkLowDisk, checkOverload, checkStrayRuns, groupRows, reap, serverOnly, shortCommand,
+} = await import("./reaper.mjs");
 const { snapshot } = await import("./slots.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
@@ -17,7 +19,10 @@ const MINUTE = 60_000, HOUR = 60 * MINUTE, MB = 1024, NOW = Date.UTC(2031, 10, 8
 const SERVER = "node /srv/shop-api/node_modules/.bin/next dev -p 4100";
 const serverGroup = (cpu, fields = {}) => [
     { pid: 2400, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu, pcpu: 0.2, rss: 256 * MB, cmd: SERVER, ...fields },
-    { pid: 2401, ppid: 2400, pgid: 2400, age: 94 * MINUTE, cpu: 0, pcpu: 0, rss: 128 * MB, cmd: "node /srv/shop-api/node_modules/next/dist/server/lib/start-server.js" },
+    {
+        pid: 2401, ppid: 2400, pgid: 2400, age: 94 * MINUTE, cpu: 0, pcpu: 0, rss: 128 * MB,
+        cmd: "node /srv/shop-api/node_modules/next/dist/server/lib/start-server.js",
+    },
 ];
 // The thresholds these tests work with, set here so that the shipped defaults can change freely.
 const SETTINGS = {
@@ -29,7 +34,17 @@ const SAMPLE_AGE = SETTINGS.idle.serverIdleMin + 2;
 const sampledBefore = (cpu, minutesAgo = SAMPLE_AGE) => ({ samples: { 2400: [{ t: NOW - minutesAgo * MINUTE, cpu }] } });
 async function pass(rows, state = {}, options = {}) {
     const stops = [], notices = [];
-    const result = await reap({ rows, state: structuredClone(state), now: NOW, settings: SETTINGS, tz: "UTC", record: (key, entry) => addNotice(key, entry, join(HOME, "notices")), notify: (title, text) => notices.push([title, text]), stop: async (pgid, procs) => stops.push([pgid, procs.length]), ...options });
+    const result = await reap({
+        rows,
+        state: structuredClone(state),
+        now: NOW,
+        settings: SETTINGS,
+        tz: "UTC",
+        record: (key, entry) => addNotice(key, entry, join(HOME, "notices")),
+        notify: (title, text) => notices.push([title, text]),
+        stop: async (pgid, procs) => stops.push([pgid, procs.length]),
+        ...options,
+    });
     return { ...result, stops, notices };
 }
 
@@ -91,7 +106,12 @@ test("reap: launchers of other shapes are never taken for the server either", as
         { pid: 2401, ppid: 2400, pgid: 2400, age: 95 * MINUTE, cpu: 302, pcpu: 0, rss: 128 * MB, cmd: "node /srv/docs-site/node_modules/.bin/vite" },
         ...(extra ? [{ pid: 2402, ppid: 2400, pgid: 2400, age: 95 * MINUTE, cpu: 1, pcpu: 0, rss: 16 * MB, cmd: extra }] : []),
     ];
-    for (const top of ["sh -ec vite & make watch-css", "bash -lc vite & make watch-css", "/usr/bin/env bash -c vite & make watch-css", "node /srv/docs-site/node_modules/.bin/concurrently vite make watch-css"]) {
+    for (const top of [
+        "sh -ec vite & make watch-css",
+        "bash -lc vite & make watch-css",
+        "/usr/bin/env bash -c vite & make watch-css",
+        "node /srv/docs-site/node_modules/.bin/concurrently vite make watch-css",
+    ]) {
         const run = await pass(group(top, "make watch-css"), sampledBefore(302));
         assert.deepEqual(run.stops, [], `${top}: the other program must keep running`);
         assert.ok(run.lines.some((l) => l.includes("shares its group with another program")), top);
@@ -101,7 +121,13 @@ test("reap: launchers of other shapes are never taken for the server either", as
 });
 
 test("reap: an idle dev server that shares its group with another program is reported, not stopped", async () => {
-    const shared = [...serverGroup(302), { pid: 2399, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu: 0, pcpu: 0, rss: 64 * MB, cmd: "node /opt/tools/agent.js --task docs" }];
+    const shared = [
+        ...serverGroup(302),
+        {
+            pid: 2399, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu: 0, pcpu: 0, rss: 64 * MB,
+            cmd: "node /opt/tools/agent.js --task docs",
+        },
+    ];
     shared[0] = { ...shared[0], ppid: 2399 };
     const run = await pass(shared, sampledBefore(300));
     assert.deepEqual([run.stops, run.notices], [[], []]);
@@ -117,7 +143,13 @@ test("reap: leaves a server alone while it is busy, new, or protected", async ()
         "holds a slot by group": [idle, { holders: [{ pid: 77, pgid: 2400, label: "shop-api: e2e" }] }],
         "matches the keep pattern": [serverGroup(302, { cmd: "/Applications/Studio.app/Contents/Helpers/node next dev" }), {}],
         "is the reaper's own group": [idle, { myPgid: 2400 }],
-        "runs a one-shot test in the group": [[...idle, { pid: 2402, ppid: 2400, pgid: 2400, age: MINUTE, cpu: 0, pcpu: 0, rss: MB, cmd: "npx playwright test" }], {}],
+        "runs a one-shot test in the group": [
+            [
+                ...idle,
+                { pid: 2402, ppid: 2400, pgid: 2400, age: MINUTE, cpu: 0, pcpu: 0, rss: MB, cmd: "npx playwright test" },
+            ],
+            {},
+        ],
     };
     for (const [name, [rows, options]] of Object.entries(cases)) assert.deepEqual((await pass(rows, state, options)).stops, [], name);
     assert.equal((await pass(idle, state)).stops.length, 1);
@@ -140,7 +172,11 @@ test("reap: a dry run lists the servers and stops nothing", async () => {
 });
 
 test("reap: samples of vanished groups are dropped, and a calm run says so", async () => {
-    const calm = await pass(serverGroup(302), { samples: { 2400: [{ t: NOW - 5 * MINUTE, cpu: 301 }], 8800: [{ t: NOW - 5 * MINUTE, cpu: 4 }] } }, { load: 1.25, swapPct: 3.4 });
+    const calm = await pass(
+        serverGroup(302),
+        { samples: { 2400: [{ t: NOW - 5 * MINUTE, cpu: 301 }], 8800: [{ t: NOW - 5 * MINUTE, cpu: 4 }] } },
+        { load: 1.25, swapPct: 3.4 },
+    );
     assert.deepEqual(Object.keys(calm.state.samples), ["2400"]);
     assert.deepEqual(calm.lines, ["quiet: dev-server groups under watch 1, 3% of swap in use, load 1.3"]);
 });
@@ -158,13 +194,20 @@ test("reap: a longer idle window still stops the server once it has passed", asy
 
 const testRun = (rootPid, ppid) => [
     { pid: rootPid, ppid, pgid: rootPid, age: 3 * MINUTE, cpu: 30, pcpu: 80, rss: 200 * MB, cmd: "node /srv/docs-site/node_modules/.bin/jest --ci" },
-    ...[1, 2, 3, 4].map((n) => ({ pid: rootPid + n, ppid: rootPid, pgid: rootPid, age: 3 * MINUTE, cpu: 20, pcpu: 95, rss: 700 * MB, cmd: "node /srv/docs-site/node_modules/jest-worker/build/workers/processChild.js" })),
+    ...[1, 2, 3, 4].map((n) => ({
+        pid: rootPid + n, ppid: rootPid, pgid: rootPid, age: 3 * MINUTE, cpu: 20, pcpu: 95, rss: 700 * MB,
+        cmd: "node /srv/docs-site/node_modules/jest-worker/build/workers/processChild.js",
+    })),
 ];
 
 test("reap: five jest processes using 3 GB with no queue job above them: noticed once, never stopped", async () => {
     const first = await pass(testRun(5200, 1));
     assert.deepEqual(first.stops, []);
-    assert.deepEqual(first.notices, [["dotime: unqueued test run", 'unqueued test run: node jest, pid 5200, 5 test processes, 2.9 GB of memory, left running; hint: start large runs with dotime-queue run --label "<project>: <task>" -- <command>']]);
+    assert.deepEqual(first.notices, [[
+        "dotime: unqueued test run",
+        "unqueued test run: node jest, pid 5200, 5 test processes, 2.9 GB of memory, left running; "
+            + 'hint: start large runs with dotime-queue run --label "<project>: <task>" -- <command>',
+    ]]);
     const again = await pass(testRun(5200, 1), first.state, { now: NOW + 3 * HOUR });
     assert.deepEqual([again.notices, again.lines.filter((l) => l.startsWith("unqueued test run")).length], [[], 1]);
 });
@@ -178,19 +221,31 @@ test("reap: a second unqueued run is held back until an hour has passed", async 
 });
 
 test("reap: a test run started by a slot holder is not reported", async () => {
-    const queueProcess = { pid: 5100, ppid: 1, pgid: 5100, age: 4 * MINUTE, cpu: 1, pcpu: 0, rss: 50 * MB, cmd: "node queue/cli.mjs run --kind test -- yarn jest --ci" };
-    const queued = await pass([queueProcess, ...testRun(5200, 5100)], {}, { holders: [{ pid: 5100, pgid: 5200, label: "docs-site: unit suite", startedAt: NOW - 3 * MINUTE }] });
+    const queueProcess = {
+        pid: 5100, ppid: 1, pgid: 5100, age: 4 * MINUTE, cpu: 1, pcpu: 0, rss: 50 * MB,
+        cmd: "node queue/cli.mjs run --kind test -- yarn jest --ci",
+    };
+    const queued = await pass([queueProcess, ...testRun(5200, 5100)], {}, {
+        holders: [{ pid: 5100, pgid: 5200, label: "docs-site: unit suite", startedAt: NOW - 3 * MINUTE }],
+    });
     assert.deepEqual([queued.notices, queued.lines.some((l) => l.startsWith("unqueued"))], [[], false]);
     assert.equal((await pass([queueProcess, ...testRun(5200, 5100)])).notices.length, 1);
 });
 
 test("reap: overload is reported on the second run in a row, then at most once an hour", async () => {
     const busy = { load: 14, cores: 4, swapPct: 15.4, health: { freePct: 35, diskGB: 80 } };
-    const rows = [{ pid: 9100, ppid: 1, pgid: 9100, age: HOUR, cpu: 900, pcpu: 310, rss: MB, cmd: "/opt/tools/bin/node build.mjs" }, { pid: 9101, ppid: 1, pgid: 9101, age: HOUR, cpu: 200, pcpu: 45, rss: MB, cmd: "postgres -D /srv/db" }];
+    const rows = [
+        { pid: 9100, ppid: 1, pgid: 9100, age: HOUR, cpu: 900, pcpu: 310, rss: MB, cmd: "/opt/tools/bin/node build.mjs" },
+        { pid: 9101, ppid: 1, pgid: 9101, age: HOUR, cpu: 200, pcpu: 45, rss: MB, cmd: "postgres -D /srv/db" },
+    ];
     const first = await pass(rows, {}, busy);
     assert.deepEqual([first.notices, first.state.streak, first.lines], [[], 1, ["overload seen: run 1 in a row, no notice this time"]]);
     const second = await pass(rows, first.state, { ...busy, now: NOW + 5 * MINUTE });
-    assert.deepEqual(second.notices, [["dotime: machine overloaded", "overloaded: busiest programs node 310%, postgres 45%; 4 cores at load 14.0, 80.0 GB of disk free, 35% of memory free, 15% of swap in use"]]);
+    assert.deepEqual(second.notices, [[
+        "dotime: machine overloaded",
+        "overloaded: busiest programs node 310%, postgres 45%; 4 cores at load 14.0, 80.0 GB of disk free, "
+            + "35% of memory free, 15% of swap in use",
+    ]]);
     const third = await pass(rows, second.state, { ...busy, now: NOW + 10 * MINUTE });
     assert.deepEqual([third.notices, third.state.streak], [[], 3]);
     const afterAnHour = await pass(rows, third.state, { ...busy, now: NOW + 70 * MINUTE });
@@ -224,7 +279,11 @@ test("reap: low disk space is reported early, at most every six hours", async ()
 test("reap: sends the notice for a slot whose job uses almost no CPU", async () => {
     const holder = { pid: 6100, pgid: 6101, label: "mobile-app: bundle", project: "mobile-app", startedAt: NOW - 50 * MINUTE, killMin: 120 };
     const state = { slotIdle: { [`6100:${holder.startedAt}`]: { samples: [{ t: NOW - 15 * MINUTE, cpu: 33 }] } } };
-    const run = await pass([], state, { holders: [holder], queue: [{ pid: 6200, label: "docs-site: build", at: NOW - 4 * MINUTE }], cpuPs: () => "6101 6100 6101 0:33.20\n" });
+    const run = await pass([], state, {
+        holders: [holder],
+        queue: [{ pid: 6200, label: "docs-site: build", at: NOW - 4 * MINUTE }],
+        cpuPs: () => "6101 6100 6101 0:33.20\n",
+    });
     assert.deepEqual(run.notices.map(([title]) => title), ["dotime: slot held by a quiet job"]);
     assert.equal(run.notices[0][1].includes(', holding up "docs-site: build" (4 min), '), true);
     assert.equal(run.state.slotIdle[`6100:${holder.startedAt}`].told, true);

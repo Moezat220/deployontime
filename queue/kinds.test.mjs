@@ -8,10 +8,22 @@ const isDebug = (label, command) => kindOf(label, command) === "debug";
 test("isDebug: a debug word or a question mark in the label's task part, or a debug word in a command the label leaves open", () => {
     assert.equal(DEBUG_LABEL_RE.test("docs-site: is the sitemap stale?"), true);
     assert.equal(DEBUG_CMD_RE.test("node tools/bisect-flaky.mjs"), true);
-    for (const [label, command] of [["shop-api: repro of the timeout", "pnpm test"], ["shop-api: nightly", "node scripts/probe.mjs"], ["mobile-app: why is the bundle big?", "make size"], ["shop-api: Debug run", "pnpm test"]]) {
+    for (const [label, command] of [
+        ["shop-api: repro of the timeout", "pnpm test"],
+        ["shop-api: nightly", "node scripts/probe.mjs"],
+        ["mobile-app: why is the bundle big?", "make size"],
+        ["shop-api: Debug run", "pnpm test"]
+    ]) {
         assert.equal(isDebug(label, command), true, label);
     }
-    for (const [label, command] of [["shop-api: suite", "DEBUG=api pnpm test"], ["docs-site: build", "pnpm run build"], ["mobile-app: debugger bundle", "make bundle"], ["probe-api: suite", "pnpm test"], ["shop-api: suite", "node scripts/probe.mjs"], [undefined, undefined]]) {
+    for (const [label, command] of [
+        ["shop-api: suite", "DEBUG=api pnpm test"],
+        ["docs-site: build", "pnpm run build"],
+        ["mobile-app: debugger bundle", "make bundle"],
+        ["probe-api: suite", "pnpm test"],
+        ["shop-api: suite", "node scripts/probe.mjs"],
+        [undefined, undefined]
+    ]) {
         assert.equal(isDebug(label, command), false, String(label));
     }
 });
@@ -62,5 +74,6 @@ test("cmdStem: joins the stems of the commands inside sh -c", () => {
 });
 
 test("cmdStem: null for inline code and for an empty command", () => {
-    for (const command of ["CI=1", 'bun --eval "0"', 'bash -c ""', undefined, 'tsx -e "void 0"', 'python3 -c "print(1)"', ""]) assert.equal(cmdStem(command), null, String(command));
+    for (const command of ["CI=1", 'bun --eval "0"', 'bash -c ""', undefined, 'tsx -e "void 0"', 'python3 -c "print(1)"', ""])
+        assert.equal(cmdStem(command), null, String(command));
 });

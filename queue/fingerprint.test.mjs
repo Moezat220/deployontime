@@ -28,7 +28,10 @@ test("fingerprint: stable while nothing changes, different after an edit to trac
 test("fingerprint: output folders and binary files do not count as code", () => {
     const repo = makeRepo(join(tempDir("limits"), "docs-site"));
     const rewrite = (round) => {
-        for (const name of ["dist/site.js", ".next/cache/page.json", "coverage/lcov.info", "packages/ui/.turbo/build.log", ".wrangler/state.txt", "report.pdf", "screens/home.png"]) write(repo, name, `output ${round}`);
+        for (const name of [
+            "dist/site.js", ".next/cache/page.json", "coverage/lcov.info", "packages/ui/.turbo/build.log",
+            ".wrangler/state.txt", "report.pdf", "screens/home.png",
+        ]) write(repo, name, `output ${round}`);
         return fingerprint(repo);
     };
     const withOutput = rewrite(1);

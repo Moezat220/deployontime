@@ -86,7 +86,11 @@ test("live probes: each returns a value of the expected shape", { skip: !onMac }
 
 test("probeReadPlist: an object for a job file, null for anything else", { skip: !onMac }, () => {
     const dir = tempDir("plist"), good = join(dir, "cleanup.plist"), broken = join(dir, "broken.plist");
-    writeFileSync(good, '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>com.example.cleanup</string><key>StartInterval</key><integer>900</integer></dict></plist>');
+    writeFileSync(
+        good,
+        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key>' +
+            '<string>com.example.cleanup</string><key>StartInterval</key><integer>900</integer></dict></plist>'
+    );
     writeFileSync(broken, "<plist><dict>");
     assert.deepEqual(probeReadPlist(good), { Label: "com.example.cleanup", StartInterval: 900 });
     assert.equal(probeReadPlist(broken), null);
