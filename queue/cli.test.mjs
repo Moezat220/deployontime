@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, makeRepo, pause, settingEnv, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("cli");
-const { historyRow, parseRunArgs, statusLines, USAGE } = await import("./cli.mjs");
+const { historyRow, main, parseRunArgs, statusLines, USAGE } = await import("./cli.mjs");
 const { alive, takeSlot } = await import("./slots.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
@@ -57,6 +57,22 @@ test("parseRunArgs: the usage text for a missing command, a short message for a 
     for (const args of [["run"], ["run", "--label", "docs-site: build"], ["run", "--label", "docs-site: build", "--"], ["start", "--", "make"], []]) assert.equal(parseRunArgs(args, DEFAULTS).error, USAGE);
     assert.equal(parseRunArgs(["run", "--max-wait", "-1", "--", "make"], DEFAULTS).error, "--max-wait wants a number of minutes, 0 or more; 0 means no limit");
     assert.equal(parseRunArgs(["run", "--max-run=0", "--", "make"], DEFAULTS).error, "--max-run wants a positive number of minutes");
+});
+
+test("parseRunArgs: refuses a flag that run does not know, and a flag without its value", () => {
+    assert.equal(parseRunArgs(["run", "--max-runn", "90", "--", "make"], DEFAULTS).error, "unknown option --max-runn");
+    assert.equal(parseRunArgs(["run", "--label=docs-site: build", "--prio", "--", "make", "--prio"], DEFAULTS).error, "unknown option --prio");
+    assert.equal(parseRunArgs(["run", "--label", "docs-site: build", "stray", "--", "make"], DEFAULTS).error, 'unexpected word "stray"');
+    assert.equal(parseRunArgs(["run", "--priority=yes", "--", "make"], DEFAULTS).error, "option --priority takes no value");
+    assert.equal(parseRunArgs(["run", "--kind", "--", "make"], DEFAULTS).error, "option --kind needs a value");
+    assert.equal(parseRunArgs(["run", "--label", "docs-site: build", "--", "make", "--unknown-to-the-queue"], DEFAULTS).error, undefined);
+});
+
+test("main: returns the exit code of each command instead of ending the process", async () => {
+    assert.equal(await main(["run", "--label", "docs-site: build"]), 2);
+    assert.equal(await main(["history", "--days", "abc"]), 2);
+    assert.equal(await main(["passed", "--mach", "lint"]), 2);
+    assert.equal(await main(["history", "--day", "2040-01-01"]), 0);
 });
 
 test("USAGE: names every subcommand and flag", () => {
@@ -342,6 +358,14 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     assert.deepEqual([badDay.code, badDay.stderr], [2, "dotime-queue: --day: needs a date as YYYY-MM-DD\n"]);
     const badWait = await cli(box, ["run", "--max-wait", "1h", "--", "make"]);
     assert.deepEqual([badWait.code, badWait.stderr], [2, "dotime-queue: --max-wait wants a number of minutes, 0 or more; 0 means no limit\n"]);
+    const misspelledMatch = await cli(box, ["passed", "--mach", "lint"]);
+    assert.deepEqual([misspelledMatch.code, misspelledMatch.stdout, misspelledMatch.stderr], [2, "", "dotime-queue: unknown option --mach\n"]);
+    const misspelledRun = await cli(box, ["run", "--max-runn", "90", "--", NODE, "-e", "console.log('started')"]);
+    assert.deepEqual([misspelledRun.code, misspelledRun.stdout, misspelledRun.stderr], [2, "", "dotime-queue: unknown option --max-runn\n"]);
+    const badDays = await cli(box, ["history", "--days", "abc"]);
+    assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
+    const statusFlag = await cli(box, ["status", "--all"]);
+    assert.deepEqual([statusFlag.code, statusFlag.stderr], [2, "dotime-queue: unknown option --all\n"]);
     for (const word of ["help", "--help"]) assert.deepEqual([(await cli(box, [word])).code, (await cli(box, [word])).stdout], [0, `${USAGE}\n`]);
     assert.deepEqual(journal(box), []);
 });
@@ -351,4 +375,26 @@ test("run: a command that does not exist ends with exit 127", async () => {
     const result = await cli(box, ["run", "--label", "docs-site: build", "--", "dotime-command-that-is-not-installed"]);
     assert.equal(result.code, 127);
     assert.equal(result.stderr.startsWith("dotime-queue: start failed: exit 127, "), true);
+});
+
+test("run: a command that cannot start is journalled as could-not-start and never counts as a failed check", async () => {
+    const box = sandbox(), args = ["run", "--label", "docs-site: unit tests", "--", "dotime-command-that-is-not-installed"];
+    for (const attempt of [1, 2, 3]) assert.equal((await cli(box, args)).code, 127, `attempt ${attempt}`);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["could-not-start", 127], ["could-not-start", 127], ["could-not-start", 127]]);
+    assert.equal((await cli(box, ["run", "--label", "docs-site: unit tests", "--", NODE, "-e", "process.exit(0)"])).code, 0);
+    assert.equal((await cli(box, ["history", "--days", "1"])).stdout.includes("all projects: jobs 4, failed 0,"), true);
+});
+
+test("run: a job that exits 127 by itself still counts as a failed run", async () => {
+    const box = sandbox();
+    assert.equal((await cli(box, ["run", "--label", "docs-site: unit tests", "--", NODE, "-e", "process.exit(127)"])).code, 127);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 127]]);
+});
+
+test("run: a check that failed twice runs again once its command changes", async () => {
+    const box = sandbox(), label = ["--label", "shop-api: unit tests"];
+    for (const attempt of [1, 2]) assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)"])).code, 4, `attempt ${attempt}`);
+    assert.equal((await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(4)"])).code, 3);
+    const changed = await cli(box, ["run", ...label, "--", NODE, "-e", "process.exit(0)"]);
+    assert.deepEqual([changed.code, changed.stderr], [0, ""]);
 });

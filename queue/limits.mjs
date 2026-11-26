@@ -10,6 +10,7 @@ import { clockTime } from "./clock.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines, readOnlyGit } from "./journal.mjs";
 import { psSeconds, sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
 import { probeProcessCpu, probeProcessTree } from "./probes.mjs";
+import { pctl } from "./stats.mjs";
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 const limitSettings = () => loadSettings().limits;
@@ -65,7 +66,6 @@ export function kindOf(label, command, given) {
     }
     return "other";
 }
-export const isDebug = (label, command) => kindOf(label, command) === "debug";
 
 // ---- command stems ----
 // The stem is what stays the same between two runs of one command: the program and the task it is given, without
@@ -116,12 +116,7 @@ export function cmdStem(command) {
 
 // ---- statistics over earlier runs ----
 
-/** Nearest-rank percentile, p from 0 to 1; null for an empty list. */
-export function pctl(values, p) {
-    if (!values.length) return null;
-    const sorted = [...values].sort((a, b) => a - b);
-    return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)];
-}
+export { pctl };
 function passedRuns(lines, { project, now, windowDays }) {
     const oldest = now - windowDays * DAY;
     return parseLines(lines).filter((row) => {
@@ -245,7 +240,7 @@ const failed = (row) => row.outcome === "timed-out" || isFailedRun(row);
 const bothDiffer = (a, b) => a != null && b != null && a !== b;
 /** Should this run be refused because the same check just failed twice on the same code?
  *  job = { label, cmd, project, cwd, head, fp, at }.
- *  Returns { refuse: false }, { refuse: false, changed: "commit" | "files" } or { refuse: true, reason }. */
+ *  Returns { refuse: false }, { refuse: false, changed: "commit" | "files" | "command" } or { refuse: true, reason }. */
 export function failStop(lines, job, L = limitSettings(), tz = timeZone()) {
     // Runs are one check when their labels match; failing that, when command, project and folder all match.
     const sameCheck = (row) => (job.label !== UNLABELLED && row.label === job.label)
@@ -259,6 +254,7 @@ export function failStop(lines, job, L = limitSettings(), tz = timeZone()) {
     if (last.head !== previous.head || bothDiffer(last.fp, previous.fp)) return { refuse: false };
     if (last.head !== undefined && last.head !== job.head) return { refuse: false, changed: "commit" };
     if (bothDiffer(last.fp, job.fp)) return { refuse: false, changed: "files" };
+    if (bothDiffer(last.cmd, job.cmd)) return { refuse: false, changed: "command" };
     const ending = (row) => `${row.outcome === "timed-out" ? "run limit hit" : `exit ${row.exit}`} at ${clockTime(Date.parse(row.endedAt), tz)}`;
     const commit = last.head ? `, commit ${String(last.head).slice(0, 8)}` : "";
     return {

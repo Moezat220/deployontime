@@ -9,7 +9,7 @@ import { isolateProcess, makeRepo, pause, tempDir, track, until } from "./testki
 
 const HOME = isolateProcess("limits");
 const {
-    addNotice, afterMinutes, cmdStem, codePrint, DEBUG_CMD_RE, DEBUG_LABEL_RE, decideLimit, failStop, idleAlert, isDebug, jobCpu,
+    addNotice, afterMinutes, cmdStem, codePrint, DEBUG_CMD_RE, DEBUG_LABEL_RE, decideLimit, failStop, idleAlert, jobCpu,
     killTree, KINDS, kindOf, kindStats, longRunAlert, opt, parseMaxRun, pctl, psRows, slotIdleCheck, slotIdleStep, stemStats,
     treePids, UNLABELLED, UNTRACKED,
 } = await import("./limits.mjs");
@@ -18,6 +18,7 @@ const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 const NOW = Date.UTC(2031, 8, 3, 7, 0);
+const isDebug = (label, command) => kindOf(label, command) === "debug";
 // The limits these tests calculate with, set here so that the shipped defaults can change freely.
 const L = { ...DEFAULTS.limits, defaultMin: 30, debugMin: 15, floorMin: 10, p90Factor: 1.5, longRunFactor: 2, longRunUnmeasuredMin: 20, minSamples: 5, windowDays: 14, failWindowHours: 6, priorityGrace: 2 };
 const ago = (ms) => new Date(NOW - ms).toISOString();
@@ -288,13 +289,21 @@ test("failStop: matches earlier runs by label first, and by command plus project
     assert.equal(verdict(TWICE, { ...job, label: "shop-api: api suite", project: "docs-site" }).refuse, false);
     assert.equal(verdict(TWICE, { ...job, label: "shop-api: api suite", cwd: "/srv/shop-api-copy" }).refuse, false);
     assert.equal(verdict(TWICE, { ...job, label: "shop-api: api suite" }).refuse, true);
-    assert.equal(verdict(TWICE, { ...job, cmd: "make integration" }).refuse, true);
 });
 
 test("failStop: lets the run through and says whether the commit or the files moved", () => {
     assert.deepEqual(verdict(TWICE, { ...job, fp: "beef" }), { refuse: false, changed: "files" });
     assert.deepEqual(verdict(TWICE, { ...job, head: "9988776655" }), { refuse: false, changed: "commit" });
     assert.equal(verdict(TWICE, { ...job, fp: null }).refuse, true);
+});
+
+test("failStop: a changed command under the same label is a new attempt, not a third failure", () => {
+    assert.deepEqual(verdict(TWICE, { ...job, cmd: "pnpm run test:integration --runInBand" }), { refuse: false, changed: "command" });
+    assert.equal(verdict(TWICE, { ...job, cmd: null }).refuse, true);
+});
+
+test("limits: exports no helper that only the tests use", async () => {
+    assert.equal("isDebug" in await import("./limits.mjs"), false);
 });
 
 test("failStop: allows a third run once the code differs between the two failures", () => {

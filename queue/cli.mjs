@@ -12,6 +12,7 @@ import { addNotice, afterMinutes, cmdStem, codePrint, decideLimit, failStop, kil
 import { addWait, append, cmdString, findStamp, gitState, historyWindow, jobEnd, readLines, record, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
 import { folderProject, jobProject } from "./project.mjs";
+import { flagError } from "./args.mjs";
 
 const MINUTE = 60_000;
 const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: 127, left: 130 };
@@ -35,6 +36,8 @@ export const USAGE = [
 export function parseRunArgs(args, settings = loadSettings()) {
     const cut = args.indexOf("--");
     if (args[0] !== "run" || cut < 0 || cut === args.length - 1) return { error: USAGE };
+    const badFlag = flagError(args);
+    if (badFlag) return { error: badFlag };
     const maxWait = parseMaxWait(args, settings.maxWaitMin);
     if (maxWait === null) return { error: "--max-wait wants a number of minutes, 0 or more; 0 means no limit" };
     const maxRun = parseMaxRun(args);
@@ -93,18 +96,20 @@ function cmdPassed(args) {
 }
 
 function cmdHistory(args) {
-    const day = opt(args, "--day"), asked = Number(opt(args, "--days"));
+    const day = opt(args, "--day"), daysText = opt(args, "--days");
     if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day)) { say("--day: needs a date as YYYY-MM-DD"); return EXIT.usage; }
-    const range = historyWindow({ day, days: asked > 0 ? asked : 7, tz: timeZone() });
+    if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) { say("--days: needs a whole number of days, 1 or more"); return EXIT.usage; }
+    const range = historyWindow({ day, days: daysText === undefined ? 7 : Number(daysText), tz: timeZone() });
     const { all, byProject } = summarize(readLines(), range.from, range.to);
     console.log(`history: ${range.title}, jobs ${all.jobs}`);
     if (all.jobs) for (const [name, t] of [["all projects", all], ...Object.entries(byProject)]) console.log(historyRow(name, t));
     return 0;
 }
 
+/** Runs one job and resolves with the exit code for `run`. */
 async function cmdRun(args, settings) {
     const parsed = parseRunArgs(args, settings);
-    if (parsed.error) { if (parsed.error === USAGE) process.stderr.write(`${USAGE}\n`); else say(parsed.error); return process.exit(EXIT.usage); }
+    if (parsed.error) { if (parsed.error === USAGE) process.stderr.write(`${USAGE}\n`); else say(parsed.error); return EXIT.usage; }
     const { label, cmd, priority, maxWait, maxRun, afterFix } = parsed, L = settings.limits, max = settings.slots;
     const queuedAt = Date.now(), cwd = process.cwd(), folder = folderProject(cwd), command = cmdString(cmd);
     const project = jobProject({ label, project: folder, cwd }), tally = {};
@@ -125,7 +130,7 @@ async function cmdRun(args, settings) {
         commit = before;
         finish("refused", EXIT.refused);
         say(`refused: exit ${EXIT.refused}; ${verdict.reason}`);
-        return process.exit(EXIT.refused);
+        return EXIT.refused;
     }
     if (verdict.refuse) say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
 
@@ -155,7 +160,7 @@ async function cmdRun(args, settings) {
                 finish("gave-up", EXIT.gaveUp);
                 say(`gave up: exit ${EXIT.gaveUp}, position ${turn.position}, ${minutesSince(waitFrom)} min waited; ${why}; hint: --max-wait 0 waits without limit`);
                 leaveQueue();
-                return process.exit(EXIT.gaveUp);
+                return EXIT.gaveUp;
             }
             say(`in line: position ${turn.position}, ${minutesSince(waitFrom)} min waited, ${maxWait ? `wait limit ${maxWait} min` : "no wait limit"}; ${why}`);
             shownPosition = turn.position;
@@ -173,7 +178,11 @@ async function cmdRun(args, settings) {
     if (startedAt - waitFrom > 5000) say(`started: ${minutesSince(waitFrom)} min in line`);
     for (const [signal, handler] of whileWaiting) process.off(signal, handler);
     const wrapper = fileURLToPath(new URL("./group.mjs", import.meta.url));
-    const child = spawn(process.execPath, [wrapper, String(process.pid), ...cmd], { stdio: "inherit", detached: true });
+    // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Only the
+    // wrapper holds it; the job does not inherit it.
+    const child = spawn(process.execPath, [wrapper, String(process.pid), ...cmd], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
+    let report = "";
+    child.stdio[3]?.setEncoding("utf8").on("data", (text) => { report += text; });
     updateSlot(slot, process.pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* already gone */ } } };
 
@@ -184,14 +193,16 @@ async function cmdRun(args, settings) {
     }
     process.on("exit", () => { if (child.exitCode === null && child.signalCode === null) signalJob("SIGTERM"); });
 
-    let pastLimit = false, longRunAt = null, warnedAt = null;
+    let pastLimit = false, longRunAt = null, warnedAt = null, ended = false, done;
+    const result = new Promise((resolve) => { done = resolve; });
+    const end = (exit) => { if (!ended) { ended = true; releaseSlot(slot, process.pid); done(exit); } };
     const stamps = () => ({ ...(longRunAt ? { longRunAt: new Date(longRunAt).toISOString() } : {}), ...(warnedAt ? { warnedAt: new Date(warnedAt).toISOString() } : {}) });
     const endTimedOut = () => {
+        if (ended) return;
         killTree(child.pid, "SIGKILL");
         finish("timed-out", EXIT.timedOut, stamps());
         say(`timed out: exit ${EXIT.timedOut}, stopped after ${limit.killMin} min; hint: the kind was taken as ${kind} (--kind <name> overrides it), and --max-run <min> sets the limit directly`);
-        releaseSlot(slot, process.pid);
-        process.exit(EXIT.timedOut);
+        end(EXIT.timedOut);
     };
     afterMinutes(limit.killMin, () => {
         pastLimit = true;
@@ -218,28 +229,48 @@ async function cmdRun(args, settings) {
             } catch { /* a notice that fails must not disturb the job */ }
         });
     }
-    child.on("exit", (code, signal) => {
+    // "close" comes after the wrapper has exited and its report pipe is drained.
+    child.on("close", (code, signal) => {
         if (pastLimit) return endTimedOut();
-        const exit = code ?? (signal ? 1 : 0), end = jobEnd({ code, signal, received });
-        finish(end.outcome, exit, { ...stamps(), ...(end.signal ? { signal: end.signal, stoppedAt: new Date(receivedAt ?? Date.now()).toISOString() } : {}) });
-        if (end.signal) say(`stopped: signal ${end.signal}, ${minutesSince(startedAt)} min run, journalled as stopped and not as failed`);
-        releaseSlot(slot, process.pid);
-        process.exit(exit);
+        const startFailed = startFailure(report);
+        if (startFailed !== null) {
+            finish("could-not-start", EXIT.noStart, stamps());
+            say(`start failed: exit ${EXIT.noStart}, ${startFailed}`);
+            return end(EXIT.noStart);
+        }
+        const exit = code ?? (signal ? 1 : 0), how = jobEnd({ code, signal, received });
+        finish(how.outcome, exit, { ...stamps(), ...(how.signal ? { signal: how.signal, stoppedAt: new Date(receivedAt ?? Date.now()).toISOString() } : {}) });
+        if (how.signal) say(`stopped: signal ${how.signal}, ${minutesSince(startedAt)} min run, journalled as stopped and not as failed`);
+        end(exit);
     });
+    // The wrapper is node itself, so this happens only when the system cannot start a process at all.
     child.on("error", (e) => {
         finish("could-not-start", EXIT.noStart);
         say(`start failed: exit ${EXIT.noStart}, ${e.message}`);
-        process.exit(EXIT.noStart);
+        end(EXIT.noStart);
     });
+    return result;
 }
 
+/** The wrapper's start-failure message from its report text, or null when it reported none. */
+function startFailure(text) {
+    for (const line of text.split("\n")) {
+        try { const sent = JSON.parse(line); if (typeof sent?.startFailed === "string") return sent.startFailed; } catch { /* not a report line */ }
+    }
+    return null;
+}
+
+/** Runs one subcommand and resolves with its exit code. */
 export async function main(args = process.argv.slice(2)) {
+    if (args[0] === "help" || args[0] === "--help") { console.log(USAGE); return 0; }
+    const command = args.length ? args[0] : "status";
+    const badFlag = command === "run" ? null : flagError([command, ...args.slice(1)]);
+    if (badFlag) { say(badFlag); return EXIT.usage; }
     const settings = loadSettings();
-    if (!args.length || args[0] === "status") return process.exit(cmdStatus(settings));
-    if (args[0] === "passed") return process.exit(cmdPassed(args));
-    if (args[0] === "history") return process.exit(cmdHistory(args));
-    if (args[0] === "help" || args[0] === "--help") { console.log(USAGE); return process.exit(0); }
+    if (command === "status") return cmdStatus(settings);
+    if (command === "passed") return cmdPassed(args);
+    if (command === "history") return cmdHistory(args);
     return cmdRun(args, settings);
 }
 
-if (isMainModule(import.meta.url)) await main();
+if (isMainModule(import.meta.url)) process.exit(await main());

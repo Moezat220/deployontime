@@ -99,6 +99,10 @@ password, cannot do so.
 Options go in front of the `--`. Everything behind it is the job's command. Keep `--priority` out of agent
 instructions: an agent that uses it every time puts itself in front of everyone else.
 
+An option that is not in this table, an option without its value, or any other word in front of the `--` is
+refused with exit 2, for example `dotime-queue: unknown option --max-runn`. The job does not run. The same holds for
+`status`, `passed` and `history`: each accepts only the options shown for it.
+
 While it waits, `run` prints its position and what holds it, at each change of position and again after each
 minute of waiting.
 
@@ -117,6 +121,10 @@ Details:
   SIGUSR1 and signals Node does not die by, such as SIGPIPE: those give 128 plus the number. A script that looks
   for 130 or 143 should look for the `stopped:` line that `run` prints instead.
 - If the `run` process itself dies, the job notices within about 2 seconds (`limits.orphanCheckMs`) and stops.
+- A command that cannot be started at all, for example a misspelled program name, makes `run` print a
+  `start failed:` line and exit 127. It is journalled as `could-not-start`, which counts neither as a failure nor
+  towards [Repeated failures](#repeated-failures). A command that starts and then exits 127 by itself, such as a
+  shell script that calls a missing program, is an ordinary failed run.
 
 ### `status`
 
@@ -160,7 +168,9 @@ that caused the waiting. The waiting columns answer three questions. `sum`: how 
 together. `clock`: how long the line was not empty. `clock with no job running`: how much of that time jobs were
 waiting while none of this row's jobs ran, for example because the health gate was shut.
 `--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
-the `DOTIME_TZ` zone, UTC by default.
+the `DOTIME_TZ` zone, UTC by default. `--days` takes a whole number of 1 or more and `--day` a date as
+`YYYY-MM-DD`; anything else exits 2. The median and p90 are nearest-rank percentiles, the same ones the run limits
+use.
 
 ## Projects and kinds
 
@@ -225,13 +235,15 @@ earlier than the stop.
 When the same check failed twice in a row within `limits.failWindowHours` (6), and neither the commit nor the
 uncommitted and untracked files have changed since, a third run is refused: `run` prints a `refused:` line and
 exits 3. The way out: change the code, or pass `--after-fix "<note>"` in front of the `--`. A failure is a non-zero
-exit or a stop at the run limit. Runs that were stopped by a signal do not count.
+exit or a stop at the run limit. Runs that were stopped by a signal, and commands that could not be started, do
+not count.
 
 Renaming the label does not reset the count. Earlier runs belong to a check when they carry its label, and runs
 under another label still belong when command, project and folder are all identical.
 
 What is compared between the failures and the new run:
 
+- the command line: a new run of the check with another command is let through;
 - the commit;
 - uncommitted changes to tracked files, wherever they are, and the list of changed and untracked paths as
   `git status` prints it;
@@ -251,11 +263,11 @@ changes only such untracked files, the code counts as unchanged: pass `--after-f
 | Code | Meaning |
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
-| 2 | The command line was not understood. |
+| 2 | The command line was not understood, for example an unknown option or a value that is not a number. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |
-| 127 | The job's command could not be started. |
+| 127 | The job's command could not be started. Journalled as `could-not-start`, not as a failure. |
 | 130 | Left the line because of a signal. |
 
 `passed` exits 0 with a stamp and 1 without.
@@ -374,6 +386,9 @@ files in the state folder. Problems go out as one notice;
 { "skip": ["com.example.*"], "okExit": { "com.example.sync": [0, 2] }, "maxLogAgeH": { "com.example.weekly": 200 } }
 ```
 
+A rules file that cannot be read, is not valid JSON or is not one JSON object is ignored with a warning on stderr,
+and the report runs without rules. A missing file simply means no rules.
+
 ## Notices
 
 A notice is always appended to `$DOTIME_HOME/notify.log`. It is also shown as a macOS desktop notice through
@@ -410,7 +425,9 @@ A value that does not fit is replaced by its default, with one warning on stderr
 - a time in milliseconds (a key ending in `Ms`) above 2147483647, about 24 days;
 - a pattern that does not compile.
 
-An unknown name is skipped, also with one warning.
+An unknown name is skipped, also with one warning. A `config.json` that is not valid JSON, or that exists but cannot
+be read (no permission, or a folder in its place), is ignored with one warning, and every setting keeps its
+default. Only a missing file is silent.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
