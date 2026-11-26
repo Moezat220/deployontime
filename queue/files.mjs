@@ -1,6 +1,6 @@
 // The file helpers of the modules that keep state on disk: a JSON read that tells a missing file from a broken one,
 // a JSON write that no reader ever sees half done, and an append that creates the folder first.
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** The name a file is written under before it is moved into place. It does not end in ".json", so a reader that
@@ -26,12 +26,17 @@ export function readJson(file, fallback = null, problem = null) {
 }
 
 /** Writes JSON under a temporary name and then moves it into place, creating the folder first. Throws when the
- *  file cannot be written. */
+ *  file cannot be written; the temporary file is removed again in that case. */
 export function writeJsonAtomic(file, value, space = undefined) {
     mkdirSync(dirname(file), { recursive: true });
     const temp = tempName(file);
-    writeFileSync(temp, JSON.stringify(value, null, space));
-    renameSync(temp, file);
+    try {
+        writeFileSync(temp, JSON.stringify(value, null, space));
+        renameSync(temp, file);
+    } catch (e) {
+        rmSync(temp, { force: true });
+        throw e;
+    }
 }
 
 /** Appends text to a file, creating its folder first. Returns false, without throwing, when that fails. */

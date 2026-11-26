@@ -34,6 +34,13 @@ test("writeJsonAtomic: throws when the file cannot be written", () => {
     assert.throws(() => writeJsonAtomic(join(blocker, "state.json"), {}));
 });
 
+test("writeJsonAtomic: removes its temporary file when the move into place fails", () => {
+    const dir = tempDir("files"), file = join(dir, "health.json");
+    mkdirSync(join(file, "taken"), { recursive: true });
+    assert.throws(() => writeJsonAtomic(file, { at: 1 }));
+    assert.deepEqual(readdirSync(dir), ["health.json"]);
+});
+
 test("appendLine: adds to the end, creating the folder, and is false instead of throwing on failure", () => {
     const dir = tempDir("files"), file = join(dir, "logs", "notify.log");
     assert.equal(appendLine(file, "one\n"), true);
