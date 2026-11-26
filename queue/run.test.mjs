@@ -228,7 +228,7 @@ test("runJob: a signal on the watched process goes on to the job, and the run is
     await until(() => existsSync(pidFile));
     const pid = pidIn(pidFile);
     job.signals.emit("SIGTERM");
-    assert.notEqual(await job.run.result, 0);
+    assert.equal(await job.run.result, 1);
     await until(() => !alive(pid), 3000);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.signal, typeof line.stoppedAt], ["stopped", "SIGTERM", "string"]);
