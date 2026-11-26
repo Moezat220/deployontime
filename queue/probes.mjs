@@ -25,6 +25,32 @@ export function runTool(tool, args, timeout = 5000) {
 
 export const probeLoad = () => ({ load: loadavg()[0], cores: cpus().length });
 
+/** The share of CPU time in use across all cores between two os.cpus() snapshots, in percent, or null when no time
+ *  passed between them. Only cores found in both snapshots count, so a core list that changed size still gives a
+ *  fair share. */
+export function cpuBusyPct(before, after) {
+    let busy = 0, total = 0;
+    for (let i = 0; i < Math.min(before?.length ?? 0, after?.length ?? 0); i++) {
+        const spent = (name) => (after[i].times?.[name] ?? 0) - (before[i].times?.[name] ?? 0);
+        const idle = spent("idle"), used = spent("user") + spent("nice") + spent("sys") + spent("irq");
+        busy += used;
+        total += used + idle;
+    }
+    if (!(total > 0) || busy < 0 || busy > total) return null;
+    return (busy / total) * 100;
+}
+
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** How busy the CPU is right now: the busy share over windowMs, in percent, or null. It waits windowMs. */
+export function probeBusyCpuPct(windowMs = 1000, { snapshot = cpus, wait = pause } = {}) {
+    try {
+        const before = snapshot();
+        wait(windowMs);
+        return cpuBusyPct(before, snapshot());
+    } catch { return null; }
+}
+
 /** Parses memory_pressure output into free percent, or null. */
 export function parseMemoryPressure(text) {
     const found = String(text ?? "").match(/free percentage:\s*(\d+)%/);

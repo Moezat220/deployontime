@@ -6,7 +6,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
 import {
-    parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeDiskFreeGB, probeGroupOf, probeLoad, probeMemoryFreePct,
+    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeBusyCpuPct, probeDiskFreeGB, probeGroupOf, probeLoad, probeMemoryFreePct,
     probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct,
     runTool, showDesktopNotice, toolEnv,
 } from "./probes.mjs";
@@ -61,6 +61,41 @@ test("probeScheduledJobs: null when the list command fails, a map when it works"
     assert.equal(probeScheduledJobs(() => { throw new Error("spawn failed"); }), null);
     const jobs = probeScheduledJobs(() => ({ status: 0, stdout: "PID\tStatus\tLabel\n-\t0\tcom.example.cleanup\n" }));
     assert.equal(jobs.get("com.example.cleanup").exit, 0);
+});
+
+const core = (user, sys, idle, nice = 0, irq = 0) => ({ times: { user, nice, sys, idle, irq } });
+
+test("cpuBusyPct: the busy share of all cores between two snapshots", () => {
+    const before = [core(100, 50, 1000), core(200, 0, 800)];
+    const after = [core(160, 70, 1020), core(290, 0, 810, 5, 5)];
+    // busy 60 + 20 + 90 + 5 + 5 = 180, idle 20 + 10 = 30
+    assert.equal(cpuBusyPct(before, after), (180 / 210) * 100);
+    assert.equal(cpuBusyPct([core(0, 0, 0)], [core(0, 0, 500)]), 0);
+    assert.equal(cpuBusyPct([core(0, 0, 0)], [core(400, 100, 0)]), 100);
+});
+
+test("cpuBusyPct: only cores found in both snapshots count when the core list changed size", () => {
+    const two = [core(0, 0, 0), core(0, 0, 0)];
+    const three = [core(50, 0, 50), core(100, 0, 0), core(0, 0, 0)];
+    assert.equal(cpuBusyPct(two, three), 75);
+    assert.equal(cpuBusyPct(three, [core(150, 0, 150)]), 50);
+    assert.equal(cpuBusyPct([], three), null);
+});
+
+test("cpuBusyPct: null when no time passed or the counters went backwards", () => {
+    const same = [core(100, 50, 1000), core(200, 0, 800)];
+    assert.equal(cpuBusyPct(same, same), null);
+    assert.equal(cpuBusyPct([core(500, 0, 100)], [core(100, 0, 600)]), null);
+    assert.equal(cpuBusyPct(undefined, same), null);
+});
+
+test("probeBusyCpuPct: two snapshots one window apart, null when a snapshot fails", () => {
+    const snaps = [[core(0, 0, 0)], [core(30, 0, 70)]], waited = [];
+    const got = probeBusyCpuPct(250, { snapshot: () => snaps.shift(), wait: (ms) => waited.push(ms) });
+    assert.deepEqual([got, waited], [30, [250]]);
+    assert.equal(probeBusyCpuPct(10, { snapshot: () => { throw new Error("no cpu list"); }, wait: () => {} }), null);
+    const live = probeBusyCpuPct(50);
+    assert.equal(live === null || (live >= 0 && live <= 100), true, "live CPU reading out of range");
 });
 
 test("probeLoad: a load figure and at least one core", () => {
