@@ -521,6 +521,46 @@ These files stay on the computer, but they hold working folders, full command li
 log paths of scheduled jobs. Keep that in mind before sharing them, and when `DOTIME_NOTIFY_CMD` forwards notices to
 another service.
 
+## Code layout
+
+All code lives in `queue/`, one module per job. An entry point is started as a script; it reads the settings, the
+state folder and the time zone once and hands them to the libraries, which read none of them by themselves. No
+module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
+
+| Module | Purpose | Kind | Side effects it owns |
+| --- | --- | --- | --- |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `run.mjs` | The `run` command in steps: plan the limit, wait for a slot, run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
+| `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
+| `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/` and `line/`. |
+| `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
+| `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
+| `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
+| `slots.mjs` | Slot and waiting-line files: snapshot, join, take, release, update. | library | Reads and writes `slots/` and `line/`; runs `ps` for process ages. |
+| `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
+| `health.mjs` | The health gate: judges a reading, takes one, shares it for `pollMs`. | library | Runs the health probes; reads and writes `health.json`. |
+| `limits.mjs` | Run limits from the journal history. | library | None. |
+| `kinds.mjs` | Job kinds and command stems. | library | None. |
+| `failstop.mjs` | The stop for a check that failed twice on unchanged code. | library | None. |
+| `fingerprint.mjs` | A short hash of the code under test. | library | Runs read-only git commands, reads files in the working tree. |
+| `journal.mjs` | Journal lines, pass stamps and `history` totals. | library | Reads and appends `journal.jsonl`. |
+| `notices.mjs` | Long-run and idle-slot notices and the notices store. | library | Writes `notices/`; runs `ps` for CPU samples. |
+| `notify.mjs` | Sends a notice: log line, desktop notice, `DOTIME_NOTIFY_CMD`. | library | Appends `notify.log`, runs `osascript` and the notify command. |
+| `idle.mjs` | Idle verdicts from CPU samples; the dev-server test. | library | None. |
+| `stray.mjs` | Finds large test runs outside the queue. | library | None. |
+| `commands.mjs` | The test, shell and launcher command patterns, each with its reason. | library | None. |
+| `git.mjs` | The queue's git calls, read-only and with time limits. | library | Runs `git`. |
+| `project.mjs` | The project of a job: label prefix, repository name or folder name. | library | Runs `git` through `git.mjs`. |
+| `probes.mjs` | Readings from macOS tools, one function each. | library | Runs `ps`, `memory_pressure`, `df`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`. |
+| `ps.mjs` | Parsers for `ps` output. | library | None. |
+| `proctree.mjs` | Process trees: descendants, ancestors, a job's pids and CPU; group signals and stops. | library | Sends signals; runs `ps` when no listing is given. |
+| `files.mjs` | JSON read with warnings, atomic JSON write, append with folder. | library | Reads and writes the files it is handed. |
+| `timer.mjs` | Timers longer than one Node timer can hold. | library | Sets timers. |
+| `clock.mjs` | Clock times, days and zone offsets. | library | None. |
+| `stats.mjs` | The percentile that limits and `history` share. | library | None. |
+| `units.mjs` | Time units and rounding. | library | None. |
+| `testkit.mjs` | Test helpers: temp folders, started processes, isolated git and state folder. | test helper | Creates and removes temp folders, signals processes the tests started. |
+
 ## Tests
 
 From the repository's top folder:

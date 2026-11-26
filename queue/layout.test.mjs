@@ -44,3 +44,8 @@ test("layout: no production line is longer than 160 characters", () => {
     }
     assert.deepEqual(long, []);
 });
+
+test("layout: the code layout table in the README has one row per module, and no other", () => {
+    const rows = [...source("README.md").matchAll(/^\| `([\w-]+\.mjs)` \|/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(rows, [...PRODUCTION, "testkit.mjs"].sort());
+});

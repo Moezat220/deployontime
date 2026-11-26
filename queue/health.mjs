@@ -1,5 +1,6 @@
 // The health gate. A new job may start only while load, free memory, free disk and battery are inside their limits.
-// healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading.
+// healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading; cachedHealth()
+// shares one reading between jobs that wait at the same time.
 import { probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 
