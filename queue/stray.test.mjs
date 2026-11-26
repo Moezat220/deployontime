@@ -73,6 +73,8 @@ test("strayRuns: time grows in step with the rows, also when one process has the
 });
 
 test("strayRuns: a shell in any folder is the launcher of a run, not its root", () => {
-    const rows = [{ pid: 50, ppid: 1, rss: 4 * MB, cmd: "/opt/homebrew/bin/bash -c npx vitest run" }, ...bigRun(7000, 50)];
-    assert.deepEqual(strayRuns(rows).map((run) => [run.rootPid, run.procs]), [[7000, 4]]);
+    for (const shell of ["/bin/bash", "/usr/bin/zsh", "/opt/homebrew/bin/bash", "/usr/local/bin/zsh", "sh"]) {
+        const rows = [{ pid: 50, ppid: 1, rss: 4 * MB, cmd: `${shell} -c npx vitest run` }, ...bigRun(7000, 50)];
+        assert.deepEqual(strayRuns(rows).map((run) => [run.rootPid, run.procs, run.cmd]), [[7000, 4, runner(0, 0).cmd]], shell);
+    }
 });

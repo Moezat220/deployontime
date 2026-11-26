@@ -358,7 +358,10 @@ Each run also:
 - reports an overloaded computer when two runs in a row see it, at most once an hour;
 - reports low disk space, at most every six hours.
 
-A test run counts as started through the queue when it descends from a process that holds a slot.
+A test run counts as started through the queue when it descends from a process that holds a slot. A shell that
+starts a test runner with `-c`, such as `bash -c "npx vitest run"`, is only its launcher: it is not counted as a test
+process and is never reported as the run's root. This holds for `sh`, `bash` and `zsh` in any folder: a shell in
+`/opt/homebrew/bin` or `/usr/local/bin` counts as a launcher just like one in `/bin`.
 
 What "nothing but the server and its launchers" means: the server, the processes it started, and the processes
 above it that are package-script launchers (`npm`, `npx`, `pnpm`, `yarn`, `bun`, or the script `node` runs for one

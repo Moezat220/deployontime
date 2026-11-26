@@ -9,13 +9,18 @@ test("node --test: a test kind and a one-shot test, but never a process of a str
 });
 
 test("SHELL_PROGRAM_RE: a shell as the program, in any folder, and not a word further along", () => {
-    for (const cmd of ["sh -c jest", "/bin/zsh", "/opt/homebrew/bin/bash -lc vitest"]) assert.equal(SHELL_PROGRAM_RE.test(cmd), true, cmd);
+    for (const cmd of ["sh -c jest", "/bin/zsh", "/usr/bin/bash -c jest", "/opt/homebrew/bin/bash -lc vitest"]) {
+        assert.equal(SHELL_PROGRAM_RE.test(cmd), true, cmd);
+    }
     for (const cmd of ["node shell.js", "make sh", "bashful run", "/srv/sh/tool"]) assert.equal(SHELL_PROGRAM_RE.test(cmd), false, cmd);
     assert.deepEqual([...SHELLS], ["sh", "bash", "zsh"]);
 });
 
 test("LAUNCHER_RE: package managers, the script node runs for one, and a shell with -c", () => {
-    for (const cmd of ["npm run dev", "/usr/local/bin/pnpm dev", "node /opt/tools/lib/pnpm/bin/pnpm.cjs dev", "sh -c vite", "/bin/bash -c next dev"]) {
+    for (const cmd of [
+        "npm run dev", "/usr/local/bin/pnpm dev", "node /opt/tools/lib/pnpm/bin/pnpm.cjs dev", "sh -c vite", "/bin/bash -c next dev",
+        "/opt/homebrew/bin/zsh -c vite",
+    ]) {
         assert.equal(LAUNCHER_RE.test(cmd), true, cmd);
     }
     for (const cmd of ["make -C /srv/npm watch-all", "bash script.sh", "node server.js"]) assert.equal(LAUNCHER_RE.test(cmd), false, cmd);
