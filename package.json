@@ -1,0 +1,17 @@
+{
+  "name": "deployontime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A shared job queue that lets several coding agents use one computer without overloading it.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "dotime-queue": "queue/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
