@@ -106,7 +106,7 @@ test("planJob: refuses a check that failed twice on unchanged code, unless --aft
 
 // ---- waitForSlot ----
 
-const waiter = (box, fields = {}) => ({ pid: process.pid, label: "shop-api: lint", priority: false, maxWait: 60, slotMeta: { kind: "lint" }, settings: box.ctx.settings, files: box.ctx.files, ...fields });
+const waiter = (box, fields = {}) => ({ pid: process.pid, label: "shop-api: lint", maxWait: 60, slotMeta: { kind: "lint" }, settings: box.ctx.settings, files: box.ctx.files, ...fields });
 
 test("waitForSlot: takes a free slot at once when the gate is open", async () => {
     const box = sandbox(), clock = fakeClock(), said = [];

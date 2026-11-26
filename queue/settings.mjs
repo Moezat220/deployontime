@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readJson } from "./files.mjs";
+import { MAX_TIMER_MS } from "./timer.mjs";
 
 export const DEFAULTS = Object.freeze({
     slots: 2,
@@ -31,7 +32,6 @@ export const DEFAULTS = Object.freeze({
     ],
 });
 
-const MAX_MS = 2 ** 31 - 1; // the longest wait one timer can hold
 const above0 = [(n) => n > 0, "a number above 0"];
 const from0 = [(n) => n >= 0, "a number of 0 or more"];
 const from1 = [(n) => n >= 1, "a number of 1 or more"];
@@ -90,7 +90,7 @@ function misfit(name, fallback, value) {
     if (typeof fallback === "number") {
         const [fits, needs] = NUMBER_RULES[name] ?? from0;
         // A longer timer would fire at once.
-        if (name.endsWith("Ms") && value > MAX_MS) return `${needs} and at most ${MAX_MS}`;
+        if (name.endsWith("Ms") && value > MAX_TIMER_MS) return `${needs} and at most ${MAX_TIMER_MS}`;
         return typeof value === "number" && Number.isFinite(value) && fits(value) ? null : needs;
     }
     if (Array.isArray(fallback)) {

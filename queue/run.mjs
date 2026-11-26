@@ -5,7 +5,7 @@
 import { spawn as spawnProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseRunArgs, USAGE } from "./args.mjs";
+import { parseRunArgs, USAGE, USAGE_EXIT } from "./args.mjs";
 import { minutesSince } from "./clock.mjs";
 import { failStop } from "./failstop.mjs";
 import { fingerprint } from "./fingerprint.mjs";
@@ -24,7 +24,7 @@ import { MAX_TIMER_MS } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
-export const EXIT = { usage: 2, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
+export const EXIT = { usage: USAGE_EXIT, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
 const REPEAT_WAIT_LINE_MS = MINUTE;
 const WRAPPER = fileURLToPath(new URL("./job-wrapper.mjs", import.meta.url));
 // Signals that take a waiting job out of the line, and signals that are passed on to a running job.
@@ -67,7 +67,8 @@ export function planJob(request, settings, journalRows) {
     };
 }
 
-/** Waits in line until this job holds a slot. job: { pid, label, priority, maxWait, slotMeta, settings, files }.
+/** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files }. Priority
+ *  plays no part in here: it is in the job's ticket, which orders the line, and in slotMeta.
  *  deps: { now, sleep, readHealth, say, leaving }; leaving() names a signal that asked the job to leave, or null.
  *  Returns { slot, tally, waitFrom }, { gaveUp: true, tally } or { left: signal, tally }; tally is the waiting time
  *  per gate in ms. */
@@ -346,7 +347,7 @@ export async function runCommand(args, ctx, deps) {
     const waitDeps = { ...deps, sleep: (ms) => Promise.race([deps.sleep(ms), woken]), leaving: () => leaving };
     let waited;
     try {
-        waited = await waitForSlot({ pid, label, priority, maxWait, slotMeta, settings, files }, waitDeps);
+        waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files }, waitDeps);
     } finally {
         for (const [signal, handler] of leavers) signals.off(signal, handler);
     }
