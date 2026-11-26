@@ -176,6 +176,8 @@ export function runJob(job, slot, deps) {
         ended = true;
         releaseSlot(slot, pid);
         for (const [signal, handler] of forwarders) signals.off(signal, handler);
+        // Safe to drop: the wrapper has exited, or the backstop ended a run whose last KILL was refused, and a TERM
+        // at exit would be refused the same way.
         signals.off("exit", onExit);
         done(exit);
     };
