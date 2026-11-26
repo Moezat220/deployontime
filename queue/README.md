@@ -419,7 +419,8 @@ export DOTIME_NOTIFY_CMD='printf "%s: %s\n" "$DOTIME_TITLE" "$DOTIME_MESSAGE" >>
 
 `DOTIME_NOTIFY=log` keeps only the log line. Long-run and idle-slot notices are also stored in the folder
 `$DOTIME_HOME/notices/`, one JSON file per notice, as a record you can look through. Each job gets at most one of
-each, also when several processes send notices at the same time.
+each, also when several processes send notices at the same time. Earlier versions kept them all in one file,
+`notices.json`; it is no longer read, and you can delete it.
 
 ## Settings
 
