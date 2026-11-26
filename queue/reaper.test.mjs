@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, tempDir, track, until } from "./testkit.mjs";
 
 const HOME = isolateProcess("reaper");
-const { groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
+const { checkIdleServers, checkIdleSlots, checkLowDisk, checkOverload, checkStrayRuns, groupRows, reap, serverOnly, shortCommand } = await import("./reaper.mjs");
 const { snapshot } = await import("./slots.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
@@ -261,4 +261,18 @@ test("reap: an idle server whose stop was refused is reported as a failed stop, 
     assert.deepEqual([late.stopped, late.notices], [[], []]);
     assert.deepEqual(late.lines, [`stop failed: idle dev server node next (process group 2400, 2.0 s of CPU in ${SAMPLE_AGE} min, 384 MB of memory), TERM refused (EPERM)`]);
     assert.equal(late.state.samples[2400].length, 2, "the server stays under watch");
+});
+
+test("reap checks: each one returns only the state keys it owns", async () => {
+    const ctx = {
+        rows: [], groups: new Map(), holders: [], queue: [], now: NOW, dry: false, settings: SETTINGS, tz: "UTC",
+        health: { freePct: 50, diskGB: 3 }, load: 0, cores: 4, swapPct: 0, myPgid: null, notify: () => {}, record: () => {},
+        cpuPs: () => "", keep: null, isDevServer: () => false, stopIdle: assert.fail,
+    };
+    const state = { samples: {}, streak: 0, lastOverload: 0 };
+    assert.deepEqual(Object.keys((await checkIdleServers(ctx, state)).state), ["samples"]);
+    assert.deepEqual(Object.keys(checkStrayRuns(ctx, state).state), ["strayTold"]);
+    assert.deepEqual(Object.keys(checkIdleSlots(ctx, state).state), ["slotIdle"]);
+    assert.deepEqual(Object.keys(checkOverload(ctx, state).state), ["streak", "lastOverload"]);
+    assert.deepEqual(checkLowDisk(ctx, state), { state: { lastLowDisk: NOW }, lines: [`disk low: 3.0 GB free, notice level ${SETTINGS.reaper.lowDiskGB} GB`] });
 });

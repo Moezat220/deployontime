@@ -46,38 +46,42 @@ export function serverOnly(procs, server, isServerCmd = () => false) {
     return procs.every((p) => line.has(p.pid));
 }
 
-/** One reaper run over the given readings. Nothing is read from the machine or the state folder in here, so tests
- *  can pass any process table. settings and tz come from the caller; record(key, entry) stores an idle-slot notice.
- *  state is what the previous run returned. Returns { state, lines, stopped }. */
-export async function reap({
-    rows, holders = [], queue = [], state = {}, now = Date.now(), dry = false, settings, tz,
-    health = { freePct: null, diskGB: null }, load = 0, cores = 1, swapPct = 0, myPgid = null,
-    notify = () => {}, record = () => {}, stop = null, cpuPs = () => "",
-}) {
-    const stopIdle = stop ?? ((pgid, procs) => stopGroup(pgid, procs, { graceMs: settings.limits.killGraceMs }));
-    const next = { samples: {}, streak: 0, lastOverload: 0, ...state };
-    const lines = [], stopped = [], failedStops = [], R = settings.reaper, groups = groupRows(rows);
-    const isDevServer = serverTest(R.serverPattern);
-    let keep;
-    try { keep = new RegExp(R.keepPattern); } catch { keep = null; }
+// Each check below takes the readings of this run (ctx) and the state the previous run left, and returns
+// { state, lines } with the state keys it owns, plus what reap() needs to sum up the run.
 
-    // Idle dev servers.
+/** Idle dev servers: a server group that stayed idle for the window is stopped. State: samples, the CPU samples
+ *  per process group. */
+export async function checkIdleServers(ctx, state) {
+    const { groups, holders, now, dry, settings, myPgid, isDevServer, keep, stopIdle, notify } = ctx;
+    const samples = { ...state.samples };
+    const lines = [];
+    const stopped = [];
+    const failed = [];
     const slotPids = new Set(holders.flatMap((h) => [h.pid, h.pgid]).filter(Boolean));
     const keepMs = sampleKeepMs(settings.idle.serverIdleMin);
     let watched = 0;
     for (const [pgid, procs] of groups) {
         // the innermost match, so a launcher of any shape that names the server (sh -ec "vite & make watch",
         // concurrently "vite" "make watch") is a process above the server, never the server itself
-        const matches = procs.filter((p) => isDevServer(p.cmd)), above = new Set(matches.map((p) => p.ppid));
+        const matches = procs.filter((p) => isDevServer(p.cmd));
+        const above = new Set(matches.map((p) => p.ppid));
         const server = matches.find((p) => !above.has(p.pid));
-        if (pgid <= 1 || pgid === myPgid || !server) { delete next.samples[pgid]; continue; }
+        if (pgid <= 1 || pgid === myPgid || !server) {
+            delete samples[pgid];
+            continue;
+        }
         watched++;
-        const exempt = procs.some((p) => TEST_RUN_RE.test(p.cmd) || slotPids.has(p.pid) || slotPids.has(p.pgid) || !!keep?.test(p.cmd));
-        const cpu = procs.reduce((sum, p) => sum + p.cpu, 0), ageMs = Math.max(...procs.map((p) => p.age));
-        const samples = [...(next.samples[pgid] ?? []), { t: now, cpu }].filter((s) => now - s.t <= keepMs);
-        next.samples[pgid] = samples;
-        const verdict = serverIdleVerdict({ ageMs, samples, now, exempt }, settings.idle), name = shortCommand(server.cmd);
-        if (dry) lines.push(`server group ${pgid}: ${name}, ${Math.round(ageMs / MINUTE)} min old, ${cpu.toFixed(0)} s of CPU so far, state ${verdict.state}`);
+        const protectedProc = (p) => TEST_RUN_RE.test(p.cmd) || slotPids.has(p.pid) || slotPids.has(p.pgid) || !!keep?.test(p.cmd);
+        const exempt = procs.some(protectedProc);
+        const cpu = procs.reduce((sum, p) => sum + p.cpu, 0);
+        const ageMs = Math.max(...procs.map((p) => p.age));
+        samples[pgid] = [...(samples[pgid] ?? []), { t: now, cpu }].filter((sample) => now - sample.t <= keepMs);
+        const verdict = serverIdleVerdict({ ageMs, samples: samples[pgid], now, exempt }, settings.idle);
+        const name = shortCommand(server.cmd);
+        if (dry) {
+            const age = Math.round(ageMs / MINUTE);
+            lines.push(`server group ${pgid}: ${name}, ${age} min old, ${cpu.toFixed(0)} s of CPU so far, state ${verdict.state}`);
+        }
         if (!verdict.idle) continue;
         if (!serverOnly(procs, server, isDevServer)) { // stopping the group would stop that program too
             lines.push(`idle dev server ${name} (process group ${pgid}) shares its group with another program: left running`);
@@ -88,70 +92,139 @@ export async function reap({
         if (!dry) {
             const result = await stopIdle(pgid, procs);
             if (result?.stopped === false) {
-                failedStops.push(what);
+                failed.push(what);
                 lines.push(`stop failed: idle dev server ${what}, ${result.why}`);
                 continue;
             }
-            delete next.samples[pgid];
+            delete samples[pgid];
         }
         stopped.push(what);
     }
-    for (const pgid of Object.keys(next.samples)) if (!groups.has(Number(pgid))) delete next.samples[pgid];
+    for (const pgid of Object.keys(samples)) if (!groups.has(Number(pgid))) delete samples[pgid];
     if (stopped.length) {
         lines.push(`${dry ? "dry run, would stop after idling" : "stopped after idling"}: ${stopped.join("; ")}`);
         if (!dry) notify("dotime: dev servers stopped", stopped.join("; "));
     }
+    return { state: { samples }, lines, stopped, failed, watched };
+}
 
-    // Large test runs that bypassed the queue: reported, never stopped.
+/** Large test runs that bypassed the queue: reported, never stopped, with at most one notice per REPEAT.stray.
+ *  State: strayTold, the root pids already told about, and lastStray. */
+export function checkStrayRuns(ctx, state) {
+    const { rows, holders, now, dry, notify } = ctx;
     const livePids = new Set(rows.map((row) => row.pid));
-    next.strayTold = (next.strayTold ?? []).filter((pid) => livePids.has(pid));
+    const strayTold = (state.strayTold ?? []).filter((pid) => livePids.has(pid));
+    let lastStray = state.lastStray;
+    const lines = [];
     for (const run of strayRuns(rows, { holders })) {
-        const text = `unqueued test run: ${shortCommand(run.cmd)}, pid ${run.rootPid}, ${run.procs} test processes, ${(run.rssMB / 1024).toFixed(1)} GB of memory, left running; `
+        const size = `${run.procs} test processes, ${(run.rssMB / 1024).toFixed(1)} GB of memory`;
+        const text = `unqueued test run: ${shortCommand(run.cmd)}, pid ${run.rootPid}, ${size}, left running; `
             + 'hint: start large runs with dotime-queue run --label "<project>: <task>" -- <command>';
         lines.push(text);
-        if (dry || next.strayTold.includes(run.rootPid) || now - (next.lastStray ?? 0) <= REPEAT.stray) continue;
+        if (dry || strayTold.includes(run.rootPid) || now - (lastStray ?? 0) <= REPEAT.stray) continue;
         notify("dotime: unqueued test run", text);
-        next.lastStray = now;
-        next.strayTold.push(run.rootPid);
+        lastStray = now;
+        strayTold.push(run.rootPid);
     }
+    return { state: { strayTold, ...(lastStray === undefined ? {} : { lastStray }) }, lines };
+}
 
-    // Jobs that hold a slot without doing work.
+/** Jobs that hold a slot without doing work: one notice each. State: slotIdle, the CPU samples per slot. */
+export function checkIdleSlots(ctx, state) {
+    const { holders, queue, now, dry, notify, record, cpuPs, settings, tz } = ctx;
     try {
         const checked = slotIdleCheck({
-            holders, waiting: queue, state: next.slotIdle ?? {}, now, dry, notify, record, ps: cpuPs, idle: settings.idle, tz,
+            holders, waiting: queue, state: state.slotIdle ?? {}, now, dry, notify, record, ps: cpuPs, idle: settings.idle, tz,
         });
-        next.slotIdle = checked.state;
-        lines.push(...checked.lines);
+        return { state: { slotIdle: checked.state }, lines: checked.lines };
     } catch (e) {
-        lines.push(`idle-slot check skipped: ${String(e?.message ?? e).slice(0, 200)}`);
+        return { state: {}, lines: [`idle-slot check skipped: ${String(e?.message ?? e).slice(0, 200)}`] };
     }
+}
 
-    // Overload counts only when it shows on consecutive runs.
-    const diskShort = health.diskGB != null && health.diskGB < R.overloadDiskGB;
-    const memoryShort = health.freePct != null && health.freePct < R.overloadMemPct;
-    const overloaded = load > cores * R.overloadPerCore || swapPct > R.overloadSwapPct || diskShort || memoryShort;
-    next.streak = overloaded ? next.streak + 1 : 0;
-    if (next.streak >= OVERLOAD_RUNS && now - next.lastOverload > REPEAT.overload) {
+/** An overloaded machine, reported when it shows on OVERLOAD_RUNS runs in a row, at most once per REPEAT.overload.
+ *  State: streak and lastOverload. */
+export function checkOverload(ctx, state) {
+    const { rows, now, dry, notify, health, load, cores, swapPct } = ctx;
+    const reaperSettings = ctx.settings.reaper;
+    const diskShort = health.diskGB != null && health.diskGB < reaperSettings.overloadDiskGB;
+    const memoryShort = health.freePct != null && health.freePct < reaperSettings.overloadMemPct;
+    const busy = load > cores * reaperSettings.overloadPerCore || swapPct > reaperSettings.overloadSwapPct;
+    const overloaded = busy || diskShort || memoryShort;
+    const streak = overloaded ? state.streak + 1 : 0;
+    let lastOverload = state.lastOverload;
+    const lines = [];
+    if (streak >= OVERLOAD_RUNS && now - lastOverload > REPEAT.overload) {
         const cpuByProgram = new Map();
-        for (const row of rows) { const program = shortCommand(row.cmd).split(" ")[0]; cpuByProgram.set(program, (cpuByProgram.get(program) ?? 0) + row.pcpu); }
-        const top = [...cpuByProgram].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([program, pcpu]) => `${program} ${Math.round(pcpu)}%`).join(", ");
+        for (const row of rows) {
+            const program = shortCommand(row.cmd).split(" ")[0];
+            cpuByProgram.set(program, (cpuByProgram.get(program) ?? 0) + row.pcpu);
+        }
+        const busiest = [...cpuByProgram].sort((a, b) => b[1] - a[1]).slice(0, 3);
+        const top = busiest.map(([program, pcpu]) => `${program} ${Math.round(pcpu)}%`).join(", ");
         const memory = health.freePct == null ? "no memory reading" : `${health.freePct}% of memory free`;
         const disk = health.diskGB == null ? "no disk reading" : `${health.diskGB.toFixed(1)} GB of disk free`;
-        const text = `overloaded: busiest programs ${top || "not known"}; ${cores} cores at load ${load.toFixed(1)}, ${disk}, ${memory}, ${Math.round(swapPct)}% of swap in use`;
+        const text = `overloaded: busiest programs ${top || "not known"}; ${cores} cores at load ${load.toFixed(1)}, `
+            + `${disk}, ${memory}, ${Math.round(swapPct)}% of swap in use`;
         lines.push(text);
-        if (!dry) { notify("dotime: machine overloaded", text); next.lastOverload = now; }
+        if (!dry) {
+            notify("dotime: machine overloaded", text);
+            lastOverload = now;
+        }
     } else if (overloaded) {
-        lines.push(`overload seen: run ${next.streak} in a row, no notice this time`);
+        lines.push(`overload seen: run ${streak} in a row, no notice this time`);
     }
+    return { state: { streak, lastOverload }, lines, overloaded };
+}
 
-    if (health.diskGB != null && health.diskGB < R.lowDiskGB && now - (next.lastLowDisk ?? 0) > REPEAT.lowDisk) {
-        const text = `disk low: ${health.diskGB.toFixed(1)} GB free, notice level ${R.lowDiskGB} GB`;
-        lines.push(text);
-        if (!dry) { notify("dotime: disk space low", text); next.lastLowDisk = now; }
+/** Free disk below reaper.lowDiskGB, reported early and at most once per REPEAT.lowDisk. State: lastLowDisk. */
+export function checkLowDisk(ctx, state) {
+    const { now, dry, notify, health } = ctx;
+    const lowDiskGB = ctx.settings.reaper.lowDiskGB;
+    if (health.diskGB == null || health.diskGB >= lowDiskGB || now - (state.lastLowDisk ?? 0) <= REPEAT.lowDisk) {
+        return { state: {}, lines: [] };
     }
+    const text = `disk low: ${health.diskGB.toFixed(1)} GB free, notice level ${lowDiskGB} GB`;
+    if (dry) return { state: {}, lines: [text] };
+    notify("dotime: disk space low", text);
+    return { state: { lastLowDisk: now }, lines: [text] };
+}
 
-    if (!stopped.length && !failedStops.length && !overloaded) lines.push(`quiet: dev-server groups under watch ${watched}, ${Math.round(swapPct)}% of swap in use, load ${load.toFixed(1)}`);
-    return { state: next, lines, stopped };
+/** One reaper run over the given readings. Nothing is read from the machine or the state folder in here, so tests
+ *  can pass any process table. settings and tz come from the caller; record(key, entry) stores an idle-slot notice.
+ *  state is what the previous run returned. Runs the checks in order and merges their state and lines.
+ *  Returns { state, lines, stopped }. */
+export async function reap({
+    rows, holders = [], queue = [], state = {}, now = Date.now(), dry = false, settings, tz,
+    health = { freePct: null, diskGB: null }, load = 0, cores = 1, swapPct = 0, myPgid = null,
+    notify = () => {}, record = () => {}, stop = null, cpuPs = () => "",
+}) {
+    let keep;
+    try { keep = new RegExp(settings.reaper.keepPattern); } catch { keep = null; }
+    const ctx = {
+        rows, groups: groupRows(rows), holders, queue, now, dry, settings, tz, health, load, cores, swapPct, myPgid,
+        notify, record, cpuPs, keep,
+        // Both patterns are compiled once per run.
+        isDevServer: serverTest(settings.reaper.serverPattern),
+        stopIdle: stop ?? ((pgid, procs) => stopGroup(pgid, procs, { graceMs: settings.limits.killGraceMs })),
+    };
+    let next = { samples: {}, streak: 0, lastOverload: 0, ...state };
+    const lines = [];
+    const merge = (result) => {
+        next = { ...next, ...result.state };
+        lines.push(...result.lines);
+        return result;
+    };
+    const servers = merge(await checkIdleServers(ctx, next));
+    merge(checkStrayRuns(ctx, next));
+    merge(checkIdleSlots(ctx, next));
+    const overload = merge(checkOverload(ctx, next));
+    merge(checkLowDisk(ctx, next));
+    if (!servers.stopped.length && !servers.failed.length && !overload.overloaded) {
+        lines.push(`quiet: dev-server groups under watch ${servers.watched}, ${Math.round(swapPct)}% of swap in use, `
+            + `load ${load.toFixed(1)}`);
+    }
+    return { state: next, lines, stopped: servers.stopped };
 }
 
 async function main() {
