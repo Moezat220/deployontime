@@ -30,11 +30,20 @@ export function kindOf(label, command, given) {
     return "other";
 }
 
+// Words that make or ship output, matched anywhere inside a word, so prebuild, esbuild, deploy_prod.sh and
+// deployProd all count. Matching too much only means a check runs again; matching too little loses output.
+const MAKES_WITHIN_WORDS = /build|bundle|compile|deploy|release|publish|webpack|rollup|parcel/i;
+// tsc writes its output unless told not to; vercel and netlify ship with --prod.
+const TSC_RE = /(^|[^a-z0-9])tsc([^a-z0-9]|$)/i;
+const NO_EMIT_RE = /--noEmit\b/i;
+const SHIPS_RE = /\b(vercel|netlify)\b[^&|;]*--prod\b/i;
 /** Does the label's task part or the command also name a build or a deploy, whatever kind won? "build and test" is a
- *  test job by the order of KINDS, but its build output may still be needed. */
+ *  test job by the order of KINDS, but its build output may still be needed. Besides the build and deploy words, even
+ *  inside other words, this counts webpack, rollup and parcel, tsc without --noEmit, and vercel or netlify with
+ *  --prod. When in doubt it answers true. */
 export function alsoBuilds(label, command) {
-    const makes = KINDS.filter(([kind]) => kind === "build" || kind === "deploy").map(([, pattern]) => pattern);
-    return [labelTask(label), String(command ?? "")].some((text) => makes.some((pattern) => pattern.test(text)));
+    return [labelTask(label), String(command ?? "")].some((text) => MAKES_WITHIN_WORDS.test(text)
+        || (TSC_RE.test(text) && !NO_EMIT_RE.test(text)) || SHIPS_RE.test(text));
 }
 
 // The stem is what stays the same between two runs of one command: the program and the task it is given, without

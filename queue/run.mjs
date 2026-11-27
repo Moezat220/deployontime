@@ -78,6 +78,13 @@ export function planJob(request, settings, journalRows) {
     };
 }
 
+/** Could a job of this kind and these words ever be skipped? Only a kind in SKIPPABLE_KINDS, and on a guessed kind
+ *  only when neither the label nor the command also names a build or a deploy. job: { kind, kindGiven, label,
+ *  command }. A job that could not is run, and so is everything nested in it. */
+export function canSkip(job) {
+    return SKIPPABLE_KINDS.includes(job.kind) && (job.kindGiven || !alsoBuilds(job.label, job.command));
+}
+
 /** The pass stamp on which a job is skipped, or null when it must run. Only a job of a kind in SKIPPABLE_KINDS is
  *  ever skipped, and only on a stamp from skipStamp: a run of the same project, label and command, in the same folder
  *  and with the same code fingerprint, that passed on this commit with a clean tree, while the tree is still clean
@@ -87,8 +94,7 @@ export function planJob(request, settings, journalRows) {
  *  project of the folder, as journal lines store it in project), commit ({ head, clean }, read when the job was
  *  queued), noSkip, at, tz }. rows: the journal rows. */
 export function skipFor(job, rows) {
-    if (job.noSkip || !SKIPPABLE_KINDS.includes(job.kind)) return null;
-    if (!job.kindGiven && alsoBuilds(job.label, job.command)) return null;
+    if (job.noSkip || !canSkip(job)) return null;
     const folder = { project: job.folderProject, ...job.commit };
     const check = { label: job.label, cmd: job.command, cwd: job.cwd, fp: job.fingerprint };
     return skipStamp(rows, folder, check, { tz: job.tz, at: job.at });
@@ -217,8 +223,8 @@ export async function waitForPlace(job, deps) {
  *  The job finds the marker of its slot in JOB_MARKER and in PARENT_MARKER. A nested run passes its note in place of
  *  a slot and the marker of the outermost job's slot as slotMarker, so its job finds that slot in JOB_MARKER and the
  *  note in PARENT_MARKER, and the note gets the job's process group and is removed at the end the same way. With
- *  job.noSkip the job finds "1" in NO_SKIP_MARKER, so the runs nested in it are never skipped; without it the
- *  variable is left out.
+ *  job.noSkip (given for --no-skip, and for a job that could not be skipped itself) the job finds "1" in
+ *  NO_SKIP_MARKER, so the runs nested in it are never skipped; without it the variable is left out.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
@@ -463,10 +469,9 @@ export async function runCommand(args, ctx, deps) {
     }
     // --no-skip on the outer job reaches every run nested in it.
     const noSkip = parsed.noSkip || (!!outer && deps.env?.[NO_SKIP_MARKER] === "1");
-    const stamp = skipFor({
-        kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command, cwd, fingerprint: print,
-        folderProject: folder, commit: before, noSkip, at: queuedAt, tz,
-    }, rows);
+    const check = { kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command };
+    const where = { cwd, fingerprint: print, folderProject: folder, commit: before };
+    const stamp = skipFor({ ...check, ...where, noSkip, at: queuedAt, tz }, rows);
     if (stamp) {
         const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));
         journal.note({ commit: before });
@@ -487,7 +492,9 @@ export async function runCommand(args, ctx, deps) {
     const watch = watchLeave(signals, deps.sleep);
     const job = {
         pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal, maxWait, handOver: watch.drop,
-        noSkip,
+        // Nothing nested in a job that could not be skipped itself, such as a build, is ever skipped: the job may
+        // need what its steps make.
+        noSkip: noSkip || !canSkip(check),
     };
     const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
     try {

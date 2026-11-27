@@ -155,8 +155,12 @@ It skips a job only when all of these hold:
   [Projects and kinds](#projects-and-kinds)). A `build`, `deploy`, `debug` or `other` job always runs, because its
   output may be needed. The guess takes the first kind that matches, and `test` comes before `build`, so a job whose
   label or command names both, such as `"shop-api: build and test"` or `sh -c "npm run build && vitest"`, is a `test`
-  job. Such a job is still never skipped: when the label's task part or the command also matches a `build` or
-  `deploy` word, `run` runs it. Only `--kind test` or `--kind lint`, given on the command line, lets it be skipped.
+  job. Such a job is still never skipped: when the label's task part or the command also names a build or a deploy,
+  `run` runs it. For this, `build`, `bundle`, `compile`, `deploy`, `release` and `publish` count also inside other
+  words (`prebuild`, `esbuild`, `deploy_prod.sh`, `deployProd`), and so do `webpack`, `rollup`, `parcel`, `tsc`
+  without `--noEmit`, and `vercel` or `netlify` with `--prod`. This errs towards running: a test file named
+  `build.test.js` is run each time. Only `--kind test` or `--kind lint`, given on the command line, lets such a job
+  be skipped.
 - The folder is a git checkout at a commit, with no uncommitted or untracked changes now.
 - The journal holds a pass stamp for this check, found by the rules of [`passed`](#passed) but only among runs
   started in the same folder, with the same label and the same command line: on this commit, begun with a clean tree,
@@ -164,10 +168,11 @@ It skips a job only when all of these hold:
   another folder of the same repository, such as another package, never counts.
 - That passing run has the same code fingerprint as the job now (see [Repeated failures](#repeated-failures)). With a
   clean tree, the fingerprint covers the files the command names, so a script outside git that has changed since,
-  such as `node ../tools/check.js`, makes the job run. It does not cover a folder the command names (only a file is
-  read, not what is in a folder), nor a named file of 4 MB or more.
-- No run of the same check in this folder on this commit failed or hit its run limit after that pass, not even one
-  that began with uncommitted changes.
+  such as `node ../tools/check.js`, makes the job run. Only a file given as a word of its own counts: not a path
+  inside a `sh -c "..."` string or in `--config=../tools/check.ts`, not what is in a folder the command names, and
+  not a named file of 4 MB or more.
+- No run of the same check in this folder on this commit failed, hit its run limit or could not start after that
+  pass, not even one that began with uncommitted changes.
 
 The stamp has no age limit. Other things outside git are not part of the check: files the command reads without
 naming them, installed packages in an ignored folder, tools and the environment. That includes a live target:
@@ -178,8 +183,11 @@ refused before this is looked at.
 
 A nested run follows the same rules. `--no-skip` on a job also reaches every run nested in it, at any depth: `run`
 hands the job the variable `DOTIME_NO_SKIP=1`, and a nested run that finds it runs as with `--no-skip` and hands it on
-in turn. Only a nested run heeds the variable, and a job gets it only from its own `--no-skip` or from the job it is
-nested in, never from the shell that started the queue.
+in turn. A job that could not be skipped itself, such as a `build`, `deploy` or `other` job or a `test` job that
+also names a build, gets the variable too, so no step inside it is skipped: a `tsc` or other check that such a job
+runs through the queue may make output the job needs. Only a nested run heeds the variable, and a job gets it only
+from its own `--no-skip`, from its own kind, or from the job it is nested in, never from the shell that started the
+queue.
 
 `run` prints nothing when it does not skip. To see why, look at the check's own lines in the journal: `cwd`, `cmd`,
 `head`, `clean`, `fp` and `outcome` show which of the conditions above did not hold.
@@ -649,7 +657,7 @@ Environment variables:
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
 | `DOTIME_JOB` | set by `run` | Given to each job; names the slot of the outermost job, also inside nested runs. Not a setting: see nested runs under [`run`](#run). |
 | `DOTIME_PARENT` | set by `run` | Given to each job; names its direct parent: the slot it holds, or for the job of a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
-| `DOTIME_NO_SKIP` | set by `run` | `1` in a job started with `--no-skip`, or nested in one; the runs nested in it are then never skipped. Not a setting: see **Checks that already passed** under [`run`](#run). |
+| `DOTIME_NO_SKIP` | set by `run` | `1` in a job started with `--no-skip`, in a job that could not be skipped itself (such as a build), and in any job nested in either; the runs nested in it are then never skipped. Not a setting: see **Checks that already passed** under [`run`](#run). |
 
 ## Files in the state folder
 

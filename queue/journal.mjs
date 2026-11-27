@@ -113,8 +113,8 @@ export const SKIPPABLE_KINDS = Object.freeze(["test", "lint"]);
  *  with the same label and the same command line, in the same folder, found by findStamp under its own conditions (a
  *  clean folder at a commit, and a newest clean run of that check on the commit that passed). Its code fingerprint
  *  must equal the job's, so a changed file that the command names outside git is not skipped; a missing fingerprint
- *  on either side is no match. On top of that, no run of the same check on that commit may have failed or hit its
- *  run limit after the stamp, even one that began with uncommitted changes. Lines of skipped jobs never count:
+ *  on either side is no match. On top of that, no run of the same check on that commit may have failed, hit its run
+ *  limit or failed to start after the stamp, even one that began with uncommitted changes. Lines of skipped jobs never count:
  *  findStamp only takes runs that ran. */
 export function skipStamp(lines, folder, job, { tz, at = Date.now() }) {
     const sameCheck = parseLines(lines)
@@ -124,7 +124,8 @@ export function skipStamp(lines, folder, job, { tz, at = Date.now() }) {
     if (!stamp || !job.fp || !stampPrint || stampPrint !== job.fp) return null;
     const passedAt = Date.parse(stamp.endedAt);
     const failedLater = sameCheck.some((row) => row.project === folder.project && row.head === folder.head
-        && Date.parse(row.endedAt) > passedAt && (isFailedRun(row) || row.outcome === "timed-out"));
+        && Date.parse(row.endedAt) > passedAt
+        && (isFailedRun(row) || row.outcome === "timed-out" || row.outcome === "could-not-start"));
     return failedLater ? null : stamp;
 }
 

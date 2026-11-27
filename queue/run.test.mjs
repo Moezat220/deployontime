@@ -3,7 +3,7 @@
 // signals go only to processes started here, and a stand-in takes the signal handlers instead of this process.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -808,6 +808,23 @@ test("run: no skip after a failed run, while the newest failure on the commit co
     const after = await runAt(box, job.args(label));
     assert.deepEqual([after.code, after.said], [0, []]);
     assert.deepEqual([outcomes(box), job.runs()], [["ran", "ran", "skipped", "ran", "ran"], 4]);
+});
+
+test("run: a run of the check that could not start takes the stamp away, so the next run runs", async () => {
+    const box = sandbox(), dir = tempDir("run-tool"), tool = join(dir, "check-tool"), runs = join(dir, "runs");
+    const body = `#!/bin/sh\necho x >> ${JSON.stringify(runs)}\n`;
+    const install = () => { writeFileSync(tool, body); chmodSync(tool, 0o755); };
+    const args = ["run", "--label", "shop-api: unit tests", "--", tool];
+    install();
+    assert.equal((await runAt(box, args)).code, 0);
+    assert.deepEqual((await runAt(box, args)).said, [skippedText("shop-api: unit tests")]);
+    rmSync(tool);
+    assert.equal((await runAt(box, args)).code, EXIT.noStart);
+    install();
+    const after = await runAt(box, args);
+    assert.deepEqual([after.code, after.said], [0, []]);
+    assert.deepEqual(outcomes(box), ["ran", "skipped", "could-not-start", "ran"]);
+    assert.equal(readFileSync(runs, "utf8"), "x\nx\n");
 });
 
 test("run: --no-skip runs a check that already passed, and a failure it finds takes the stamp away", async () => {

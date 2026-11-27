@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cmdStem, DEBUG_CMD_RE, DEBUG_LABEL_RE, KINDS, kindOf, UNLABELLED } from "./kinds.mjs";
+import { alsoBuilds, cmdStem, DEBUG_CMD_RE, DEBUG_LABEL_RE, KINDS, kindOf, UNLABELLED } from "./kinds.mjs";
 import { parseRunArgs } from "./args.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
@@ -83,4 +83,32 @@ test("cmdStem: null for inline code and for an empty command", () => {
 test("UNLABELLED: the label of a job run without --label", () => {
     assert.equal(UNLABELLED, "unnamed");
     assert.equal(parseRunArgs(["run", "--", "make"], DEFAULTS).label, UNLABELLED);
+});
+
+test("alsoBuilds: build and deploy words, also inside other words, build tools, tsc that emits, and shipping with --prod", () => {
+    for (const [label, command] of [
+        ["shop-api: build and test", "npm test"],
+        ["shop-api: ci", 'sh -c "npm run build && vitest"'],
+        ["shop-api: ci", "npm run prebuild"],
+        ["shop-api: ci", "npx esbuild src/index.ts --outdir=out"],
+        ["shop-api: ci", "npx webpack --mode production"],
+        ["shop-api: ci", "npx rollup -c"],
+        ["shop-api: ci", "npx vite build"],
+        ["shop-api: ci", "npx tsc -p ."],
+        ["shop-api: typecheck", "npx tsc"],
+        ["shop-api: ci", "npx vercel --prod"],
+        ["shop-api: ci", "npx netlify deploy --prod"],
+        ["shop-api: ci", 'sh -c "echo tested && ./deploy_prod.sh"'],
+        ["shop-api: ci", "npm run deployProd"],
+        ["shop-api: tests then deploy-preview", "npm test"],
+        ["shop-api: release notes check", "npm test"],
+    ]) assert.equal(alsoBuilds(label, command), true, `${label} / ${command}`);
+    for (const [label, command] of [
+        ["shop-api: unit tests", "npm test"],
+        ["shop-api: lint", "npx eslint ."],
+        ["shop-api: typecheck", "npx tsc --noEmit"],
+        ["shop-api: e2e", "npx playwright test"],
+        ["shop-api: ci", "npx vercel dev"],
+        ["build-tools: unit tests", "npm test"],
+    ]) assert.equal(alsoBuilds(label, command), false, `${label} / ${command}`);
 });

@@ -575,18 +575,35 @@ test("run: --no-skip on an outer job makes the checks it runs through the queue 
     const box = sandbox(), repo = makeRepo(join(box.work, "shop-api"));
     const check = ["--label", "shop-api: unit tests", "--", NODE, "-e", "console.log('inner ran')"];
     assert.equal((await cli(box, ["run", ...check], { cwd: repo })).code, 0);
-    // The outer job is of kind other, so it always runs and only the inner check can be skipped.
-    const outer = (...flags) => ["run", "--label", "shop-api: test suite", "--kind", "other", ...flags, "--", NODE, CLI, "run", ...check];
-    const forced = await cli(box, outer("--no-skip"), { cwd: repo });
+    // Each outer job has a label of its own, so it has no stamp and runs; only the inner check can be skipped.
+    const outer = (label, ...flags) => ["run", "--label", label, "--kind", "test", ...flags, "--", NODE, CLI, "run", ...check];
+    const forced = await cli(box, outer("shop-api: test suite", "--no-skip"), { cwd: repo });
     assert.deepEqual([forced.code, forced.stdout, forced.stderr.includes("skipped:")], [0, "inner ran\n", false], forced.stderr);
-    const plain = await cli(box, outer(), { cwd: repo });
+    const plain = await cli(box, outer("shop-api: test suite again"), { cwd: repo });
     assert.deepEqual([plain.code, plain.stdout], [0, ""]);
     assert.equal(plain.stderr.includes('skipped: "shop-api: unit tests"'), true, plain.stderr);
     assert.deepEqual(journal(box).map((line) => [line.label, line.outcome, line.nested ?? false]), [
         ["shop-api: unit tests", "ran", false],
         ["shop-api: unit tests", "ran", true], ["shop-api: test suite", "ran", false],
-        ["shop-api: unit tests", "skipped", true], ["shop-api: test suite", "ran", false],
+        ["shop-api: unit tests", "skipped", true], ["shop-api: test suite again", "ran", false],
     ]);
+});
+
+test("run: a step nested in a build or deploy job is never skipped, so the job gets the output it needs", async () => {
+    const box = sandbox(), repo = makeRepo(join(box.work, "lib"), { ".gitignore": "out/\n", "src.ts": "export {};\n" });
+    // The step makes out/src.js, which git ignores; the outer job removes it first and then needs it.
+    const step = ["--label", "lib: tsc", "--kind", "lint", "--", NODE, "-e",
+        "const fs = require('node:fs'); fs.mkdirSync('out', { recursive: true }); fs.copyFileSync('src.ts', 'out/src.js')"];
+    const needsOutput = "const fs = require('node:fs'); fs.rmSync('out', { recursive: true, force: true }); "
+        + `const r = require('node:child_process').spawnSync(process.execPath, ${J([CLI, "run", ...step])}, { stdio: 'inherit' }); `
+        + "process.exit(r.status || (fs.existsSync('out/src.js') ? 0 : 9))";
+    for (const label of ["lib: build", "lib: deploy preview", "lib: refresh docs"]) {
+        const ran = await cli(box, ["run", "--label", label, "--", NODE, "-e", needsOutput], { cwd: repo });
+        assert.deepEqual([ran.code, ran.stderr.includes("skipped:")], [0, false], `${label}: ${ran.stderr}`);
+    }
+    assert.deepEqual(journal(box).filter((line) => line.label === "lib: tsc").map((line) => line.outcome), ["ran", "ran", "ran"]);
+    // Run by itself, the same step is skipped on its pass.
+    assert.equal((await cli(box, ["run", ...step], { cwd: repo })).stderr.startsWith('dotime-queue: skipped: "lib: tsc"'), true);
 });
 
 test("passed: a failing run on the commit gives no stamp", async () => {
