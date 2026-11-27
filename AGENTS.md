@@ -40,7 +40,8 @@ this commit before: look at the test before you change the code.
 `dotime-queue setup --mcp` prints the client settings. The generic entry is
 `{ "mcpServers": { "dotime-queue": { "command": "dotime-mcp" } } }`; without installing first,
 `"command": "npx", "args": ["-y", "-p", "deployontime", "dotime-mcp"]`. The tools are `queue_status`, `queue_passed`,
-`queue_history`, `queue_run` and `queue_job`; see "Use with an MCP client" in README.md.
+`queue_history`, `queue_run` and `queue_job`; see "Use with an MCP client" in README.md. MCP clients with tasks
+support get the result without polling; otherwise poll `queue_job`.
 
 ## Working on this repository
 

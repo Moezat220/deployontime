@@ -19,6 +19,7 @@ const { alive } = await import("../queue/proctree.mjs");
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url)), NODE = process.execPath;
 const WIDE_OPEN = { loadPerCore: 1000, minFreeMemPct: 0, minFreeDiskGB: 0, minBatteryPct: 0 };
 const MODERN_META = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+const TASKS_META = { ...MODERN_META, "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/tasks": {} } } };
 const JOB_WAIT_MS = 30_000;
 
 function sandbox(config = {}) {
@@ -122,7 +123,7 @@ test("no handshake: a request that names its version in _meta is served stateles
     const discover = await server.request("server/discover", { _meta: MODERN_META });
     assert.deepEqual(discover.result.supportedVersions, ["2026-07-28", "2025-11-25"]);
     assert.equal(discover.result.resultType, "complete");
-    assert.deepEqual(Object.keys(discover.result.capabilities), ["tools"]);
+    assert.deepEqual(discover.result.capabilities, { tools: {}, extensions: { "io.modelcontextprotocol/tasks": {} } });
     assert.equal(discover.result["_meta"]["io.modelcontextprotocol/serverInfo"].name, "dotime-mcp");
     assert.equal(typeof discover.result.ttlMs, "number");
     const modern = await server.request("tools/list", { _meta: MODERN_META });
@@ -486,6 +487,132 @@ test("queue_job: an unknown id is a tool error, and a job whose runner ended wit
     assert.equal(lost.isError, false);
     assert.equal(lost.structuredContent.state, "lost");
     assert.match(lost.content[0].text, /lost; its runner ended without a result/);
+    await server.close();
+});
+
+// ---- tasks ----
+
+/** Starts queue_run as a task and gives the CreateTaskResult, with the runner's group registered for cleanup. */
+async function startTask(server, box, args) {
+    const created = await server.call("queue_run", { cwd: box.repo, ...args }, TASKS_META);
+    assert.equal(created.resultType, "task", JSON.stringify(created));
+    const pidFile = jobFiles(jobsFolder(box), created.taskId).pid;
+    await until(() => existsSync(pidFile));
+    track(JSON.parse(readFileSync(pidFile, "utf8")).runnerPid, { group: true });
+    return created;
+}
+
+async function taskUntil(server, taskId, wanted = (task) => task.status !== "working") {
+    let last;
+    for (const end = Date.now() + JOB_WAIT_MS; Date.now() < end;) {
+        last = await server.request("tasks/get", { taskId, _meta: MODERN_META });
+        assert.ok(last.result, JSON.stringify(last));
+        if (wanted(last.result)) return last.result;
+        await pause(100);
+    }
+    throw new Error(`task ${taskId} did not reach the expected state: ${JSON.stringify(last?.result)}`);
+}
+
+test("tasks: queue_run with the tasks extension answers with a task, and tasks/get gives the result once it passed", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const flag = join(tempDir("mcp-flag"), "go");
+    const created = await startTask(server, box, { label: "shop: unit tests", command: nodeCommand(untilFile(flag)) });
+    assert.match(created.taskId, /^[0-9a-f]{24}$/);
+    assert.deepEqual(
+        [created.status, created.statusMessage, created.ttlMs, created.pollIntervalMs, created.content],
+        ["working", "starting", null, 5000, undefined],
+    );
+    for (const at of [created.createdAt, created.lastUpdatedAt]) assert.match(at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    assert.equal(created["_meta"]["io.modelcontextprotocol/serverInfo"].name, "dotime-mcp");
+    const running = await taskUntil(server, created.taskId, (task) => task.statusMessage.startsWith("running"));
+    assert.deepEqual([running.resultType, running.status, running.statusMessage], ["complete", "working", "running for 0 min"]);
+    writeFileSync(flag, "");
+    const done = await taskUntil(server, created.taskId);
+    assert.deepEqual([done.status, done.result.isError, done.result.structuredContent.outcome], ["completed", false, "ran"]);
+    assert.equal(done.statusMessage, "finished, exit 0, outcome ran");
+    assert.equal(done.result.structuredContent.tail, "done");
+    const job = await server.call("queue_job", { jobId: created.taskId });
+    assert.deepEqual(done.result.content, job.content);
+    assert.equal(done.lastUpdatedAt, job.structuredContent.endedAt);
+    await server.close();
+});
+
+test("tasks: a failed command is completed with isError, and a lost job is failed", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const created = await startTask(server, box, { label: "shop: lint", command: nodeCommand("process.exit(1)") });
+    const done = await taskUntil(server, created.taskId);
+    assert.deepEqual([done.status, done.result.isError, done.result.structuredContent.exitCode], ["completed", true, 1]);
+    assert.equal(done.statusMessage, "finished, exit 1, outcome ran");
+    const gone = spawnSync(NODE, ["-e", "console.log(process.pid)"], { encoding: "utf8" });
+    const id = "cd".repeat(12);
+    const files = createJob(jobsFolder(box), id, { v: 1, id, label: "shop: lost", command: ["true"], cwd: box.repo, createdAt: Date.now() });
+    writeFileSync(files.pid, JSON.stringify({ runnerPid: Number(gone.stdout), runnerStartedAt: Date.now() - 1000, queuePid: 1, startedAt: Date.now() }));
+    const lost = (await server.request("tasks/get", { taskId: id, _meta: MODERN_META })).result;
+    assert.equal(lost.status, "failed");
+    assert.deepEqual(lost.error, { code: -32603, message: "the job's runner ended without a result; queue_job shows its output" });
+    assert.equal(lost.result, undefined);
+    assert.equal((await server.request("tasks/cancel", { taskId: id, _meta: MODERN_META })).result.resultType, "complete");
+    await server.close();
+});
+
+test("tasks: tasks/cancel takes a waiting job out of the line and stops a running one", async () => {
+    const box = sandbox({ slots: 1 });
+    const server = startServer(box);
+    const holder = await startTask(server, box, { label: "shop: build site", command: nodeCommand("setInterval(() => {}, 1000)") });
+    await taskUntil(server, holder.taskId, (task) => task.statusMessage.startsWith("running"));
+    const waiter = await startTask(server, box, { label: "shop: build docs", command: nodeCommand("console.log('docs')") });
+    const waiting = await taskUntil(server, waiter.taskId, (task) => task.statusMessage.startsWith("waiting"));
+    assert.equal(waiting.statusMessage, "waiting for a slot, position 1");
+    for (const task of [waiter, holder]) {
+        const cancel = await server.request("tasks/cancel", { taskId: task.taskId, _meta: MODERN_META });
+        assert.deepEqual(Object.keys(cancel.result).sort(), ["_meta", "resultType"]);
+        assert.equal(cancel.result.resultType, "complete");
+    }
+    const left = await taskUntil(server, waiter.taskId);
+    assert.deepEqual([left.status, left.result.isError, left.result.structuredContent.outcome], ["completed", true, "left"]);
+    const stopped = await taskUntil(server, holder.taskId);
+    assert.deepEqual([stopped.status, stopped.result.isError, stopped.result.structuredContent.outcome], ["completed", true, "stopped"]);
+    const again = await server.request("tasks/cancel", { taskId: holder.taskId, _meta: MODERN_META });
+    assert.equal(again.result.resultType, "complete");
+    await server.close();
+});
+
+test("tasks: an unknown task and tasks/update are errors, other tools and plain clients never get a task", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    for (const method of ["tasks/get", "tasks/cancel"]) {
+        for (const taskId of ["0".repeat(24), "not a job", undefined]) {
+            const reply = await server.request(method, { ...(taskId === undefined ? {} : { taskId }), _meta: MODERN_META });
+            assert.equal(reply.error.code, -32602, `${method} ${taskId}`);
+            assert.match(reply.error.message, /unknown task/);
+        }
+    }
+    const update = await server.request("tasks/update", { taskId: "0".repeat(24), inputResponses: {}, _meta: MODERN_META });
+    assert.equal(update.error.code, -32602);
+    const status = await server.call("queue_status", {}, TASKS_META);
+    assert.deepEqual([status.resultType, status.isError], ["complete", false]);
+    const refused = await server.call("queue_run", { label: "no colon", command: ["true"] }, TASKS_META);
+    assert.deepEqual([refused.resultType, refused.isError], ["complete", true]);
+    const args = { cwd: box.repo, label: "shop: build", command: nodeCommand("console.log('built')") };
+    const modern = await server.call("queue_run", args, MODERN_META);
+    assert.equal(modern.resultType, "complete");
+    assert.deepEqual(Object.keys(modern.structuredContent), ["jobId", "state", "label", "command", "cwd"]);
+    // A client that opened with initialize: today's answer, and no tasks methods at all.
+    await server.request("initialize", { protocolVersion: "2025-11-25", capabilities: {} });
+    const plain = await server.call("queue_run", args, {
+        "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/tasks": {} } },
+    });
+    assert.equal(plain.resultType, undefined);
+    assert.match(plain.content[0].text, /^started job [0-9a-f]{24}: "shop: build"/);
+    const older = { ...TASKS_META, "io.modelcontextprotocol/protocolVersion": "2025-11-25" };
+    assert.equal((await server.call("queue_run", args, older)).resultType, undefined);
+    for (const method of ["tasks/get", "tasks/cancel", "tasks/update"]) {
+        assert.equal((await server.request(method, { taskId: plain.structuredContent.jobId })).error.code, -32601, method);
+        assert.equal((await server.request(method, { taskId: plain.structuredContent.jobId, _meta: older })).error.code, -32601, method);
+    }
+    for (const id of [modern.structuredContent.jobId, plain.structuredContent.jobId]) await jobUntil(server, id);
     await server.close();
 });
 

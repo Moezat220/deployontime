@@ -732,6 +732,14 @@ command through `/bin/sh`, with the texts in the environment variables `DOTIME_T
 export DOTIME_NOTIFY_CMD='printf "%s: %s\n" "$DOTIME_TITLE" "$DOTIME_MESSAGE" >> "$HOME/queue-notices.txt"'
 ```
 
+**Done notice.** A job that ran for at least `notifyDoneMin` minutes (default 5) sends one notice when it ends, so
+quick runs stay quiet. The title is `dotime: done <label>`, and the message says how it ended and how long it ran:
+`passed, exit 0, ran 12 min`, `failed, exit 1, ran 12 min`, `stopped by SIGTERM, ran 6 min` or
+`run limit hit, ran 30 min`. A skipped or refused job, and one that gave up or left while waiting, never ran and
+sends none. The notice goes out after the journal line is written; a notice that fails or hangs changes nothing about
+the job's result or exit code, and the notify command is stopped after 15 seconds. Jobs started with `queue_run`
+get it too, since they go through `run`. `"notifyDoneMin": 0` sends it for every job that ran.
+
 `DOTIME_NOTIFY=log` keeps only the log line. Long-run and idle-slot notices are also stored in the folder
 `$DOTIME_HOME/notices/`, one JSON file per notice, as a record you can look through. Each job gets at most one of
 each, also when several processes send notices at the same time. Earlier versions kept them all in one file,
@@ -770,6 +778,7 @@ default. Only a missing file is silent.
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
 | `mcpMaxJobs` | 20 | Jobs started by `dotime-mcp` that may wait or run at once; `queue_run` refuses a further one with a tool error. Each costs two Node processes while it waits. A whole number, at least 1. |
 | `flakyWindowDays` | 14 | How many days back the [flaky flag](#flaky-checks) and `dotime-queue flaky` read the journal. A whole number, at least 1. |
+| `notifyDoneMin` | 5 | A job that ran at least this many minutes sends a [done notice](#notices) when it ends. 0 sends one for every job that ran. |
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
@@ -890,7 +899,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `flaky.mjs` | Flaky checks: the ones that passed and failed on one commit, the note `run` prints, and the `flaky` lines. | library | None. |
 | `fingerprint.mjs` | A short hash of the code under test. | library | Runs read-only git commands, reads files in the working tree. |
 | `journal.mjs` | Journal lines, pass stamps and `history` totals. | library | Reads and appends `journal.jsonl`. |
-| `notices.mjs` | Long-run and idle-slot notices and the notices store. | library | Writes `notices/`; runs `ps` for CPU samples. |
+| `notices.mjs` | Done, long-run and idle-slot notices and the notices store. | library | Writes `notices/`; runs `ps` for CPU samples. |
 | `notify.mjs` | Sends a notice: log line, desktop notice, `DOTIME_NOTIFY_CMD`. | library | Appends `notify.log`, runs `osascript` or `notify-send` and the notify command. |
 | `idle.mjs` | Idle verdicts from CPU samples; the dev-server test. | library | None. |
 | `stray.mjs` | Finds large test runs outside the queue. | library | None. |

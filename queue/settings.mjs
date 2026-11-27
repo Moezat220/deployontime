@@ -13,6 +13,7 @@ export const DEFAULTS = Object.freeze({
     nestedPerJob: 2,
     mcpMaxJobs: 20,
     flakyWindowDays: 14,
+    notifyDoneMin: 5,
     maxWaitMin: 60,
     pollMs: 3000,
     health: { loadPerCore: 1.0, busyCpuPct: 90, minFreeMemPct: 20, minFreeDiskGB: 10, minBatteryPct: 15 },

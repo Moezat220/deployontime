@@ -8,9 +8,12 @@
 // A request with no version in _meta is served the earlier way, whether initialize came first or not. Logging goes
 // to standard error only. Input that is not a valid message is answered with a JSON-RPC error and never ends the
 // server; it ends when its input closes, or on INT, TERM or HUP. Jobs started with queue_run run detached and go on.
+// On 2026-07-28 it offers the tasks extension (see tasks.mjs): queue_run answers with a task when the request's _meta
+// asks for that extension, and tasks/get, tasks/cancel and tasks/update serve it. Other clients poll queue_job.
 import { readFileSync } from "node:fs";
 import { isMainModule, loadSettings, paths, timeZone } from "../queue/settings.mjs";
 import { jobsDir, pruneJobs } from "./jobs.mjs";
+import { cancelTask, createdTask, getTask, TASKS_EXTENSION, updateTask, wantsTasks } from "./tasks.mjs";
 import { callTool, realToolDeps, TOOLS } from "./tools.mjs";
 
 export const MODERN_VERSIONS = Object.freeze(["2026-07-28"]);
@@ -75,20 +78,30 @@ export function createServer({ context, log = () => {} }) {
         "server/discover": () => ({
             modern: true,
             result: {
-                supportedVersions: [...SUPPORTED_VERSIONS], capabilities: { tools: {} }, instructions: INSTRUCTIONS,
+                supportedVersions: [...SUPPORTED_VERSIONS], capabilities: { tools: {}, extensions: { [TASKS_EXTENSION]: {} } },
+                instructions: INSTRUCTIONS,
                 ttlMs: LIST_TTL_MS, cacheScope: "public",
             },
         }),
         "tools/list": (_params, modern) => ({
             result: { tools: TOOLS.map((tool) => structuredClone(tool)), ...(modern ? { ttlMs: LIST_TTL_MS, cacheScope: "public" } : {}) },
         }),
-        "tools/call"(params) {
+        "tools/call"(params, modern) {
             if (typeof params?.name !== "string") return { error: "Invalid params: tools/call needs name, a string" };
             const args = params.arguments ?? {};
             if (!isPlain(args)) return { error: "Invalid params: arguments must be an object" };
-            const out = callTool(params.name, args, context());
-            return out ? { result: out } : { error: `Unknown tool: ${short(params.name)}` };
+            const ctx = context();
+            const out = callTool(params.name, args, ctx);
+            if (!out) return { error: `Unknown tool: ${short(params.name)}` };
+            // A job that started becomes a task for a client that asked for one; a refusal stays a plain result.
+            if (modern && params.name === "queue_run" && !out.isError && wantsTasks(params)) {
+                return { result: createdTask(out.structuredContent.jobId, ctx) };
+            }
+            return { result: out };
         },
+        "tasks/get": (params, modern) => (modern ? getTask(params, context()) : null),
+        "tasks/cancel": (params, modern) => (modern ? cancelTask(params, context()) : null),
+        "tasks/update": (_params, modern) => (modern ? updateTask() : null),
     };
 
     function handleMessage(message) {
@@ -113,6 +126,8 @@ export function createServer({ context, log = () => {} }) {
         const era = method === "initialize" ? { modern: false } : eraOf(id, params);
         if (era.error) return era.error;
         const out = handler(params, era.modern);
+        // The tasks methods are only part of revision 2026-07-28.
+        if (!out) return failure(id, ERRORS.methodNotFound, `Method not found: ${short(method)}`);
         if (out.error) return failure(id, ERRORS.invalidParams, out.error);
         return reply(id, shaped(out.result, era.modern || !!out.modern));
     }

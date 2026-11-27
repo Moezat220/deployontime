@@ -174,6 +174,19 @@ test("loadSettings: flakyWindowDays is a whole number of 1 or more, 14 by defaul
     }
 });
 
+test("loadSettings: notifyDoneMin is a number of 0 or more, 5 by default", () => {
+    assert.equal(DEFAULTS.notifyDoneMin, 5);
+    for (const value of [0, 2.5, 30]) {
+        const { settings, warnings } = load({ notifyDoneMin: value });
+        assert.deepEqual([settings.notifyDoneMin, warnings], [value, []]);
+    }
+    for (const value of [-1, "5", null, true]) {
+        const { settings, warnings } = load({ notifyDoneMin: value });
+        assert.equal(settings.notifyDoneMin, 5, JSON.stringify(value));
+        assert.deepEqual(warnings, [`setting ignored: notifyDoneMin is ${JSON.stringify(value)}, needs a number of 0 or more, default 5 kept`]);
+    }
+});
+
 test("loadSettings: a fractional slot count is rounded down", () => {
     assert.equal(load({ slots: 3.8 }).settings.slots, 3);
 });

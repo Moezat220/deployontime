@@ -25,7 +25,7 @@ import {
 } from "./journal.mjs";
 import { alsoBuilds, cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
-import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
+import { addNotice as storeNotice, doneAlert, longRunAlert } from "./notices.mjs";
 import {
     JOB_MARKER, markerOf, NO_SKIP_MARKER, PARENT_MARKER, parentJob, placeKey, slotMarkerOf, stillRunning,
 } from "./nested.mjs";
@@ -448,7 +448,8 @@ export function jobFolder(ctx, deps) {
  *  health gate, as soon as a place under that job is free. A test or lint check that already passed on the same clean
  *  commit is not run at all, nested or not, unless --no-skip is given: see skipFor. It takes no slot or place, is
  *  journalled as skipped with the stamp it relied on, and resolves with 0. A failed run of a flaky check (see
- *  flaky.mjs), and a repeated-failure refusal of one, also print the flaky note; it changes no exit code. */
+ *  flaky.mjs), and a repeated-failure refusal of one, also print the flaky note; it changes no exit code. A job that
+ *  ran at least settings.notifyDoneMin minutes sends a done notice after its journal line is written. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -535,10 +536,20 @@ export async function runCommand(args, ctx, deps) {
         const exit = await runIt();
         const note = failedRunNote(journal.written(), check, files.journal, { ...flakyOptions, now: deps.now() });
         if (note) say(note);
+        sendDone(journal.written(), settings.notifyDoneMin, deps.notify);
         return exit;
     } finally {
         watch.drop();
     }
+}
+
+/** Sends the done notice of a job that ran at least minMin minutes, once its journal line is written. A notice that
+ *  fails is dropped: it never changes the exit code. */
+function sendDone(row, minMin, notify) {
+    try {
+        const alert = doneAlert(row, minMin);
+        if (alert) notify(alert.title, alert.message);
+    } catch { /* best effort */ }
 }
 
 /** The flaky note for a job that ended as a failed run, or null: for a pass, a stop, a run limit or anything else that

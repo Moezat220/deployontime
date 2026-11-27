@@ -196,7 +196,22 @@ The shell commands keep working as before; both share the same state folder, slo
 revision 2026-07-28 (no handshake: each request names its version in `_meta`, and `server/discover` lists the
 versions) and 2025-11-25 and earlier (opened with `initialize`).
 
+A client with the MCP tasks extension (`io.modelcontextprotocol/tasks`, revision 2026-07-28), such as Claude Code,
+gets the result without polling. It asks for the extension in its request, and `queue_run` then answers with a task
+whose id is the job id. The client polls `tasks/get` itself and hands the agent the result once the job has finished:
+the same text and fields as `queue_job`, marked as an error unless the job passed or was skipped. `tasks/cancel`
+takes a waiting job out of the line or stops a running one, as a signal to `dotime-queue run` does.
+
+Every other client gets the job id at once, exactly as before, and polls `queue_job` until the job is finished. The
+older tasks API of revision 2025-11-25 is not offered.
+
 ## FAQ
+
+<details>
+<summary><strong>How do I know a long job has finished?</strong></summary>
+
+A job that ran 5 minutes or more sends a done notice, and MCP clients with tasks support get the result by themselves.
+</details>
 
 <details>
 <summary><strong>Does it work with my coding agent?</strong></summary>

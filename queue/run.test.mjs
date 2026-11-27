@@ -17,7 +17,7 @@ const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takePlace, takeSlot } = await import("./slots.mjs");
 const { placeKey } = await import("./nested.mjs");
-const { notify } = await import("./notify.mjs");
+const { notify, runNotifyCommand } = await import("./notify.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { gitState } = await import("./git.mjs");
 const { afterMs } = await import("./timer.mjs");
@@ -956,4 +956,76 @@ test("run: the repeated-failure refusal names the flaky note when the check is f
     assert.match(refused.said.at(-1), /^refused: exit 3; same check failed twice on unchanged code: .*to run it anyway; flaky: /);
     assert.equal(refused.said.at(-1).endsWith(`; ${FLAKY_ONCE}`), true);
     assert.equal(job.runs(), 5);
+});
+
+// ---- the done notice ----
+
+const doneLines = (box) => {
+    try {
+        return readFileSync(box.ctx.files.notifyLog, "utf8").split("\n").filter(Boolean).map((line) => line.split("\t").slice(1));
+    } catch { return []; }
+};
+/** Runs a job that waits for a file, and moves the clock on by minutes while it runs before releasing it. */
+async function runFor(box, minutes, { label = "docs-site: build", exit = 0, overrides = {} } = {}) {
+    const release = join(tempDir("run-done"), "release");
+    let shift = 0;
+    const d = makeDeps(box, { now: () => Date.now() + shift, ...overrides });
+    const script = `setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release)})) process.exit(${exit}); }, 20);`;
+    const run = settle(runCommand(["run", "--label", label, "--max-run", "60", "--", NODE, "-e", script], box.ctx, d.deps));
+    await until(() => slots(box)[0]?.pgid);
+    shift = minutes * MINUTE;
+    writeFileSync(release, "");
+    return { code: await run.result, said: d.said };
+}
+
+test("run: a job that ran notifyDoneMin minutes or more sends one done notice, after its journal line", async () => {
+    const box = sandbox();
+    let linesThen = null;
+    const logged = (title, message) => {
+        linesThen = journal(box).length;
+        return notify(title, message, { env: { DOTIME_NOTIFY: "log" }, logFile: box.ctx.files.notifyLog });
+    };
+    assert.equal(DEFAULTS.notifyDoneMin, 5);
+    assert.equal((await runFor(box, 12, { overrides: { notify: logged } })).code, 0);
+    assert.equal(linesThen, 1, "the journal line was written before the notice");
+    assert.equal((await runFor(box, 5, { label: "docs-site: lint", exit: 1 })).code, 1);
+    assert.deepEqual(doneLines(box), [
+        ["dotime: done docs-site: build", "passed, exit 0, ran 12 min"], ["dotime: done docs-site: lint", "failed, exit 1, ran 5 min"],
+    ]);
+});
+
+test("run: no done notice for a shorter run, a skipped check or a refused one", async () => {
+    const box = sandbox();
+    assert.equal((await runFor(box, 4)).code, 0);
+    assert.deepEqual(doneLines(box), []);
+    const every = sandbox({ notifyDoneMin: 0 }), job = countingJob(), label = "shop-api: unit tests";
+    assert.equal((await runAt(every, job.args(label))).code, 0);
+    assert.equal((await runAt(every, job.args(label))).code, 0);
+    job.failWith(4);
+    for (const tail of ["--a", "--a"]) assert.equal((await runAt(every, job.args(label, { tail }))).code, 4);
+    assert.equal((await runAt(every, job.args(label, { tail: "--a" }))).code, EXIT.refused);
+    assert.deepEqual(outcomes(every), ["ran", "skipped", "ran", "ran", "refused"]);
+    assert.deepEqual(doneLines(every), [
+        ["dotime: done shop-api: unit tests", "passed, exit 0, ran 0 min"],
+        ["dotime: done shop-api: unit tests", "failed, exit 4, ran 0 min"],
+        ["dotime: done shop-api: unit tests", "failed, exit 4, ran 0 min"],
+    ]);
+});
+
+test("run: a done notice that fails, throws or hangs changes no exit code and holds the end only up to its timeout", async () => {
+    const box = sandbox();
+    const channels = (command) => ({
+        env: { DOTIME_NOTIFY_CMD: command }, logFile: box.ctx.files.notifyLog, desktop: () => false,
+        command: (cmd, title, message, env) => runNotifyCommand(cmd, title, message, env, 300),
+    });
+    for (const command of ["exit 9", "sleep 30"]) {
+        const started = Date.now();
+        const out = await runFor(box, 8, { exit: 3, overrides: { notify: (t, m) => notify(t, m, channels(command)) } });
+        assert.equal(out.code, 3, command);
+        assert.equal(Date.now() - started < 5000, true, `${command} held the end too long`);
+    }
+    const thrown = await runFor(box, 8, { overrides: { notify: () => { throw new Error("no desktop"); } } });
+    assert.equal(thrown.code, 0);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 3], ["ran", 3], ["ran", 0]]);
+    assert.deepEqual(doneLines(box).map(([, message]) => message), ["failed, exit 3, ran 8 min", "failed, exit 3, ran 8 min"]);
 });

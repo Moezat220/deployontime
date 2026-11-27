@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { isolateProcess, readNotices, tempDir } from "./testkit.mjs";
 
 isolateProcess("notices");
-const { addNotice, idleAlert, longRunAlert, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
+const { addNotice, doneAlert, idleAlert, longRunAlert, slotIdleCheck, slotIdleStep } = await import("./notices.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
@@ -38,6 +38,24 @@ test("longRunAlert: names the job, the jobs it holds up, its limit and the stop 
         detail: "mark from the 20 min setting for jobs without history, limit 30 min, hard stop at 07:08 UTC",
         waiting: ["shop-api: lint", "mobile-app: bundle"], at: NOW
     });
+});
+
+test("doneAlert: one clause list for a job that ran long enough, null for a shorter one or one that never ran", () => {
+    const at = (minutes) => new Date(NOW + minutes * MINUTE).toISOString();
+    const row = (fields) => ({ label: SUITE, outcome: "ran", exit: 0, startedAt: at(0), endedAt: at(12), ...fields });
+    const message = (fields, min = 5) => doneAlert(row(fields), min)?.message ?? null;
+    assert.deepEqual(doneAlert(row({}), 5), { title: `dotime: done ${SUITE}`, message: "passed, exit 0, ran 12 min" });
+    assert.equal(message({ exit: 1 }), "failed, exit 1, ran 12 min");
+    assert.equal(message({ outcome: "stopped", exit: 143, signal: "SIGTERM", endedAt: at(6) }), "stopped by SIGTERM, ran 6 min");
+    assert.equal(message({ exit: 130 }), "stopped, exit 130, ran 12 min");
+    assert.equal(message({ outcome: "timed-out", exit: 124, endedAt: at(30) }), "run limit hit, ran 30 min");
+    assert.equal(message({ endedAt: at(5) }), "passed, exit 0, ran 5 min");
+    assert.equal(message({ endedAt: at(4.9) }), null);
+    assert.equal(message({ endedAt: at(0.1) }, 0), "passed, exit 0, ran 0 min");
+    for (const outcome of ["skipped", "refused", "gave-up", "left", "could-not-start"]) {
+        assert.equal(message({ outcome, startedAt: outcome === "could-not-start" ? at(0) : null }, 0), null, outcome);
+    }
+    assert.equal(doneAlert(null, 5), null);
 });
 
 test("idleAlert: names the job, its CPU use, and when its limit is reached if it has one", () => {

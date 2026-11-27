@@ -20,11 +20,14 @@ export function cleanText(text, maxLength) {
     return shortened.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+/** How long the notify command may run before it is stopped and counted as failed. */
+export const NOTIFY_TIMEOUT_MS = 15_000;
+
 /** Runs the notify command in a shell. The texts are handed over as environment variables, not as shell code. */
-export function runNotifyCommand(command, title, message, env = process.env) {
+export function runNotifyCommand(command, title, message, env = process.env, timeoutMs = NOTIFY_TIMEOUT_MS) {
     try {
         const withTexts = { ...env, DOTIME_TITLE: title, DOTIME_MESSAGE: message };
-        const ran = spawnSync("/bin/sh", ["-c", command], { env: withTexts, stdio: "ignore", timeout: 15_000 });
+        const ran = spawnSync("/bin/sh", ["-c", command], { env: withTexts, stdio: "ignore", timeout: timeoutMs });
         return ran.status === 0;
     } catch { return false; }
 }

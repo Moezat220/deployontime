@@ -301,19 +301,28 @@ function flakyOf(row, journal, { settings }) {
     return flakyFor(journal, check, { now: Date.now(), windowDays: settings.flakyWindowDays });
 }
 
-/** Where a job stands now: { state, position? }. */
+/** Where a job stands now: { state, position?, nested?, since? }; since is when a running job started (ms). */
 function stateOf(job, files, check) {
     if (job.exit) return { state: "finished" };
     if (!runnerActive(job, Date.now(), check)) return { state: "lost" };
     const pid = job.pid?.queuePid;
     if (!pid) return { state: "starting" };
     const { holders, queue, nested } = snapshot({ dirs: files });
-    if (holders.some((h) => h.pid === pid)) return { state: "running" };
+    const holder = holders.find((h) => h.pid === pid);
+    if (holder) return { state: "running", since: holder.startedAt ?? holder.at };
     const at = queue.findIndex((q) => q.pid === pid);
     if (at >= 0) return { state: "waiting", position: at + 1 };
     const inner = nested.find((n) => n.pid === pid);
-    if (inner) return { state: inner.waiting ? "waiting" : "running", nested: true };
+    if (inner) return { state: inner.waiting ? "waiting" : "running", nested: true, ...(inner.waiting ? {} : { since: inner.startedAt ?? inner.at }) };
     return { state: "starting" };
+}
+
+/** A job and where it stands, for the tasks of the MCP server: { job, where }, or null for an id that names no job. */
+export function jobStatus(id, ctx) {
+    if (typeof id !== "string" || !JOB_ID_RE.test(id)) return null;
+    const job = readJob(jobsDir(ctx.files.home), id);
+    if (!job.request) return null;
+    return { job, where: stateOf(job, ctx.files, ctx.sameProcess) };
 }
 
 function queueJob(args, ctx) {
@@ -366,7 +375,7 @@ const HANDLERS = {
 
 /** The deps a real server hands to the tools, on top of the settings, files and zone read for each call. */
 export const realToolDeps = (env) => ({
-    env, cwd: () => process.cwd(), readHealth, sameProcess,
+    env, cwd: () => process.cwd(), readHealth, sameProcess, kill: (pid, signal) => process.kill(pid, signal),
     startRunner: (dir, id, cwd, home) => startRunner(dir, id, cwd, home, env),
 });
 

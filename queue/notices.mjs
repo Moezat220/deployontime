@@ -1,10 +1,11 @@
-// The long-run and idle-slot notices: their text, the per-slot CPU sampling that finds a quiet job, and the store
+// The done, long-run and idle-slot notices: their text, the per-slot CPU sampling that finds a quiet job, and the store
 // of notices already sent, a folder in the state folder.
 import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { clockTime } from "./clock.mjs";
 import { tempName } from "./files.mjs";
 import { sampleKeepMs, slotIdleVerdict } from "./idle.mjs";
+import { isStopped } from "./journal.mjs";
 import { probeProcessCpu } from "./probes.mjs";
 import { jobCpu } from "./proctree.mjs";
 import { psRows } from "./ps.mjs";
@@ -32,6 +33,22 @@ export function longRunAlert(job) {
             waiting: waiting.map((w) => w.label), at: now,
         },
     };
+}
+/** The notice for a job that ran at least minMin minutes and has ended, from its journal line. A job that never ran
+ *  (skipped, refused, gave up or left while waiting, could not start) and a shorter run give null. Returns
+ *  { title, message }. */
+export function doneAlert(row, minMin) {
+    const ran = ["ran", "stopped", "timed-out"].includes(row?.outcome) && row.startedAt && row.endedAt;
+    if (!ran) return null;
+    const ms = Date.parse(row.endedAt) - Date.parse(row.startedAt);
+    if (!(ms >= minMin * MINUTE)) return null;
+    const took = `ran ${Math.round(ms / MINUTE)} min`;
+    let how;
+    if (row.outcome === "timed-out") how = "run limit hit";
+    else if (row.outcome === "stopped") how = row.signal ? `stopped by ${row.signal}` : `stopped, exit ${row.exit}`;
+    else if (isStopped(row)) how = `stopped, exit ${row.exit}`;
+    else how = `${row.exit === 0 ? "passed" : "failed"}, exit ${row.exit}`;
+    return { title: `dotime: done ${row.label}`, message: `${how}, ${took}` };
 }
 /** The notice for a job that holds a slot without using CPU. Returns { title, message, key, entry }. */
 export function idleAlert(job) {

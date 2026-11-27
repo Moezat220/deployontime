@@ -43,6 +43,12 @@ test("runNotifyCommand: false when the command fails", () => {
     assert.equal(runNotifyCommand("dotime-command-that-is-not-installed", "title", "message", {}), false);
 });
 
+test("runNotifyCommand: a command that hangs is stopped at the timeout and counts as failed", () => {
+    const started = Date.now();
+    assert.equal(runNotifyCommand("sleep 30", "title", "message", {}, 200), false);
+    assert.equal(Date.now() - started < 5000, true);
+});
+
 test("notify: writes the log line and uses both other channels", () => {
     const home = tempDir("notify"), c = channels();
     const sent = notify("dotime: job running long", "mobile-app: bundle\nstill going", {
