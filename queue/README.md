@@ -547,6 +547,9 @@ A fresh worktree holds only what git tracks: no installed packages, no `.env`, n
 `isolateLinks` names paths to link into it from your checkout, such as `["node_modules"]`; a path is linked only when it
 exists in the checkout and git ignores it there. The links are never committed, and removing a worktree removes only
 the links, never what they point to. A job that writes into a linked folder writes into your checkout's copy.
+The queue never commits a `node_modules` folder at any depth, also one git does not ignore, nor the paths of
+`isolateLinks`; such untracked paths do not count as uncommitted changes either. A change to a tracked file inside
+`node_modules` still counts, so `integrate` refuses the job until it is committed.
 
 After exit 0, changes the command left uncommitted are committed on the job's branch as `dotime: <label>` with the
 repository's own name and e-mail, and two lines follow:
@@ -572,13 +575,32 @@ removes the temporary worktree, names the files and exits 1; the job is kept. Th
 worktree through the queue, labelled `<job label>: integrate`, with `isolateLinks` linked. When it fails, its exit
 code is passed on and nothing else changes. When it passes, your branch is fast-forwarded to the commit the check
 passed on. If your branch moved while the check ran, nothing is changed and it says to run `integrate` again. Only
-after the fast-forward are the temporary worktree, the job's worktree and its branch removed (`git branch -d`). A job
+after the fast-forward are the temporary worktree, the job's worktree and its branch removed (`git branch -d`). When
+git reports a failed fast-forward, HEAD is read again: at the checked commit it counts as done, and anywhere else but
+where it was, the message says where HEAD is now instead of `nothing was changed`. A job
 whose branch is already in your HEAD, for example one that changed nothing, is just removed. Two jobs integrated one
-after the other both land: the second is merged onto the first.
+after the other both land: the second is merged onto the first. Two started at the same time never both move your
+branch: the second finds it moved and asks to run `integrate` again.
+
+Removing the job's worktree also removes the files in it that git does not track, such as an `.env` or build output
+the job made, and a `node_modules` folder left out of the commit; the end line then adds `removed <n> ignored files
+from the job folder`. Copy out what you want to keep before you integrate. A change to a tracked file made in the job's
+worktree while the check ran keeps the worktree, and the line says so. The git steps that run hooks or change files
+(`worktree add`, the commit, the merge and the fast-forward) have no time limit, so a slow hook is never cut off
+halfway.
+
+The temporary worktree is `<id>-integrate-<pid>-<random>` in `worktrees/`, with a file `<name>.owner.json` that holds
+the start time of the `integrate` process. When that process was killed before it could clean up, the next
+`integrate`, `discard` or `worktrees` removes the leftover: one whose process is gone, or whose pid now names a
+process that started at another time.
 
 **`discard <id> [--force]`.** Removes the job's worktree and branch. Without `--force` it refuses with exit 2 while
 the branch has commits that are not in the branch the job started from, or the worktree has uncommitted changes,
-and says how many. A worktree folder that was deleted by hand is pruned (`git worktree prune`).
+and says how many, or when git cannot count those commits. A worktree folder that was deleted by hand is forgotten by
+git with `git worktree remove --force <folder>`, for that one folder only. The queue never runs `git worktree prune`,
+which would also forget your own worktrees whose folders are missing at that moment, with what they have staged. A
+job marked as running whose process is gone is discarded like an ended one; a pid that now names a process that
+started at another time, as after a restart, does not count as the job's.
 
 **`worktrees`.** One line per kept job, oldest first: `worktree <id>: "<label>", branch <branch>, folder <folder>,
 <outcome>, <n> min old`, with the exit code after a failure and `folder missing` when the folder is gone; or

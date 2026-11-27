@@ -3,24 +3,25 @@
 // lost on the way.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, git, isolateProcess, makeRepo, tempDir, track } from "./testkit.mjs";
 
 isolateProcess("integrate");
-const { worktreeLines } = await import("./integrate.mjs");
+const { fastForward, worktreeLines } = await import("./integrate.mjs");
+const { gitRun } = await import("./worktree.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url)), NODE = process.execPath;
 const WIDE_OPEN = { loadPerCore: 1000, minFreeMemPct: 0, minFreeDiskGB: 0, minBatteryPct: 0 };
 const LINES = "one\ntwo\nthree\nfour\nfive\n";
 const PASS = [NODE, "-e", "process.exit(0)"];
 
-function sandbox({ config = {} } = {}) {
+function sandbox({ config = {}, files = {} } = {}) {
     const home = tempDir("int-home");
     writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, ...config, health: WIDE_OPEN, limits: { killGraceMs: 250 } }));
-    const repo = makeRepo(join(tempDir("int-repo"), "shop-api"), { "notes.txt": LINES });
+    const repo = makeRepo(join(tempDir("int-repo"), "shop-api"), { "notes.txt": LINES, ...files });
     return { home, repo, env: cleanEnv(home) };
 }
 function cli(box, args, { cwd = box.repo } = {}) {
@@ -200,7 +201,7 @@ test("discard: refuses unmerged commits and uncommitted changes without --force,
     assert.equal((await cli(box, ["discard", "--force"])).code, 2);
 });
 
-test("discard: a worktree folder that was deleted by hand is pruned, and its branch removed", async () => {
+test("discard: a worktree folder that was deleted by hand is forgotten by git, and its branch removed", async () => {
     const box = sandbox();
     const job = await isolated(box, "shop-api: look", PASS);
     rmSync(job.worktree, { recursive: true, force: true });
@@ -223,4 +224,166 @@ test("worktreeLines: a job still marked running whose process is gone ended with
     const lines = worktreeLines([{ ...state, outcome: "running", pid: 99, createdAt: 0, exit: null }], 12 * 60_000, () => false);
     assert.deepEqual(lines, ['worktree 0a1b2c3d: "docs: build", branch dotime/docs-build-0a1b2c3d, folder /nowhere/docs-0a1b2c3d, '
         + "folder missing, ended without a result, 12 min old"]);
+});
+
+/** A node script that writes each file of files (path to text), making folders, then exits 0. */
+const writeFiles = (files) => [NODE, "-e", `const fs = require("node:fs"), path = require("node:path"); `
+    + `for (const [f, t] of Object.entries(${JSON.stringify(files)})) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); }`];
+const stateOf = (box, id) => join(box.home, "worktrees", `${id}.json`);
+const editState = (box, id, change) => writeFileSync(stateOf(box, id), JSON.stringify({ ...JSON.parse(readFileSync(stateOf(box, id), "utf8")), ...change }));
+const commonDir = (repo) => git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").trim();
+const MY_BORN = Math.round(Date.now() - process.uptime() * 1000);
+/** The pid of a process that has ended. */
+async function deadPid() {
+    const child = spawn(NODE, ["-e", ""], { stdio: "ignore" });
+    await new Promise((resolve) => child.on("close", resolve));
+    return child.pid;
+}
+
+test("integrate and discard never forget a user's own worktree whose folder was moved away, nor its staged changes", async () => {
+    const box = sandbox();
+    const side = join(realpathSync(dirname(box.repo)), "side"), away = join(dirname(box.repo), "side-away");
+    git(box.repo, "worktree", "add", "-q", "-b", "side", side);
+    writeFileSync(join(side, "staged.txt"), "kept\n");
+    git(side, "add", "staged.txt");
+    renameSync(side, away);
+    const admin = join(commonDir(box.repo), "worktrees", "side");
+    const index = readFileSync(join(admin, "index"));
+    const a = await isolated(box, "shop-api: edit", editLine(1, "ONE"));
+    const b = await isolated(box, "shop-api: other", editLine(2, "TWO"));
+    const c = await isolated(box, "shop-api: look", PASS);
+    rmSync(c.worktree, { recursive: true, force: true });
+    assert.equal((await cli(box, ["integrate", a.id, "--", ...PASS])).code, 0);
+    assert.equal((await cli(box, ["discard", b.id, "--force"])).code, 0);
+    assert.equal((await cli(box, ["discard", c.id])).code, 0);
+    assert.deepEqual([existsSync(admin), readFileSync(join(admin, "index")).equals(index)], [true, true]);
+    assert.match(git(box.repo, "worktree", "list", "--porcelain"), new RegExp(`^worktree ${side}$`, "m"));
+    assert.equal(worktreeCount(box.repo), 2);
+    renameSync(away, side);
+    assert.equal(git(side, "status", "--porcelain"), "A  staged.txt\n");
+});
+
+test("fastForward: when git reports a failure but HEAD is at the commit after all, it counts as done", () => {
+    const box = sandbox();
+    const before = head(box.repo);
+    git(box.repo, "switch", "-q", "-c", "ahead");
+    git(box.repo, "commit", "-q", "--allow-empty", "-m", "ahead");
+    const target = head(box.repo);
+    git(box.repo, "switch", "-q", "master");
+    const failsAfter = (top, args, opts) => ({ ...gitRun(top, args, opts), ok: false, code: 1, stderr: "error: a hook said no" });
+    const failsBefore = () => ({ ok: false, code: 1, stdout: "", stderr: "error: a hook said no" });
+    assert.deepEqual(fastForward(box.repo, target, { env: box.env, run: failsBefore }), { ok: false, error: "error: a hook said no", now: before });
+    assert.deepEqual(fastForward(box.repo, target, { env: box.env, run: failsAfter }), { ok: true });
+    assert.equal(head(box.repo), target);
+});
+
+test("worktrees, integrate and discard remove a temporary integrate worktree whose process is gone, and keep a live one", async () => {
+    const box = sandbox();
+    const dir = join(box.home, "worktrees");
+    mkdirSync(dir, { recursive: true });
+    const plant = (pid, born) => {
+        const name = `0a1b2c3d-integrate-${pid}-${born === MY_BORN ? "11111111" : "22222222"}`;
+        git(box.repo, "worktree", "add", "-q", "--detach", join(dir, name), "HEAD");
+        writeFileSync(join(dir, `${name}.owner.json`), JSON.stringify({ pid, born, top: box.repo }));
+        return join(dir, name);
+    };
+    const dead = plant(await deadPid(), MY_BORN - 1000);
+    const live = plant(process.pid, MY_BORN);
+    const reused = join(dir, `0a1b2c3d-integrate-${process.pid}-33333333`);
+    git(box.repo, "worktree", "add", "-q", "--detach", reused, "HEAD");
+    writeFileSync(`${reused}.owner.json`, JSON.stringify({ pid: process.pid, born: MY_BORN - 3_600_000, top: box.repo }));
+    assert.equal(worktreeCount(box.repo), 4);
+    assert.deepEqual(await cli(box, ["worktrees"]), { code: 0, stdout: "worktrees: none\n", stderr: "" });
+    assert.deepEqual([existsSync(dead), existsSync(`${dead}.owner.json`), existsSync(reused), existsSync(live)], [false, false, false, true]);
+    assert.equal(worktreeCount(box.repo), 2);
+    const job = await isolated(box, "shop-api: look", PASS);
+    const again = plant(await deadPid(), MY_BORN);
+    assert.equal((await cli(box, ["discard", job.id])).code, 0);
+    assert.deepEqual([existsSync(again), existsSync(live), worktreeCount(box.repo)], [false, true, 2]);
+});
+
+test("discard: commits that git cannot count are an issue, not 0 commits ahead; --force still removes the job", async () => {
+    const box = sandbox();
+    const job = await isolated(box, "shop-api: edit", editLine(1, "ONE"));
+    editState(box, job.id, { baseBranch: "gone-away", base: "f".repeat(40) });
+    const out = await cli(box, ["discard", job.id]);
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, new RegExp(`^dotime-queue: discard: the commits of branch ${job.branch} not in gone-away could not be counted: `
+        + ".+; nothing was removed; add --force to remove them anyway\n$"));
+    assert.equal(existsSync(job.worktree), true);
+    assert.equal((await cli(box, ["discard", job.id, "--force"])).code, 0);
+    assert.deepEqual([existsSync(job.worktree), branches(box.repo)], [false, ["master"]]);
+});
+
+test("integrate: ignored files the job made are removed with its folder, and the end line counts them", async () => {
+    const box = sandbox({ files: { ".gitignore": ".env\nlogs/\n" } });
+    const job = await isolated(box, "shop-api: edit", [...writeFiles({ ".env": "TOKEN=x\n", "logs/a.log": "a\n", "notes.txt": "new\n" })]);
+    const out = await cli(box, ["integrate", job.id, "--", ...PASS]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /; removed the job's worktree and branch; removed 2 ignored files from the job folder\n$/);
+    assert.equal(existsSync(job.worktree), false);
+});
+
+test("run --isolate: a node_modules folder, also one git does not ignore, and isolateLinks paths are never committed", async () => {
+    const box = sandbox({ config: { isolateLinks: ["cache"] } });
+    const job = await isolated(box, "shop-api: install", writeFiles({
+        "node_modules/pkg/index.js": "x\n", "web/node_modules/b.js": "y\n", "cache/c.bin": "z\n", "notes.txt": "new\n",
+    }));
+    assert.equal(job.code, 0);
+    assert.equal(git(box.repo, "show", "--name-only", "--format=", job.branch), "notes.txt\n");
+    assert.equal(git(box.repo, "ls-tree", "-r", "--name-only", job.branch), "notes.txt\n");
+    const out = await cli(box, ["integrate", job.id, "--", ...PASS]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /; removed 3 ignored files from the job folder\n$/);
+    assert.deepEqual([readFileSync(join(box.repo, "notes.txt"), "utf8"), status(box.repo), existsSync(job.worktree)], ["new\n", "", false]);
+});
+
+test("discard: a job still marked running whose pid now names a process that started later is not running", async () => {
+    const box = sandbox();
+    const job = await isolated(box, "shop-api: look", PASS);
+    editState(box, job.id, { outcome: "running", exit: null, pid: process.pid, born: MY_BORN });
+    const busy = await cli(box, ["discard", job.id, "--force"]);
+    assert.deepEqual([busy.code, busy.stderr], [2, `dotime-queue: discard: job ${job.id} is still running, pid ${process.pid}\n`]);
+    editState(box, job.id, { born: MY_BORN - 3_600_000 });
+    const out = await cli(box, ["discard", job.id]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(existsSync(job.worktree), false);
+});
+
+test("integrate and discard never touch what an isolateLinks link points to", async () => {
+    const box = sandbox({ config: { isolateLinks: ["node_modules"] }, files: { ".gitignore": "node_modules/\n" } });
+    const pkg = join(box.repo, "node_modules", "pkg", "index.js");
+    mkdirSync(dirname(pkg), { recursive: true });
+    writeFileSync(pkg, "module.exports = 1;\n");
+    const useIt = [NODE, "-e", "process.exit(require('./node_modules/pkg/index.js') === 1 ? 0 : 7)"];
+    const edit = "require('./node_modules/pkg/index.js'); require('node:fs').writeFileSync('notes.txt', 'a\\n')";
+    const a = await isolated(box, "shop-api: edit", [NODE, "-e", edit]);
+    const b = await isolated(box, "shop-api: other", editLine(2, "TWO"));
+    assert.deepEqual([a.code, b.code], [0, 0]);
+    const landed = await cli(box, ["integrate", a.id, "--", ...useIt]);
+    assert.equal(landed.code, 0, landed.stderr);
+    assert.equal((await cli(box, ["discard", b.id, "--force"])).code, 0);
+    assert.deepEqual([existsSync(join(box.repo, "node_modules")), readFileSync(pkg, "utf8")], [true, "module.exports = 1;\n"]);
+    assert.deepEqual([status(box.repo), existsSync(a.worktree), existsSync(b.worktree)], ["", false, false]);
+});
+
+test("two integrates started at the same time: one lands, the other lands after it or asks to run again; nothing is lost", async () => {
+    const box = sandbox();
+    const a = await isolated(box, "shop-api: top", editLine(1, "ONE"));
+    const b = await isolated(box, "shop-api: bottom", editLine(5, "FIVE"));
+    const slow = [NODE, "-e", "setTimeout(() => process.exit(0), 300)"];
+    const results = await Promise.all([a, b].map((job) => cli(box, ["integrate", job.id, "--", ...slow])));
+    for (const out of results) {
+        assert.ok(out.code === 0 || (out.code === 1 && /run integrate again\n$/.test(out.stderr)), out.stderr);
+    }
+    assert.ok(results.some((out) => out.code === 0), results.map((out) => out.stderr).join(""));
+    assert.equal(status(box.repo), "");
+    for (const [job, out] of [[a, results[0]], [b, results[1]]]) {
+        if (out.code === 0) continue;
+        assert.equal(branches(box.repo).includes(job.branch), true);
+        const again = await cli(box, ["integrate", job.id, "--", ...PASS]);
+        assert.equal(again.code, 0, again.stderr);
+    }
+    assert.equal(readFileSync(join(box.repo, "notes.txt"), "utf8"), "ONE\ntwo\nthree\nfour\nFIVE\n");
+    assert.deepEqual([branches(box.repo), status(box.repo), worktreeCount(box.repo)], [["master"], "", 1]);
 });

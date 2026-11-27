@@ -1,10 +1,12 @@
 // Process trees and signals: which processes make up a job, and how a job or a process group is told to stop.
 // Every walk over a process table and every group signal of the queue goes through here.
-import { probeProcessTree } from "./probes.mjs";
-import { psRows } from "./ps.mjs";
+import { probeProcessAges, probeProcessTree } from "./probes.mjs";
+import { parseElapsed, psRows } from "./ps.mjs";
 
 // The longest chain of parents followed, so a damaged table can never keep a walk going.
 const MAX_DEPTH = 64;
+// How far apart two start times may be and still name the same process.
+const SAME_START_MS = 5000;
 
 /** True while a process with this pid exists. EPERM: it exists but belongs to another user. */
 export function alive(pid) {
@@ -12,6 +14,18 @@ export function alive(pid) {
         process.kill(pid, 0);
         return true;
     } catch (e) { return e.code === "EPERM"; }
+}
+
+/** True while the process with this pid is the one that wrote startedAt (ms) when it began: a pid that a later
+ *  process was given counts as gone. ages: pid to seconds run, as `ps` reports it. strict: when the start time or the
+ *  age cannot be read, answer false instead of true; used before sending a signal, so a stranger is never stopped. */
+export function sameProcess(pid, startedAt, { isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)), strict = false } = {}) {
+    if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return false;
+    if (!Number.isFinite(startedAt)) return !strict;
+    const seconds = ages([pid]).get(pid);
+    if (seconds === undefined && strict) return false;
+    // ps counts whole seconds, and the runner writes its start a moment after it began.
+    return seconds === undefined || Math.abs(Date.now() - seconds * 1000 - startedAt) <= SAME_START_MS + 1000;
 }
 
 /** An index over process rows ({ pid, ppid }): byPid and children (parent pid to child pids). Build it once to walk

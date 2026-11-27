@@ -6,21 +6,28 @@
 // `integrate`, in integrate.mjs.
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { porcelainClean, readOnlyGit, repoName } from "./git.mjs";
 import { UNLABELLED } from "./kinds.mjs";
+import { sameProcess } from "./proctree.mjs";
 
 /** How many new ids a job tries when its branch or folder is already there. */
 export const ID_TRIES = 8;
 export const ID_RE = /^[0-9a-f]{8}$/;
+/** The timeout of a git step that runs the repository's hooks or changes files: none, as a step stopped halfway
+ *  could leave a half-made commit, merge or worktree behind. */
+export const NO_LIMIT = 0;
+// When this process started (wall clock, ms), kept with a job so a later process given the same pid is told apart.
+export const BORN = Math.round(Date.now() - process.uptime() * 1000);
 
 /** Runs `git -C <cwd> <args>` and returns { ok, code, stdout, stderr }; unlike git() in git.mjs it may change the
  *  repository and it keeps git's own error text. No watcher program named in the repository's settings is started. */
 export function gitRun(cwd, args, { env = process.env, timeout = 120_000 } = {}) {
     try {
-        const ran = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout, env: readOnlyGit(env) });
+        const limit = timeout > 0 ? { timeout } : {};
+        const ran = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...limit, env: readOnlyGit(env) });
         const stderr = (ran.stderr ?? "").trim() || (ran.error ? ran.error.message : "");
         return { ok: ran.status === 0, code: ran.status, stdout: ran.stdout ?? "", stderr };
     } catch (e) {
@@ -84,14 +91,31 @@ export function checkoutOf(cwd, env) {
     };
 }
 
-/** The entries of `git status --porcelain` in a folder, without the links the queue made there; null when git has
- *  no answer. */
-export function changesIn(folder, links = [], env) {
-    const ran = gitRun(folder, ["status", "--porcelain"], { env, timeout: 30_000 });
+/** The pathspecs of what the queue never commits for a job: every node_modules folder, also one git does not ignore,
+ *  and the given paths (the links it made and the paths of isolateLinks). */
+export const leftOutSpecs = (paths = []) => [
+    ":/", ...[...new Set(paths.map((p) => String(p).replace(/\/+$/, "")))].map((p) => `:(top,exclude,literal)${p}`),
+    ":(top,exclude,glob)**/node_modules", ":(top,exclude,glob)**/node_modules/**",
+];
+
+/** The entries of `git status --porcelain` in a folder, without the untracked paths the queue leaves out of a commit
+ *  (see leftOutSpecs; paths: the links it made and the paths of isolateLinks); null when git has no answer. A change
+ *  to a tracked file is always listed, also one inside node_modules. */
+export function changesIn(folder, paths = [], env) {
+    const all = gitRun(folder, ["status", "--porcelain", "--", ...leftOutSpecs(paths)], { env, timeout: 30_000 });
+    const tracked = gitRun(folder, ["status", "--porcelain", "--untracked-files=no"], { env, timeout: 30_000 });
+    if (!all.ok || !tracked.ok) return null;
+    const entries = new Set([...all.stdout.split("\n"), ...tracked.stdout.split("\n")]);
+    return [...entries].filter((entry) => entry && !porcelainClean(entry));
+}
+
+/** The files in a folder git does not track, ignored ones included, without the links in it; null when git has no
+ *  answer. Links are files to git, so what they point to is never listed. */
+export function untrackedFiles(folder, links = [], env) {
+    const ran = gitRun(folder, ["ls-files", "-z", "--others"], { env, timeout: 60_000 });
     if (!ran.ok) return null;
-    const own = new Set(links.map((link) => link.replace(/\/+$/, "")));
-    return ran.stdout.split("\n").filter(Boolean)
-        .filter((entry) => !own.has(entry.slice(3).replace(/\/+$/, "")) && !porcelainClean(entry));
+    const own = new Set(links.map((link) => String(link).replace(/\/+$/, "")));
+    return ran.stdout.split("\0").filter((path) => path && !own.has(path));
 }
 
 /** Does git hold a name and an e-mail for commits in this folder, from the repository's settings or from the
@@ -134,13 +158,75 @@ const isLink = (path) => { try { return lstatSync(path).isSymbolicLink(); } catc
 
 /** Removes the links linkIgnored made, only the links themselves: what they point to is never touched. */
 export function unlinkAll(folder, links = []) {
-    for (const path of links) if (isLink(join(folder, path))) rmSync(join(folder, path));
+    // unlinkSync removes the link itself; rmSync refuses a link that points to a folder.
+    for (const path of links) if (isLink(join(folder, path))) unlinkSync(join(folder, path));
 }
 
 /** Removes a worktree the queue made, links first; force: also with changes in it. Returns the git result. */
 export function removeWorktree(top, folder, links, { force = false, env } = {}) {
     unlinkAll(folder, links);
-    return gitRun(top, ["worktree", "remove", ...(force ? ["--force"] : []), folder], { env });
+    return gitRun(top, ["worktree", "remove", ...(force ? ["--force"] : []), folder], { env, timeout: NO_LIMIT });
+}
+
+/** Makes git forget the one worktree at folder, a folder the queue made, also when the folder is gone already: by
+ *  `git worktree remove --force`, and when git refuses that for a folder that is gone, by deleting only the entry under
+ *  <git common dir>/worktrees whose gitdir file points into that folder. No other worktree is ever touched: unlike
+ *  `git worktree prune`, which forgets every worktree whose folder is missing at that moment, also a user's own on a
+ *  drive that is not mounted. Returns true when git no longer knows the folder. */
+export function forgetWorktree(top, folder, env) {
+    const removed = gitRun(top, ["worktree", "remove", "--force", folder], { env, timeout: NO_LIMIT });
+    if (removed.ok) return true;
+    if (existsSync(folder)) return false;
+    const common = gitRun(top, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { env, timeout: 10_000 });
+    if (!common.ok) return false;
+    const admin = join(common.stdout.trim(), "worktrees");
+    const ours = new Set([join(folder, ".git"), join(real(dirname(folder)), basename(folder), ".git")]);
+    let names = [];
+    try { names = readdirSync(admin); } catch { return true; }
+    for (const name of names) {
+        let points;
+        try { points = readFileSync(join(admin, name, "gitdir"), "utf8").trim(); } catch { continue; }
+        if (ours.has(points)) rmSync(join(admin, name), { recursive: true, force: true });
+    }
+    return true;
+}
+const real = (path) => { try { return realpathSync(path); } catch { return path; } };
+
+// A temporary worktree of integrate: <job id>-integrate-<pid of the integrate process>-<random>.
+const TEMP_RE = /^([0-9a-f]{8})-integrate-(\d+)-([0-9a-f]{8})$/;
+/** The name of a temporary integrate worktree, and the file next to it that names its owner. */
+export const tempName = (id, pid = process.pid, bytes = randomBytes) => `${id}-integrate-${pid}-${newId(bytes)}`;
+export const ownerFile = (home, name) => join(worktreesDir(home), `${name}.owner.json`);
+
+/** Removes the temporary integrate worktrees whose integrate process is gone, as after a kill during the merge step:
+ *  the process is gone when its pid is not alive or now names a process that started at another time than the owner
+ *  file says. Each is removed from git with forgetWorktree, never with prune. Returns the folders removed. same:
+ *  sameProcess(pid, born). */
+export function dropLeftovers(home, env, { same = sameProcess } = {}) {
+    const dir = worktreesDir(home);
+    let names = [];
+    try { names = readdirSync(dir); } catch { return []; }
+    const temps = new Set(names.map((name) => name.replace(/\.owner\.json$/, "")).filter((name) => TEMP_RE.test(name)));
+    const dropped = [];
+    for (const name of temps) {
+        const owner = readJson(ownerFile(home, name));
+        const pid = Number(TEMP_RE.exec(name)[2]);
+        if (same(pid, owner?.born)) continue;
+        const folder = join(dir, name);
+        const top = [owner?.top, gitDirOf(folder)].find((path) => path && existsSync(path));
+        if (top) forgetWorktree(top, folder, env);
+        if (existsSync(folder)) rmSync(folder, { recursive: true, force: true });
+        rmSync(ownerFile(home, name), { force: true });
+        dropped.push(folder);
+    }
+    return dropped;
+}
+// The common git folder a worktree folder belongs to, from its .git file, or null.
+function gitDirOf(folder) {
+    try {
+        const line = readFileSync(join(folder, ".git"), "utf8").trim();
+        return line.startsWith("gitdir: ") ? dirname(dirname(line.slice(8))) : null;
+    } catch { return null; }
 }
 
 const REFUSED = "nothing was started";
@@ -178,9 +264,10 @@ export function makeWorktree(job, { env, id: pickId = newId } = {}) {
         const branch = `dotime/${labelSlug(job.label)}-${id}`;
         const folder = join(worktreesDir(home), `${folderSafe(checkout.repo)}-${id}`);
         if (existsSync(folder) || existsSync(stateFile(home, id)) || branchExists(checkout.top, branch, env)) continue;
-        const added = gitRun(checkout.top, ["worktree", "add", "-q", "-b", branch, folder, checkout.head], { env });
+        const added = gitRun(checkout.top, ["worktree", "add", "-q", "-b", branch, folder, checkout.head], { env, timeout: NO_LIMIT });
         if (!added.ok) {
-            gitRun(checkout.top, ["worktree", "prune"], { env });
+            forgetWorktree(checkout.top, folder, env);
+            if (existsSync(folder)) rmSync(folder, { recursive: true, force: true });
             if (branchExists(checkout.top, branch, env)) gitRun(checkout.top, ["branch", "-D", branch], { env });
             return { error: `the worktree could not be made: ${gitError(added)}` };
         }
@@ -188,7 +275,7 @@ export function makeWorktree(job, { env, id: pickId = newId } = {}) {
         const state = {
             v: 1, id, label: job.label, command: job.command, branch, worktree: folder, base: checkout.head,
             baseBranch: checkout.branch, top: checkout.top, common: checkout.common, prefix: checkout.prefix, links,
-            pid: job.pid, createdAt: job.now, outcome: "running", exit: null, endedAt: null,
+            linkPaths: job.links ?? [], pid: job.pid, born: job.born ?? BORN, createdAt: job.now, outcome: "running", exit: null, endedAt: null,
         };
         try {
             writeState(home, state);
@@ -222,16 +309,16 @@ export function finishIsolate(state, row, exit, { home, env, now }) {
     const outcome = exit === 0 ? "passed" : outcomeOf(row);
     let committed = null;
     if (exit === 0) {
-        const left = changesIn(state.worktree, state.links, env);
+        const out = [...(state.links ?? []), ...(state.linkPaths ?? [])];
+        const left = changesIn(state.worktree, out, env);
         if (left === null) lines.push(`could not read git status in ${state.worktree}; changes there stay uncommitted`);
         else if (left.length && !hasIdentity(state.worktree, env)) {
             lines.push(`not committed: git has no user.name and user.email for ${state.top}; the ${left.length} `
                 + `${left.length === 1 ? "change stays" : "changes stay"} uncommitted in ${state.worktree}`);
         } else if (left.length) {
-            const excludes = (state.links ?? []).map((link) => `:(top,exclude,literal)${link}`);
-            const added = gitRun(state.worktree, ["add", "-A", "--", ":/", ...excludes], { env });
+            const added = gitRun(state.worktree, ["add", "-A", "--", ...leftOutSpecs(out)], { env, timeout: NO_LIMIT });
             const made = added.ok
-                ? gitRun(state.worktree, ["-c", "user.useConfigOnly=true", "commit", "-q", "-m", `dotime: ${state.label}`], { env })
+                ? gitRun(state.worktree, ["-c", "user.useConfigOnly=true", "commit", "-q", "-m", `dotime: ${state.label}`], { env, timeout: NO_LIMIT })
                 : added;
             if (made.ok) {
                 committed = gitRun(state.worktree, ["rev-parse", "HEAD"], { env }).stdout.trim();

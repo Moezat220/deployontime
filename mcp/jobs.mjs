@@ -7,9 +7,9 @@ import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../queue/files.mjs";
-import { alive } from "../queue/proctree.mjs";
-import { probeProcessAges } from "../queue/probes.mjs";
-import { parseElapsed } from "../queue/ps.mjs";
+import { sameProcess } from "../queue/proctree.mjs";
+
+export { sameProcess };
 
 export const JOB_ID_RE = /^[0-9a-f]{24}$/;
 export const KEEP_DAYS = 7;
@@ -17,7 +17,6 @@ export const KEEP_JOBS = 200;
 /** How long a job may go without a pid file before it counts as lost: its runner never started. */
 export const START_GRACE_MS = 30_000;
 const DAY = 24 * 60 * 60 * 1000;
-const SAME_START_MS = 5000;
 const TAIL_BYTES = 256 * 1024;
 const MAX_LINE = 2000;
 const EXTENSIONS = [".json", ".pid", ".exit", ".log"];
@@ -44,18 +43,6 @@ export function createJob(dir, id, request) {
 export function readJob(dir, id) {
     const files = jobFiles(dir, id);
     return { files, request: readJson(files.request), pid: readJson(files.pid), exit: readJson(files.exit) };
-}
-
-/** True while the process with this pid is the one that wrote startedAt (ms) when it began: a pid that a later
- *  process was given counts as gone. ages: pid to seconds run, as `ps` reports it. strict: when the start time or the
- *  age cannot be read, answer false instead of true; used before sending a signal, so a stranger is never stopped. */
-export function sameProcess(pid, startedAt, { isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)), strict = false } = {}) {
-    if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return false;
-    if (!Number.isFinite(startedAt)) return !strict;
-    const seconds = ages([pid]).get(pid);
-    if (seconds === undefined && strict) return false;
-    // ps counts whole seconds, and the runner writes its start a moment after it began.
-    return seconds === undefined || Math.abs(Date.now() - seconds * 1000 - startedAt) <= SAME_START_MS + 1000;
 }
 
 /** Whether a job's runner may still be working: it has no exit file and its runner is alive, or it is younger than
