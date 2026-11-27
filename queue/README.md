@@ -585,7 +585,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
 | `slots.mjs` | Slot and waiting-line files: snapshot, join, take, release, update. | library | Reads and writes `slots/` and `line/`; runs `ps` for process ages. |
 | `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
-| `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json`. |
+| `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json` and removes its abandoned temporary files. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |
 | `kinds.mjs` | Job kinds and command stems. | library | None. |
 | `failstop.mjs` | The stop for a check that failed twice on unchanged code. | library | None. |
@@ -601,8 +601,8 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `probes.mjs` | Readings from macOS tools, one function each. | library | Runs `ps`, `memory_pressure`, `df`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`. |
 | `ps.mjs` | Parsers for `ps` output. | library | None. |
 | `proctree.mjs` | Process trees: descendants, ancestors, a job's pids and CPU; group signals and stops. | library | Sends signals; runs `ps` when no listing is given. |
-| `files.mjs` | JSON read with warnings, atomic JSON write, append with folder. | library | Reads and writes the files it is handed. |
-| `timer.mjs` | Timers longer than one Node timer can hold, and a sleep that can be ended early. | library | Sets timers. |
+| `files.mjs` | JSON read with warnings, atomic JSON write, removal of abandoned temporary files, append with folder. | library | Reads, writes and removes the files it is handed. |
+| `timer.mjs` | Timers that can be cancelled, also ones longer than one Node timer can hold, and a sleep that can be ended early. | library | Sets and clears timers. |
 | `clock.mjs` | Clock times, days and zone offsets. | library | None. |
 | `stats.mjs` | The percentile that limits and `history` share. | library | None. |
 | `units.mjs` | Time units and rounding. | library | None. |
