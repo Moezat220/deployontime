@@ -1,0 +1,78 @@
+name: benchmark
+
+# Runs bench/run.mjs on a GitHub-hosted macOS runner so anyone can reproduce the measurement in the README, and
+# publishes the raw results whatever they show. It only starts by hand (Actions, "Benchmark (manual)", Run workflow)
+# and is not one of the required checks.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Rounds each way
+        type: number
+        default: 3
+      agents:
+        description: Agents that start the suite at the same moment
+        type: number
+        default: 4
+      tries:
+        description: Suite runs each agent may use to get one green run
+        type: number
+        default: 8
+
+# Read-only token, no secrets: the benchmark needs nothing else.
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Benchmark (manual)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      # Actions are pinned to a commit, so a moved tag cannot change what runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The published run's rule, scaled to this runner instead of tuned to it:
+      # threads per suite = max(1, round(2 × cores / agents)), so the agents ask for about twice the busy threads the
+      # runner has; memory per thread is 400 MB unless agents × threads × 400 MB would be more than half the RAM, then
+      # it is lowered to fit half the RAM. Everything else stays at the published defaults (1.6 × slack, 5 to 30 s
+      # waits between tries).
+      - name: Scale the settings to this runner
+        id: settings
+        env:
+          AGENTS: ${{ inputs.agents }}
+        run: |
+          mkdir -p out
+          node bench/report.mjs settings --agents "$AGENTS" | tee out/settings.txt >> "$GITHUB_OUTPUT"
+
+      # The step stops a little before the job does, so the results are still summarized and uploaded.
+      - name: Run the benchmark
+        timeout-minutes: 110
+        shell: bash
+        env:
+          REPEAT: ${{ inputs.repeat }}
+          AGENTS: ${{ steps.settings.outputs.agents }}
+          TRIES: ${{ inputs.tries }}
+          THREADS: ${{ steps.settings.outputs.threads }}
+          MEM: ${{ steps.settings.outputs.mem }}
+        run: |
+          node bench/run.mjs --repeat "$REPEAT" --agents "$AGENTS" --threads "$THREADS" --mem "$MEM" \
+            --tries "$TRIES" --json out/results.json 2>&1 | tee out/output.txt
+
+      - name: Summarize the results
+        if: always()
+        run: node bench/report.mjs summary out/results.json >> "$GITHUB_STEP_SUMMARY"
+
+      # Every run is published, whether the results favour the queue or not, and also when the run failed.
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-results
+          path: out/
+          if-no-files-found: warn

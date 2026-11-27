@@ -93,6 +93,12 @@ for about half an hour; it uses a temporary state folder and repository):
 node bench/run.mjs
 ```
 
+Anyone can also run it on GitHub's macOS runner: in Actions, pick "Benchmark (manual)" and press Run workflow. It is
+not one of the required checks and only starts by hand. The runner is smaller than the Mac above, so the settings are
+scaled to it by the same rule (about twice as many busy threads as cores; less memory per thread only if 400 MB would
+not fit in half the RAM); the runner's cores and memory are recorded in the results. Every run uploads all its results
+(the raw JSON, the full output and the queue journals) as artifacts, whatever they show.
+
 ## Install
 
 Requirements: macOS, Node 22 or newer, git 2.31 or newer. No npm packages are downloaded.
