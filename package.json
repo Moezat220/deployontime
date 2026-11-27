@@ -9,7 +9,8 @@
     "node": ">=22"
   },
   "bin": {
-    "dotime-queue": "queue/cli.mjs"
+    "dotime-queue": "queue/cli.mjs",
+    "dotime-mcp": "mcp/server.mjs"
   },
   "scripts": {
     "test": "node --test"
