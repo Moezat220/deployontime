@@ -10,6 +10,7 @@ import { MAX_TIMER_MS } from "./timer.mjs";
 
 export const DEFAULTS = Object.freeze({
     slots: 2,
+    nestedPerJob: 2,
     maxWaitMin: 60,
     pollMs: 3000,
     health: { loadPerCore: 1.0, busyCpuPct: 90, minFreeMemPct: 20, minFreeDiskGB: 10, minBatteryPct: 15 },
@@ -35,10 +36,11 @@ export const DEFAULTS = Object.freeze({
 const above0 = [(n) => n > 0, "a number above 0"];
 const from0 = [(n) => n >= 0, "a number of 0 or more"];
 const from1 = [(n) => n >= 1, "a number of 1 or more"];
+const whole1 = [(n) => Number.isInteger(n) && n >= 1, "a whole number of 1 or more"];
 const pct = [(n) => n > 0 && n <= 100, "a number above 0 and at most 100"];
 // Numbers may be 0 or more unless a stricter rule is listed here.
 const NUMBER_RULES = {
-    "slots": from1, "pollMs": above0, "health.loadPerCore": above0, "health.busyCpuPct": pct,
+    "slots": from1, "nestedPerJob": whole1, "pollMs": above0, "health.loadPerCore": above0, "health.busyCpuPct": pct,
     "limits.defaultMin": above0, "limits.debugMin": above0, "limits.floorMin": above0, "limits.p90Factor": above0,
     "limits.longRunFactor": above0, "limits.longRunUnmeasuredMin": above0, "limits.minSamples": from1,
     "limits.windowDays": above0, "limits.priorityGrace": from1, "limits.orphanCheckMs": above0,
@@ -61,6 +63,7 @@ export function paths(env = process.env) {
         slots: join(home, "slots"),
         waitingLine: join(home, "line"),
         nested: join(home, "nested"),
+        places: join(home, "places"),
         journal: join(home, "journal.jsonl"),
         notices: join(home, "notices"),
         notifyLog: join(home, "notify.log"),

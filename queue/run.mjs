@@ -1,12 +1,12 @@
 // The `run` command, in three steps: planJob decides the limit and whether the job is refused, waitForSlot waits in
-// line until a slot is taken, and runJob runs the job in its own process group under the limit. runCommand chains
-// them and returns the exit code; it never ends the process itself. These come in through deps, so tests can drive
-// each step: the clock, sleeping and timers, the health reading, the commit read when the job is queued and again
-// when it starts, the current folder, starting the job, signals sent to it and signals received, messages,
-// notifications and stored notices, and the environment in which a nested run finds the marker of its outer job.
-// The rest is done directly: the slot, line and journal files in the folders named by files, the git calls for the
-// project name and the code fingerprint, the process table read by snapshot and killTree, and this process's own
-// pid and node binary.
+// line until a slot is taken (for a nested run, waitForPlace waits until a place under its parent job is), and runJob
+// runs the job in its own process group under the limit. runCommand chains them and returns the exit code; it never
+// ends the process itself. These come in through deps, so tests can drive each step: the clock, sleeping and timers,
+// the health reading, the commit read when the job is queued and again when it starts, the current folder, starting
+// the job, signals sent to it and signals received, messages, notifications and stored notices, and the environment
+// in which a nested run finds the marker of its parent job. The rest is done directly: the slot, line, nested, place
+// and journal files in the folders named by files, the git calls for the project name and the code fingerprint, the
+// process table read by snapshot and killTree, and this process's own pid and node binary.
 import { spawn as spawnProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -22,10 +22,10 @@ import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } fro
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
-import { JOB_MARKER, markerOf, outerJob } from "./nested.mjs";
+import { JOB_MARKER, markerOf, outerJob, placeKey } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
-import { addNested, enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
+import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -126,11 +126,66 @@ export async function waitForSlot(job, deps) {
     }
 }
 
+/** Waits until a nested run holds one of the settings.nestedPerJob places under its parent job. Only the parent's
+ *  places count: no slot, no line and no health gate, so a nested run can never wait for its own outer job. Nested
+ *  runs that wait under the same parent take the places in the order their notes were written. job: { pid, label,
+ *  parent, maxWait, settings, files }, where parent is the job from outerJob(). deps: { now, sleep, say, leaving },
+ *  as for waitForSlot. Returns { place, tally, waitFrom, atOnce }, where atOnce is true when the first look found a
+ *  place, { gaveUp: true, tally } or { left: signal, tally }. */
+export async function waitForPlace(job, deps) {
+    const { pid, label, parent, maxWait, settings, files } = job;
+    const max = settings.nestedPerJob;
+    const key = placeKey(parent);
+    const marker = markerOf(parent.file);
+    const under = (n) => n.outer === marker && n.outerPid === parent.pid && n.outerBorn === parent.born;
+    const tally = {};
+    const waitFrom = deps.now();
+    let shownPosition = 0;
+    let shownAt = 0;
+    for (;;) {
+        const signal = deps.leaving?.() ?? null;
+        if (signal) return { left: signal, tally };
+        const snap = snapshot({ dirs: files, prune: true });
+        const taken = snap.places.filter((p) => p.parent === key).length;
+        const waiters = snap.nested.filter((n) => n.waiting && under(n)).sort((a, b) => a.at - b.at || a.pid - b.pid);
+        const index = waiters.findIndex((n) => n.pid === pid);
+        const position = index < 0 ? waiters.length + 1 : index + 1;
+        if (position <= max - taken) {
+            const place = takePlace(pid, label, key, max, files);
+            if (place) return { place, tally, waitFrom, atOnce: shownPosition === 0 && !Object.keys(tally).length };
+        }
+        const ahead = position - 1;
+        const why = taken >= max
+            ? `no free nested place: ${taken} of ${max} taken under "${parent.label}", pid ${parent.pid}`
+            : ahead > 0 ? `not first in line under "${parent.label}": ${ahead} ahead`
+                : "place lost: another nested run took it a moment ago";
+        const now = deps.now();
+        const giveUp = shouldGiveUp({ startedAt: waitFrom, now, maxWaitMin: maxWait });
+        if (giveUp || position !== shownPosition || now - shownAt > REPEAT_WAIT_LINE_MS) {
+            const waited = `${minutesSince(waitFrom, now)} min waited`;
+            if (giveUp) {
+                deps.say(`gave up: exit ${EXIT.gaveUp}, nested position ${position}, ${waited}; ${why}; `
+                    + "hint: --max-wait 0 waits without limit, and nestedPerJob in config.json sets the places");
+                return { gaveUp: true, tally };
+            }
+            const limitText = maxWait ? `wait limit ${maxWait} min` : "no wait limit";
+            deps.say(`in line for a nested place: position ${position}, ${waited}, ${limitText}; ${why}`);
+            shownPosition = position;
+            shownAt = now;
+        }
+        const sleptFrom = deps.now();
+        await deps.sleep(settings.pollMs);
+        if (deps.leaving?.()) continue;
+        addWait(tally, [{ gate: "nested" }], deps.now() - sleptFrom);
+    }
+}
+
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
- *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver, marker }, where journal is the
+ *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver }, where journal is the
  *  writer from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in
  *  place, so the caller can remove the ones it had until then without a moment in which a signal finds none. The job
- *  finds marker, or else the marker of its slot, in JOB_MARKER. A nested run passes slot null and its outer marker.
+ *  finds the marker of its slot in JOB_MARKER. A nested run passes its note in place of a slot, so its job finds the
+ *  marker of that note, and the note gets the job's process group and is removed at the end the same way.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
@@ -148,7 +203,7 @@ export function runJob(job, slot, deps) {
     // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const stdio = ["inherit", "inherit", "inherit", "pipe"];
-    const env = { ...process.env, [JOB_MARKER]: job.marker ?? markerOf(slot) };
+    const env = { ...process.env, [JOB_MARKER]: markerOf(slot) };
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
@@ -327,7 +382,8 @@ export function jobFolder(ctx, deps) {
  *  the current folder is read, and only after the arguments were found valid, so a usage error is reported the same
  *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
  *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in is nested: once
- *  past the refusal check it runs at once, with no slot, no place in line and no health gate. */
+ *  past the refusal check it runs with no slot, no place in line and no health gate, as soon as a place under that
+ *  job is free. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -356,7 +412,7 @@ export async function runCommand(args, ctx, deps) {
     const plan = planJob({ ...request, head: before.head, fingerprint: print }, settings, rows);
     const pid = process.pid;
     const marker = deps.env?.[JOB_MARKER];
-    const outer = marker ? outerJob({ marker, pid, holders: snapshot({ dirs: files }).holders }) : null;
+    const outer = marker ? outerJob({ marker, pid, ...snapshot({ dirs: files }) }) : null;
     const details = outer ? { ...plan.details, nested: true } : plan.details;
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now,
@@ -372,7 +428,7 @@ export async function runCommand(args, ctx, deps) {
     }
     const { limit, kind } = plan;
     const job = { pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal };
-    if (outer) return runNested({ ...job, outer }, deps);
+    if (outer) return runNested({ ...job, outer, maxWait }, deps);
 
     // Wait in line. INT and TERM wake the wait, which then returns, so the one exit path in main() ends the process.
     const ticket = enqueue(pid, label, priority, files);
@@ -419,30 +475,53 @@ export async function runCommand(args, ctx, deps) {
     }
 }
 
-/** Runs a nested job: at once, in no slot, noted in the nested folder while it runs so `status` can show it under
- *  its outer job. job is the one runJob takes, without waitFrom, and with outer, the slot holder it runs inside.
- *  Everything from the handlers runJob adds onwards is the same as for a job in a slot. Until then leave handlers
- *  hold INT and TERM, as they do for a job in a slot, so a signal while the commit is read does not end the process
- *  with no journal line and the note left behind: runJob takes them over before such a signal is delivered, and it
- *  reaches the handlers of the job and is passed on to it. */
+/** Runs a nested job: in no slot, but in one of the places under its parent job, the one in outer, waiting for one
+ *  when all are taken. It is noted in the nested folder from the start, so `status` can show it under its parent, and
+ *  the note is the marker its own job is handed. job is the one runJob takes, without waitFrom, and with outer and
+ *  maxWait. While it waits, INT and TERM take it out as they take a job out of the line; from the handlers runJob adds
+ *  onwards everything is the same as for a job in a slot. The leave handlers stay until runJob has added its own, so
+ *  a signal while the commit is read does not end the process with no journal line and the note and place left
+ *  behind: it reaches the handlers of the job and is passed on to it. */
 async function runNested(job, deps) {
-    const { pid, label, outer, files } = job;
-    const { signals } = deps;
-    const marker = markerOf(outer.file);
-    deps.say(`nested: inside "${outer.label}", pid ${outer.pid}; `
-        + "starts at once: no slot, no place in line, no health gate");
-    // They only keep the default action, ending the process, away: no signal reaches them, see above.
-    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {}]);
+    const { pid, label, outer, files, journal, maxWait, settings } = job;
+    const { signals, say } = deps;
+    const intro = `nested: inside "${outer.label}", pid ${outer.pid}`;
+    const parent = { marker: markerOf(outer.file), pid: outer.pid, born: outer.born };
+    const note = addNested(pid, label, parent, files, { waiting: true });
+    let place = null;
+    const leave = () => {
+        rmSync(note, { force: true });
+        releaseSlot(place, pid);
+    };
+    signals.on("exit", leave);
+    let leaving = null;
+    const sleeps = wakeableSleep(deps.sleep);
+    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {
+        leaving ??= signal;
+        sleeps.wake();
+    }]);
     for (const [signal, handler] of leavers) signals.on(signal, handler);
     const dropLeavers = () => { for (const [signal, handler] of leavers) signals.off(signal, handler); };
-    const note = addNested(pid, label, { marker, pid: outer.pid, born: outer.born }, files);
-    const forget = () => rmSync(note, { force: true });
-    signals.on("exit", forget);
     try {
-        return await runJob({ ...job, marker, waitFrom: deps.now(), handOver: dropLeavers }, null, deps);
+        const waitDeps = { ...deps, sleep: sleeps.sleep, leaving: () => leaving };
+        const waited = await waitForPlace({ pid, label, parent: outer, maxWait, settings, files }, waitDeps);
+        journal.note({ tally: waited.tally });
+        place = waited.place ?? null;
+        if (waited.left || leaving) {
+            journal.finish("left", EXIT.left, { signal: waited.left ?? leaving });
+            return EXIT.left;
+        }
+        if (waited.gaveUp) {
+            journal.finish("gave-up", EXIT.gaveUp);
+            return EXIT.gaveUp;
+        }
+        say(waited.atOnce ? `${intro}; starts at once: no slot, no place in line, no health gate`
+            : `${intro}; starts now that a nested place is free: no slot, no place in line, no health gate`);
+        updateSlot(note, pid, { waiting: undefined });
+        return await runJob({ ...job, waitFrom: waited.waitFrom, handOver: dropLeavers }, note, deps);
     } finally {
         dropLeavers();
-        forget();
-        signals.off("exit", forget);
+        leave();
+        signals.off("exit", leave);
     }
 }

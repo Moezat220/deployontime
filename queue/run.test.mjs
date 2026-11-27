@@ -3,7 +3,7 @@
 // signals go only to processes started here, and a stand-in takes the signal handlers instead of this process.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -15,7 +15,8 @@ const { cmdStatus, runDeps } = await import("./cli.mjs");
 const { readHealth } = await import("./health.mjs");
 const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
-const { enqueue, takeSlot } = await import("./slots.mjs");
+const { enqueue, takePlace, takeSlot } = await import("./slots.mjs");
+const { placeKey } = await import("./nested.mjs");
 const { notify } = await import("./notify.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { gitState } = await import("./git.mjs");
@@ -263,6 +264,9 @@ test("runJob: the job finds the marker of its slot in DOTIME_JOB, for a run of t
 const nestedNotes = (box) => {
     try { return readdirSync(join(box.home, "nested")); } catch { return []; }
 };
+const places = (box) => {
+    try { return readdirSync(join(box.home, "places")); } catch { return []; }
+};
 /** A sandbox whose only slot is held by an ancestor of this process, and deps whose environment names that slot. The
  *  slot file carries the start time and process group a real holder has. */
 function nestedBox() {
@@ -278,12 +282,12 @@ test("run: a nested run takes no slot, joins no line, skips the gate, passes the
     const script = `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB)`;
     const args = ["run", "--label", "docs-site: unit tests", "--max-wait", "0.01", "--", NODE, "-e", script];
     assert.equal(await runCommand(args, box.ctx, d.deps), 0);
-    assert.equal(readFileSync(seen, "utf8"), "slot-0", "a run nested one level deeper is checked against the same slot");
+    assert.equal(readFileSync(seen, "utf8"), `nested-${process.pid}`, "a run nested one level deeper names this run as its parent");
     assert.deepEqual(d.said, [`nested: inside "docs-site: test suite", pid ${process.ppid}; starts at once: no slot, no place in line, no health gate`]);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.exit, line.nested, line.waitBy, line.waitMin, typeof line.startedAt], ["ran", 0, true, {}, 0, "string"]);
     assert.deepEqual(slots(box).map((slot) => slot.pid), [process.ppid]);
-    assert.deepEqual([readdirSync(join(box.home, "line")), nestedNotes(box), d.signals.eventNames()], [[], [], []]);
+    assert.deepEqual([readdirSync(join(box.home, "line")), nestedNotes(box), places(box), d.signals.eventNames()], [[], [], [], []]);
 });
 
 test("run: a nested run keeps the repeated-failure stop and its own run limit", async () => {
@@ -310,6 +314,57 @@ test("run: a signal reaches a nested job, which is journalled as stopped", async
     assert.equal(await run.result, 1);
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.signal, line.nested]), [["stopped", "SIGTERM", true]]);
     assert.deepEqual([nestedNotes(box), d.signals.eventNames()], [[], []]);
+});
+
+/** A nested sandbox with nestedPerJob 1 whose one place under the outer job is held by this file's parent. */
+function fullPlacesBox(config = {}) {
+    const box = sandbox({ slots: 1, nestedPerJob: 1, ...config });
+    const born = Date.now() - parseElapsed(probeProcessAges([process.ppid])).get(process.ppid) * 1000;
+    const slot = takeSlot(process.ppid, "docs-site: test suite", 1, { born, pgid: probeGroupOf(process.ppid) }, box.ctx.files);
+    const outer = JSON.parse(readFileSync(slot, "utf8"));
+    const blocker = takePlace(process.ppid, "docs-site: lint", placeKey({ file: slot, born: outer.born }), 1, box.ctx.files);
+    return { box, blocker };
+}
+
+test("run: a nested run whose parent's places are all taken waits for one, and gives up with exit 75 at its wait limit", async () => {
+    const { box, blocker } = fullPlacesBox({ pollMs: 3000 }), clock = fakeClock();
+    const d = nestedDeps(box, { now: clock.now, sleep: clock.sleep, spawn: assert.fail });
+    const args = ["run", "--label", "docs-site: unit tests", "--max-wait", "0.5", "--", NODE, "-e", "process.exit(0)"];
+    assert.equal(await runCommand(args, box.ctx, d.deps), EXIT.gaveUp);
+    const why = `no free nested place: 1 of 1 taken under "docs-site: test suite", pid ${process.ppid}`;
+    assert.deepEqual(d.said, [
+        `in line for a nested place: position 1, 0 min waited, wait limit 0.5 min; ${why}`,
+        `gave up: exit 75, nested position 1, 1 min waited; ${why}; hint: --max-wait 0 waits without limit, and nestedPerJob in config.json sets the places`,
+    ]);
+    const [line] = journal(box);
+    assert.deepEqual([line.outcome, line.exit, line.nested, line.startedAt, line.waitBy], ["gave-up", 75, true, null, { nested: 0.5 }]);
+    assert.equal(line.waitMin, 0.5, "the wait is journalled");
+    assert.deepEqual([nestedNotes(box), places(box), readdirSync(join(box.home, "line")), d.signals.eventNames()], [[], [blocker.split("/").at(-1)], [], []]);
+    assert.deepEqual(slots(box).map((slot) => slot.pid), [process.ppid], "no slot was taken or freed");
+});
+
+test("run: a nested run that waits for a place starts once its parent's place is freed, without the health gate", async () => {
+    const { box, blocker } = fullPlacesBox(), d = nestedDeps(box);
+    const run = settle(runCommand(["run", "--label", "docs-site: unit tests", "--max-wait", "0", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps));
+    await until(() => d.said.length === 1);
+    assert.equal(nestedNotes(box).length, 1);
+    assert.equal(JSON.parse(readFileSync(join(box.home, "nested", nestedNotes(box)[0]), "utf8")).waiting, true);
+    assert.equal(run.done, false);
+    rmSync(blocker);
+    assert.equal(await run.result, 0);
+    const started = "starts now that a nested place is free: no slot, no place in line, no health gate";
+    assert.equal(d.said.at(-1), `nested: inside "docs-site: test suite", pid ${process.ppid}; ${started}`);
+    assert.deepEqual([journal(box)[0].outcome, journal(box)[0].nested, nestedNotes(box), places(box)], ["ran", true, [], []]);
+});
+
+test("run: a signal while a nested run waits for a place ends it with 130 and leaves no place, note or line entry", async () => {
+    const { box, blocker } = fullPlacesBox(), d = nestedDeps(box, { spawn: assert.fail });
+    const run = settle(runCommand(["run", "--label", "docs-site: unit tests", "--max-wait", "0", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps));
+    await until(() => d.said.length === 1);
+    d.signals.emit("SIGTERM");
+    assert.equal(await run.result, EXIT.left);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal, line.nested]), [["left", 130, "SIGTERM", true]]);
+    assert.deepEqual([nestedNotes(box), places(box), readdirSync(join(box.home, "line")), d.signals.eventNames()], [[], [blocker.split("/").at(-1)], [], []]);
 });
 
 // ---- runCommand, with a made-up reading or a clock moved by hand ----

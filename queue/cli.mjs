@@ -16,14 +16,15 @@ import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
-// A nested run belongs to a holder only when it names the holder's slot, pid and start time: a later job in the
+// A nested run belongs to a job only when it names that job's slot or note, pid and start time: a later job in the
 // same slot is another job.
 const insideOf = (entry, h) => !!h.file && entry.outer === markerOf(h.file) && entry.outerPid === h.pid
     && entry.outerBorn === h.born;
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". nested: the nested runs, each shown under the
- *  job whose slot, pid and start time it names in outer, outerPid and outerBorn; they hold no slot and are not
- *  counted. */
+ *  job whose slot or note, pid and start time it names in outer, outerPid and outerBorn, so a nested run inside a
+ *  nested run is shown one step further in; they hold no slot and are not counted. One that waits for a place under
+ *  its parent says so. */
 export function statusLines({ holders, queue, nested = [], gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
     for (const h of holders) {
@@ -40,10 +41,7 @@ export function statusLines({ holders, queue, nested = [], gate, max, now = Date
             if (h.longRunMin && ranMin > h.longRunMin) facts.push(`past the ${h.longRunMin} min long-run mark`);
         }
         lines.push(`running "${h.label}": ${facts.join(", ")}`);
-        for (const n of nested.filter((entry) => insideOf(entry, h))) {
-            const ran = `${minutesSince(n.at, now)} min so far`;
-            lines.push(`  nested "${n.label}": pid ${n.pid}, ${ran}, no slot of its own`);
-        }
+        nestedLines(h, nested, now, 1, lines);
     }
     queue.forEach((q, i) => {
         const priority = q.priority ? ", priority" : "";
@@ -51,6 +49,17 @@ export function statusLines({ holders, queue, nested = [], gate, max, now = Date
     });
     lines.push(gate ? `gate: shut; ${gate}` : "gate: open");
     return lines;
+}
+
+// The nested runs inside parent, each followed by its own, depth steps in. A run is shown once at most.
+function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
+    for (const n of nested.filter((entry) => insideOf(entry, parent) && !shown.has(entry))) {
+        shown.add(n);
+        const ran = `${minutesSince(n.at, now)} min so far`;
+        const state = n.waiting ? `waiting for a nested place under "${parent.label}"` : "no slot of its own";
+        lines.push(`${"  ".repeat(depth)}nested "${n.label}": pid ${n.pid}, ${ran}, ${state}`);
+        nestedLines(n, nested, now, depth + 1, lines, shown);
+    }
 }
 
 /** One line of `history` for a project's totals. */

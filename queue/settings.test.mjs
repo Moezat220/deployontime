@@ -146,6 +146,20 @@ test("loadSettings: a config file that is not a JSON object is ignored as a whol
     }
 });
 
+test("loadSettings: nestedPerJob is a whole number of 1 or more, 2 by default", () => {
+    assert.equal(DEFAULTS.nestedPerJob, 2);
+    for (const value of [1, 3, 40]) {
+        const { settings, warnings } = load({ nestedPerJob: value });
+        assert.deepEqual([settings.nestedPerJob, warnings], [value, []]);
+    }
+    for (const value of [0, -1, 1.5, 0.5, "2", null, true]) {
+        const { settings, warnings } = load({ nestedPerJob: value });
+        assert.equal(settings.nestedPerJob, 2, JSON.stringify(value));
+        assert.deepEqual(warnings, [`setting ignored: nestedPerJob is ${JSON.stringify(value)}, `
+            + "needs a whole number of 1 or more, default 2 kept"]);
+    }
+});
+
 test("loadSettings: a fractional slot count is rounded down", () => {
     assert.equal(load({ slots: 3.8 }).settings.slots, 3);
 });
@@ -185,7 +199,8 @@ test("README settings table: every number setting has a row, and each row's mark
     };
     for (const [, key, , meaning] of rows) {
         // [value, refused?] pairs that tell the three markings apart
-        const probes = /At least 1[.;]/.test(meaning) ? [[0, true], [0.5, true], [1.5, false]]
+        const probes = /A whole number, at least 1\./.test(meaning) ? [[0, true], [0.5, true], [1, false], [1.5, true], [2, false]]
+            : /At least 1[.;]/.test(meaning) ? [[0, true], [0.5, true], [1.5, false]]
             : /Above 0\./.test(meaning) ? [[0, true], [0.5, false], [-1, true]]
             : /Above 0, at most 100\./.test(meaning) ? [[0, true], [0.5, false], [100, false], [100.5, true]]
             : [[0, false], [-1, true]];

@@ -110,6 +110,29 @@ test("statusLines: a nested run is shown under the job it runs in and is not cou
     ]);
 });
 
+test("statusLines: a nested run inside a nested run is shown one step further in, and a waiting one says so", () => {
+    const now = Date.UTC(2031, 5, 9, 10, 0);
+    const holders = [{ file: "/state/slots/slot-0.json", label: "docs-site: test suite", pid: 3201, born: now - 6 * MINUTE, at: now - 5 * MINUTE }];
+    const run = (pid, label, ago, outer, more = {}) => ({
+        file: `/state/nested/nested-${pid}.json`, label, pid, born: now - ago * MINUTE, at: now - ago * MINUTE, ...outer, ...more,
+    });
+    const inSlot = { outer: "slot-0", outerPid: 3201, outerBorn: now - 6 * MINUTE };
+    const inUnit = { outer: "nested-3205", outerPid: 3205, outerBorn: now - 4 * MINUTE };
+    const nested = [
+        run(3205, "docs-site: unit tests", 4, inSlot), run(3207, "docs-site: parser tests", 2, inUnit),
+        run(3209, "docs-site: lexer tests", 1, inUnit, { waiting: true }), run(3210, "docs-site: link check", 1, inSlot, { waiting: true }),
+    ];
+    assert.deepEqual(statusLines({ holders, queue: [], nested, gate: "no free slot: 1 of 1 taken", max: 1, now }), [
+        "slots: 1 of 1 taken, 0 waiting",
+        'running "docs-site: test suite": pid 3201, 5 min so far, limit unknown',
+        '  nested "docs-site: unit tests": pid 3205, 4 min so far, no slot of its own',
+        '    nested "docs-site: parser tests": pid 3207, 2 min so far, no slot of its own',
+        '    nested "docs-site: lexer tests": pid 3209, 1 min so far, waiting for a nested place under "docs-site: unit tests"',
+        '  nested "docs-site: link check": pid 3210, 1 min so far, waiting for a nested place under "docs-site: test suite"',
+        "gate: shut; no free slot: 1 of 1 taken",
+    ]);
+});
+
 test("statusLines: a nested run is not shown under a later job that took the same slot after its outer job ended", () => {
     const now = Date.UTC(2031, 5, 9, 10, 0);
     const holders = [{ file: "/state/slots/slot-0.json", label: "shop-api: e2e", pid: 3301, born: now - 2 * MINUTE, at: now - MINUTE }];
@@ -265,6 +288,84 @@ test("run: a copied, stale or malformed marker is ignored and the run queues as 
         assert.equal(result.stderr.includes("nested"), false, marker);
     }
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.nested ?? false]), [["gave-up", false], ["gave-up", false], ["gave-up", false]]);
+    other.kill("SIGKILL");
+});
+
+const J = JSON.stringify;
+const places = (box) => {
+    try { return readdirSync(join(box.home, "places")); } catch { return []; }
+};
+/** A job script that saves the marker it was given in file and then, when next is given, runs those words and exits
+ *  the way they did. */
+const saveMarker = (file, next = null) => `require("node:fs").writeFileSync(${J(file)}, process.env.DOTIME_JOB ?? ""); `
+    + (next ? `const r = require("node:child_process").spawnSync(${J(next[0])}, ${J(next.slice(1))}, { stdio: "inherit" }); process.exit(r.status ?? 1);` : "");
+
+test("run: one job that starts 20 nested runs side by side never has more than nestedPerJob of them running", async () => {
+    const box = sandbox({ config: { slots: 1, nestedPerJob: 2 } }), times = join(box.work, "times");
+    mkdirSync(times);
+    const shard = (i) => `const fs = require("node:fs"), dir = ${J(times)}; fs.writeFileSync(dir + "/${i}.start", String(Date.now())); `
+        + `setTimeout(() => fs.writeFileSync(dir + "/${i}.end", String(Date.now())), 250);`;
+    const words = Array.from({ length: 20 }, (_, i) => [CLI, "run", "--label", `docs-site: shard ${i}`, "--max-wait", "0", "--", NODE, "-e", shard(i)]);
+    const fanOut = `const { spawn } = require("node:child_process"); const all = ${J(words)}; `
+        + `Promise.all(all.map((words) => new Promise((done) => spawn(${J(NODE)}, words, { stdio: "ignore" }).on("exit", done))))`
+        + `.then((codes) => { console.log(JSON.stringify(codes)); process.exit(codes.every((c) => c === 0) ? 0 : 1); });`;
+    const outer = await cli(box, ["run", "--label", "docs-site: test suite", "--", NODE, "-e", fanOut]);
+    assert.equal(outer.code, 0, outer.stderr);
+    assert.deepEqual(JSON.parse(outer.stdout), Array(20).fill(0), "all 20 finished with exit 0");
+    const events = [];
+    for (let i = 0; i < 20; i++) {
+        events.push([Number(readFileSync(join(times, `${i}.start`), "utf8")), 1], [Number(readFileSync(join(times, `${i}.end`), "utf8")), -1]);
+    }
+    let running = 0, most = 0;
+    for (const [, step] of events.sort((a, b) => a[0] - b[0] || a[1] - b[1])) most = Math.max(most, running += step);
+    assert.equal(most, 2, "at most 2 ran at once, and the places were used");
+    const lines = journal(box);
+    assert.deepEqual([lines.length, lines.filter((line) => line.nested && line.outcome === "ran" && line.exit === 0).length], [21, 20]);
+    assert.equal(lines.filter((line) => "nested" in line.waitBy).length >= 9, true, "the waits for a place are journalled");
+    assert.deepEqual([slots(box), nestedNotes(box), places(box)], [[], [], []]);
+});
+
+test("run: three levels of nesting finish with nestedPerJob 1 and one slot, each level the parent of the next", async () => {
+    const box = sandbox({ config: { slots: 1, nestedPerJob: 1 } }), seen = [0, 1, 2, 3].map((n) => join(box.work, `marker-${n}`));
+    const level3 = innerRun("docs-site: level 3", NODE, "-e", saveMarker(seen[3]));
+    const level2 = innerRun("docs-site: level 2", NODE, "-e", saveMarker(seen[2], level3));
+    const level1 = innerRun("docs-site: level 1", NODE, "-e", saveMarker(seen[1], level2));
+    const outer = await cli(box, ["run", "--label", "docs-site: test suite", "--max-wait", "0.05", "--", NODE, "-e", saveMarker(seen[0], level1)]);
+    assert.equal(outer.code, 0, outer.stderr);
+    assert.equal(outer.stderr.includes("gave up"), false);
+    const markers = seen.map((file) => readFileSync(file, "utf8"));
+    assert.equal(markers[0], "slot-0");
+    for (const n of [1, 2, 3]) assert.match(markers[n], /^nested-\d+$/, `level ${n} is handed its own parent's marker`);
+    assert.equal(new Set(markers).size, 4, "each level names a different parent");
+    const lines = journal(box).map((line) => [line.label, line.outcome, line.exit, line.nested ?? false]);
+    assert.deepEqual(lines, [
+        ["docs-site: level 3", "ran", 0, true], ["docs-site: level 2", "ran", 0, true], ["docs-site: level 1", "ran", 0, true],
+        ["docs-site: test suite", "ran", 0, false],
+    ]);
+    assert.deepEqual([slots(box), nestedNotes(box), places(box)], [[], [], []]);
+});
+
+test("run: a nested run's marker copied out of its job, or left over after it, is ignored and the run queues as usual", async () => {
+    const box = sandbox({ config: { slots: 1 } }), seen = join(box.work, "marker"), release = join(box.work, "release");
+    const waitThenEnd = `require("node:fs").writeFileSync(${J(seen)}, process.env.DOTIME_JOB); ${untilFile(release)}`;
+    const outer = start(box, ["run", "--label", "docs-site: test suite", "--", ...innerRun("docs-site: unit tests", NODE, "-e", waitThenEnd)]);
+    await until(() => existsSync(seen));
+    const marker = readFileSync(seen, "utf8");
+    assert.match(marker, /^nested-\d+$/);
+    const env = { ...box.env, DOTIME_JOB: marker };
+    const tryWith = (label) => cli(box, ["run", "--label", label, "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"], { env });
+    const copied = await tryWith("docs-site: lint");
+    assert.deepEqual([copied.code, copied.stdout], [75, ""]);
+    assert.equal(copied.stderr.includes('no free slot: 1 of 1 taken, by "docs-site: test suite"'), true, copied.stderr);
+    assert.equal(copied.stderr.includes("nested"), false);
+    assert.equal(places(box).length, 1, "the copied marker took no place");
+    writeFileSync(release, "");
+    assert.equal((await outer.done).code, 0);
+    const other = track(spawn(NODE, ["-e", FOREVER], { stdio: "ignore" }));
+    takeSlot(other.pid, "shop-api: e2e", 1, {}, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
+    const stale = await tryWith("docs-site: link check");
+    assert.deepEqual([stale.code, stale.stdout, stale.stderr.includes("nested")], [75, "", false]);
+    assert.deepEqual(journal(box).filter((line) => line.outcome === "gave-up").map((line) => line.nested ?? false), [false, false]);
     other.kill("SIGKILL");
 });
 

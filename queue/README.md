@@ -141,18 +141,27 @@ Details:
 **Nested runs.** A job may run the queue itself, for example an `npm test` script that calls `dotime-queue run`, or
 an agent at work inside a queued job. Such an inner run would wait for a slot that its own outer job holds, and with
 one slot it would never get one. So `run` hands every job it starts the variable `DOTIME_JOB`, which names the slot
-the job holds, and a `run` that finds it is a nested run: it starts at once, takes no slot, joins no line and does
-not wait for the health gate, because the outer job was already let through. Everything else stays the same: the
-option checks, the refusal of a check that failed twice, a run limit of its own, the handling of INT, TERM and HUP,
-and a journal line, marked `nested: true` and with no waiting time booked, so pass stamps and `history` see it as
-usual. A nested run says so on a `nested:` line when it starts. Several nested runs started side by side inside one
-job all run at once: none of them waits for a slot or the health gate, so a job that fans out to many inner runs
-should keep its own parallelism in check.
+the job holds, and a `run` that finds it is a nested run: it takes no slot, joins no line and does not wait for the
+health gate, because the outer job was already let through. Everything else stays the same: the option checks, the
+refusal of a check that failed twice, a run limit of its own, the handling of INT, TERM and HUP, and a journal line,
+marked `nested: true`, so pass stamps and `history` see it as usual. A nested run says so on a `nested:` line when
+it starts.
 
-`DOTIME_JOB` is trusted only while the slot it names is held by a job that has started, whose slot file names its
-start time and process group, and the process holding that slot is an ancestor of the new run. A copy of the
-variable in another shell, or one left in a program that outlived its job, fails that check, and that run queues as
-usual. The variable therefore cannot be used to skip the line from outside a job.
+One job may run at most `nestedPerJob` nested runs at once (default 2). Each running nested run holds one of the
+places of the job it was started in, its parent. A further nested run of the same parent waits for one of those
+places, and only for them: never for a slot and never for the health gate, so it cannot wait for its own outer job.
+Nested runs waiting under the same parent take the places in the order they started. While it waits, a nested run
+prints an `in line for a nested place:` line that names its parent, gives up with exit 75 at the `--max-wait` limit,
+leaves with exit 130 on INT or TERM, and books its waiting time in the journal under `nested`, as a run in line does.
+A nested run inside a nested run counts against its own parent, not against the outermost job: each nested run hands
+its job a `DOTIME_JOB` that names the nested run itself. So with `nestedPerJob` at 1 several levels of nesting still
+run, each level in the one place of the level above.
+
+`DOTIME_JOB` is trusted only while the slot or nested run it names belongs to a job that has started, whose file
+names its start time and process group, and the process holding that slot or running that nested run is an ancestor
+of the new run. A nested run that still waits for a place is not trusted as a parent yet. A copy of the variable in
+another shell, or one left in a program that outlived its job, fails that check, and that run queues as usual. The
+variable therefore cannot be used to skip the line from outside a job.
 
 ### `status`
 
@@ -162,8 +171,9 @@ dotime-queue status
 
 Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
-with nothing after it prints the same as `status`. A [nested run](#run) is shown indented under the job it runs in;
-it holds no slot and is not counted as one.
+with nothing after it prints the same as `status`. A [nested run](#run) is shown indented under the job it runs in,
+and a nested run inside a nested run one step further in; it holds no slot and is not counted as one. A nested run
+that waits for a place under its parent says `waiting for a nested place` and names the parent.
 
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
@@ -490,7 +500,8 @@ A value that does not fit is replaced by its default, with one warning on stderr
 
 - of the wrong type;
 - a negative number;
-- a number the table rules out. "Above 0": 0 is too low. "At least 1": anything under 1 is too low;
+- a number the table rules out. "Above 0": 0 is too low. "At least 1": anything under 1 is too low. "A whole
+  number": a fraction does not fit either;
 - a time in milliseconds (a key ending in `Ms`) above 2147483647, about 24 days;
 - a pattern that does not compile.
 
@@ -501,6 +512,7 @@ default. Only a missing file is silent.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `slots` | 2 | Jobs that may run at once. At least 1; a fraction is rounded down. |
+| `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
@@ -553,14 +565,15 @@ Environment variables:
 | `DOTIME_TZ` | `UTC` | Time zone (an IANA zone name) for printed times and for calendar days. |
 | `DOTIME_NOTIFY` | not set | `log`: notices go to the log file only. |
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
-| `DOTIME_JOB` | set by `run` | Given to each job; names the slot it holds. Not a setting: see nested runs under [`run`](#run). |
+| `DOTIME_JOB` | set by `run` | Given to each job; names the slot it holds, or for a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
 
 ## Files in the state folder
 
 | File | Content |
 | --- | --- |
 | `config.json` | Settings. Optional. |
-| `nested/` | One small file per nested run while it runs, so `status` can show it under its outer job; it names the slot, pid and start time of that job, so it never shows under a later job in the same slot. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
+| `nested/` | One small file per nested run while it waits for a place and while it runs, so `status` can show it under its parent job; it names the slot or nested run, pid and start time of that job, so it never shows under a later job in the same slot. Its name without `.json` is the `DOTIME_JOB` the run hands its own job. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
+| `places/` | One small file per place a running nested run holds under its parent job, named after that job's marker and start time and the place number. Claimed and freed the same way as a slot, and the file of a run that died goes the same way as one in `slots/`. |
 | `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
 | `journal.jsonl` | One line per job. |
 | `notices/` | Long-run and idle-slot notices, one file each. |
@@ -569,7 +582,8 @@ Environment variables:
 | `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
-A file in `slots/`, `line/` or `nested/` is also removed when its pid now belongs to a process that started later.
+A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
+started later.
 
 Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`,
 `cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
@@ -596,14 +610,14 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
 | `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
-| `run.mjs` | The `run` command in steps: plan the limit, wait for a slot, run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
+| `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
-| `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/` and `nested/`. |
+| `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
-| `slots.mjs` | Slot, waiting-line and nested-run files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/` and `nested/`; runs `ps` for process ages. |
-| `nested.mjs` | Nested runs: the marker a job is given, and the check that a marker is genuine. | library | Runs `ps` when no listing is given. |
+| `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |
+| `nested.mjs` | Nested runs: the marker a job is given, the check that a marker is genuine, and the key of a parent's places. | library | Runs `ps` when no listing is given. |
 | `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
 | `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json` and removes its abandoned temporary files. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |
