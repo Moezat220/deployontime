@@ -10,13 +10,16 @@
 // It is heavy on purpose: it loads every core. Run it on an otherwise quiet computer.
 //
 // usage: node bench/run.mjs [--repeat 3] [--agents 4] [--threads 5] [--tests 20] [--mem 400] [--tries 8]
-//                           [--work 250] [--slack 1.6]
+//                           [--work 250] [--slack 1.6] [--json results.json]
 // --mem is megabytes per thread, --work the CPU work per test, --slack how much slower than alone a test may get.
+// --json writes the raw results (settings, machine, every round and agent) to a file after each round, and copies
+// each queued round's journal into a journals folder beside it.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { machine, median, results } from "./report.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SUITE = join(here, "suite.mjs");
@@ -26,6 +29,7 @@ const defaults = { repeat: 3, agents: 4, threads: 5, tests: 20, mem: 400, tries:
 const opts = { ...defaults };
 const argv = process.argv.slice(2);
 const given = new Set();
+let jsonFile = null;
 for (let i = 0; i < argv.length; i += 2) {
     const name = argv[i].replace(/^--/, "");
     if (given.has(name)) {
@@ -33,6 +37,10 @@ for (let i = 0; i < argv.length; i += 2) {
         process.exit(2);
     }
     given.add(name);
+    if (argv[i] === "--json" && argv[i + 1] && !argv[i + 1].startsWith("--")) {
+        jsonFile = resolve(argv[i + 1]);
+        continue;
+    }
     const value = Number(argv[i + 1]);
     const whole = name !== "slack";
     if (!argv[i].startsWith("--") || !Object.hasOwn(defaults, name) || !Number.isFinite(value) || value <= 0 ||
@@ -86,11 +94,11 @@ async function agent(n, way, deadline, env, repo, repeat) {
         else errors++;
         if (run === 1) firstFailed = result?.failed ?? null;
         if (code === 0 && result) {
-            return { runs, errors, seconds: (Date.now() - start) / 1000, green: true, firstFailed };
+            return { agent: n, runs, errors, seconds: (Date.now() - start) / 1000, green: true, firstFailed };
         }
         if (run < opts.tries) await sleep((5 + random() * 25) * 1000);
     }
-    return { runs, errors, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
+    return { agent: n, runs, errors, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
 }
 
 async function quiet() {
@@ -113,16 +121,28 @@ async function round(way, deadline, repo, repeat) {
     const start = Date.now();
     const starts = Array.from({ length: opts.agents }, (_, i) => agent(i + 1, way, deadline, env, repo, repeat));
     const agents = await Promise.all(starts);
+    if (jsonFile && existsSync(join(state, "journal.jsonl"))) {
+        mkdirSync(join(dirname(jsonFile), "journals"), { recursive: true });
+        copyFileSync(join(state, "journal.jsonl"), join(dirname(jsonFile), "journals", `round-${repeat}-${way}.jsonl`));
+    }
     return {
         seconds: Math.round((Date.now() - start) / 1000),
         runs: agents.reduce((sum, a) => sum + a.runs, 0),
         errors: agents.reduce((sum, a) => sum + a.errors, 0),
         firstFailed: agents.reduce((sum, a) => sum + (a.firstFailed ?? 0), 0),
         neverGreen: agents.filter((a) => !a.green).length,
+        agents,
     };
 }
 
-const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+// With --json, the results so far are written after each round, so a run that is stopped still leaves them.
+const measured = { deadlineMs: null, aloneMedianMs: null, rounds: [] };
+function writeResults(complete, error) {
+    if (!jsonFile) return;
+    mkdirSync(dirname(jsonFile), { recursive: true });
+    const data = results({ options: opts, ...measured, machine: machine(join(here, "..")), complete, error });
+    writeFileSync(jsonFile, JSON.stringify(data, null, 2) + "\n");
+}
 
 const home = mkdtempSync(join(tmpdir(), "dotime-bench-"));
 const repo = join(home, "repo");
@@ -155,11 +175,13 @@ async function main() {
         const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), process.env, repo);
         if (!alone.result) {
             console.error(`bench: the suite did not run on its own (exit ${alone.code}); nothing to measure`);
+            writeResults(false, `the suite did not run on its own (exit ${alone.code})`);
             if (alone.err.trim()) console.error(alone.err.trim());
             process.exitCode = 1;
             return;
         }
         const deadline = Math.round(alone.result.medianMs * opts.slack);
+        Object.assign(measured, { deadlineMs: deadline, aloneMedianMs: alone.result.medianMs });
         console.log(`computer: ${cpus().length} cores · median test with one suite running alone: ` +
             `${alone.result.medianMs} ms · ` +
             `a test fails above ${deadline} ms`);
@@ -171,6 +193,8 @@ async function main() {
             for (const way of ["direct", "queue"]) {
                 const result = await round(way, deadline, repo, r);
                 rows[way].push(result);
+                measured.rounds.push({ way, repeat: r, ...result });
+                writeResults(false, "the run stopped before the last round");
                 const end = result.neverGreen
                     ? `${result.neverGreen} of ${opts.agents} agents still not green after ${opts.tries} tries ` +
                       `(${result.seconds} s)`
@@ -192,6 +216,7 @@ async function main() {
                 `suite runs ${median(pick("runs"))} (${range("runs")}), ` +
                 `first-run failures ${median(pick("firstFailed"))} (${range("firstFailed")})`);
         }
+        writeResults(true);
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
