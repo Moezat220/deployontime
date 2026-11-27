@@ -153,9 +153,10 @@ It skips a job only when all of these hold:
 
 - The job's kind is `test` or `lint`, as guessed from the label and command or given with `--kind` (see
   [Projects and kinds](#projects-and-kinds)). A `build`, `deploy`, `debug` or `other` job always runs, because its
-  output may be needed. The guess takes the first kind that matches, and `test` comes before `build`: a job whose
-  label or command names both, such as `"shop-api: build and test"`, is a `test` job and can be skipped. Give such a
-  job `--kind build` when its output is needed.
+  output may be needed. The guess takes the first kind that matches, and `test` comes before `build`, so a job whose
+  label or command names both, such as `"shop-api: build and test"` or `sh -c "npm run build && vitest"`, is a `test`
+  job. Such a job is still never skipped: when the label's task part or the command also matches a `build` or
+  `deploy` word, `run` runs it. Only `--kind test` or `--kind lint`, given on the command line, lets it be skipped.
 - The folder is a git checkout at a commit, with no uncommitted or untracked changes now.
 - The journal holds a pass stamp for this check, found by the rules of [`passed`](#passed) but only among runs
   started in the same folder, with the same label and the same command line: on this commit, begun with a clean tree,
@@ -163,14 +164,25 @@ It skips a job only when all of these hold:
   another folder of the same repository, such as another package, never counts.
 - That passing run has the same code fingerprint as the job now (see [Repeated failures](#repeated-failures)). With a
   clean tree, the fingerprint covers the files the command names, so a script outside git that has changed since,
-  such as `node ../tools/check.js`, makes the job run.
+  such as `node ../tools/check.js`, makes the job run. It does not cover a folder the command names (only a file is
+  read, not what is in a folder), nor a named file of 4 MB or more.
 - No run of the same check in this folder on this commit failed or hit its run limit after that pass, not even one
   that began with uncommitted changes.
 
 The stamp has no age limit. Other things outside git are not part of the check: files the command reads without
-naming them, installed packages in an ignored folder, tools and the environment. After changing those, or to run a
-flaky test again, give `--no-skip`: the job then runs, and its result counts like that of any run. A nested run
-follows the same rules. A check that is refused because it failed twice is refused before this is looked at.
+naming them, installed packages in an ignored folder, tools and the environment. That includes a live target:
+end-to-end or smoke tests against a deployed site are skipped on the same commit even after a redeploy, so give such
+a job `--no-skip` or `--kind other`. After changing any of those, or to run a flaky test again, give `--no-skip`:
+the job then runs, and its result counts like that of any run. A check that is refused because it failed twice is
+refused before this is looked at.
+
+A nested run follows the same rules. `--no-skip` on a job also reaches every run nested in it, at any depth: `run`
+hands the job the variable `DOTIME_NO_SKIP=1`, and a nested run that finds it runs as with `--no-skip` and hands it on
+in turn. Only a nested run heeds the variable, and a job gets it only from its own `--no-skip` or from the job it is
+nested in, never from the shell that started the queue.
+
+`run` prints nothing when it does not skip. To see why, look at the check's own lines in the journal: `cwd`, `cmd`,
+`head`, `clean`, `fp` and `outcome` show which of the conditions above did not hold.
 
 A skipped job is journalled with outcome `skipped`, exit 0, its commit, and the stamp it relied on in `stamp`
 (`head`, `endedAt` and `runMin` of the passing run). A skipped line is never a stamp itself, never a sample for the
@@ -255,16 +267,19 @@ dotime-queue passed [--match <text>] [--cwd <dir>]
 
 Answers "did this check already pass on exactly this code?". `run` asks the same for every `test` or `lint` job
 and skips one that already passed (see **Checks that already passed** under [`run`](#run)), so an agent does not need
-to call `passed` first. It still may, for example to see why a check was not skipped, or for a build.
+to call `passed` first. It still may, for example for a build. `passed` asks a broader question than `run`: it looks
+at every run in the repository, not only at those of one folder, label, command and fingerprint, so it can show a
+stamp for a check that `run` rightly runs again.
 
 It works only on a clean, committed tree: the folder must have no uncommitted or untracked changes now, and the run
 it finds must have started with none. With local changes it always prints `no stamp:` and exits 1.
 
 It looks at runs started in a repository of the same name, on the commit the folder is at now, that began with a
-clean tree. Runs that were stopped or timed out are skipped, since they say nothing about the code. If the newest
-of what is left exited 0, it prints a `stamp:` line and exits 0. In every other case it prints a `no stamp:` line
-that says why and exits 1. `--match` keeps only runs whose label or command contains the text, in any letter case;
-without it, the newest run of any check counts. `--cwd` asks about another folder. A folder outside git gives
+clean tree. Runs that were stopped or timed out are left out, since they say nothing about the code, and so are
+jobs that `run` skipped. If the newest of what is left exited 0, it prints a `stamp:` line and exits 0. In every
+other case it prints a `no stamp:` line that says why and exits 1. `--match` keeps only runs whose label or command
+contains the text, in any letter case; without it, the newest run of any check counts. `--cwd` asks about another
+folder. A folder outside git gives
 `no stamp: this folder is not a git checkout`, and a repository whose current branch has no commits yet
 (a new repository) gives `no stamp: the current branch has no commits yet`; both exit 1. Without `--cwd`, in a
 folder that was removed, `passed` says so, points to `--cwd <dir>` and exits 2.
@@ -634,6 +649,7 @@ Environment variables:
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
 | `DOTIME_JOB` | set by `run` | Given to each job; names the slot of the outermost job, also inside nested runs. Not a setting: see nested runs under [`run`](#run). |
 | `DOTIME_PARENT` | set by `run` | Given to each job; names its direct parent: the slot it holds, or for the job of a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
+| `DOTIME_NO_SKIP` | set by `run` | `1` in a job started with `--no-skip`, or nested in one; the runs nested in it are then never skipped. Not a setting: see **Checks that already passed** under [`run`](#run). |
 
 ## Files in the state folder
 

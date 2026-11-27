@@ -119,8 +119,9 @@ A test or lint run that prints "skipped:" already passed on this exact commit an
 of the -- only to run it again on purpose.
 ```
 
-You do not need to tell agents to call `dotime-queue passed` first: `run` checks for a pass by itself. An agent may
-still call it, for example to see why a check was not skipped.
+You do not need to tell agents to call `dotime-queue passed` first: `run` checks for a pass by itself, in the same
+folder, with the same label, command and code. `--no-skip` on an outer job also reaches the checks it runs through the
+queue.
 
 The text before the colon in a label is the project name; limits and history are kept per project.
 

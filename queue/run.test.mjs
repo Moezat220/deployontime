@@ -675,8 +675,8 @@ function countingJob() {
 }
 /** Runs the words with git reporting the given commit and tree for the work folder. nested: with the deps of a run
  *  inside the job that holds the slot. */
-async function runAt(box, args, { head = HEAD, clean = true, nested = false, now } = {}) {
-    const overrides = { gitState: () => ({ head, clean }), ...(now ? { now } : {}) };
+async function runAt(box, args, { head = HEAD, clean = true, nested = false, now, env } = {}) {
+    const overrides = { gitState: () => ({ head, clean }), ...(now ? { now } : {}), ...(env ? { env } : {}) };
     const d = (nested ? nestedDeps : makeDeps)(box, overrides);
     return { code: await runCommand(args, box.ctx, d.deps), said: d.said, signals: d.signals };
 }
@@ -730,6 +730,51 @@ test("run: no skip once a file the command names has changed outside git, as the
     // The edited script has passed now, and is skipped on that pass.
     assert.deepEqual((await runAt(box, job.args(label))).said, [skippedText(label)]);
     assert.deepEqual(outcomes(box), ["ran", "ran", "skipped"]);
+});
+
+test("run: a test job whose label or command also names a build or a deploy is skipped only with --kind test or lint", async () => {
+    for (const [label, flags, tail, second] of [
+        ["shop-api: build and test", [], null, "ran"],
+        ["shop-api: unit tests", [], "--build", "ran"],
+        ["shop-api: tests then deploy-preview", ["--kind", "test"], null, "skipped"],
+        ["shop-api: build and test", ["--kind", "test"], null, "skipped"],
+        ["shop-api: unit tests", ["--kind", "lint"], "--build", "skipped"],
+    ]) {
+        const box = sandbox(), job = countingJob(), what = `${label} ${flags.join(" ")} ${tail ?? ""}`;
+        for (let i = 0; i < 2; i++) assert.equal((await runAt(box, job.args(label, { flags, tail }))).code, 0, what);
+        assert.deepEqual(outcomes(box), ["ran", second], what);
+        assert.equal(journal(box)[0].kind, flags[1] ?? "test", what);
+    }
+});
+
+test("run: --no-skip on a job reaches the runs nested in it, at any depth, and only a nested run heeds the marker", async () => {
+    const box = nestedBox(), job = countingJob(), label = "docs-site: unit tests", seen = join(box.work, "marker");
+    const handedOn = ["run", "--label", label, "--", NODE, "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_NO_SKIP ?? "none")`];
+    assert.equal((await runAt(box, job.args(label), { nested: true })).code, 0);
+    assert.deepEqual((await runAt(box, job.args(label), { nested: true })).said, [skippedText(label)]);
+    const marked = await runAt(box, job.args(label), { env: { DOTIME_JOB: "slot-0", DOTIME_NO_SKIP: "1" } });
+    assert.deepEqual([marked.code, job.runs(), outcomes(box).at(-1)], [0, 2, "ran"], "a nested run inside a --no-skip job runs");
+    // Such a nested run hands the marker on to its own job, for the runs nested one level deeper.
+    assert.equal((await runAt(box, handedOn, { env: { DOTIME_JOB: "slot-0", DOTIME_NO_SKIP: "1" } })).code, 0);
+    assert.equal(readFileSync(seen, "utf8"), "1");
+    // Outside a job the variable means nothing, and the check is skipped as usual.
+    const outside = sandbox(), plain = countingJob();
+    assert.equal((await runAt(outside, plain.args(label))).code, 0);
+    assert.deepEqual((await runAt(outside, plain.args(label), { env: { DOTIME_NO_SKIP: "1" } })).said, [skippedText(label)]);
+});
+
+test("run: a job gets DOTIME_NO_SKIP only from its own --no-skip, never from the environment of the queue process", async () => {
+    const box = sandbox(), seen = join(box.work, "marker");
+    const job = (...flags) => ["run", "--label", "docs-site: test suite", ...flags, "--", NODE, "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_NO_SKIP ?? "none")`];
+    assert.equal((await runAt(box, job("--no-skip"))).code, 0);
+    assert.equal(readFileSync(seen, "utf8"), "1");
+    process.env.DOTIME_NO_SKIP = "1";
+    try {
+        assert.equal((await runAt(box, job(), { head: null, clean: null })).code, 0);
+    } finally { delete process.env.DOTIME_NO_SKIP; }
+    assert.equal(readFileSync(seen, "utf8"), "none");
 });
 
 test("run: only test and lint jobs are skipped, by the kind given with --kind when there is one", async () => {

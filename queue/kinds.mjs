@@ -30,6 +30,13 @@ export function kindOf(label, command, given) {
     return "other";
 }
 
+/** Does the label's task part or the command also name a build or a deploy, whatever kind won? "build and test" is a
+ *  test job by the order of KINDS, but its build output may still be needed. */
+export function alsoBuilds(label, command) {
+    const makes = KINDS.filter(([kind]) => kind === "build" || kind === "deploy").map(([, pattern]) => pattern);
+    return [labelTask(label), String(command ?? "")].some((text) => makes.some((pattern) => pattern.test(text)));
+}
+
 // The stem is what stays the same between two runs of one command: the program and the task it is given, without
 // paths, flags or variable assignments. Runs are compared with earlier runs that have the same stem.
 

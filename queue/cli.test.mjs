@@ -568,6 +568,24 @@ test("run: a pass in one folder of a repository is no stamp for the same check i
     assert.equal(journal(box)[0].fp, journal(box)[1].fp, "only the folder tells the two checks apart");
 });
 
+test("run: --no-skip on an outer job makes the checks it runs through the queue run, which would otherwise be skipped", async () => {
+    const box = sandbox(), repo = makeRepo(join(box.work, "shop-api"));
+    const check = ["--label", "shop-api: unit tests", "--", NODE, "-e", "console.log('inner ran')"];
+    assert.equal((await cli(box, ["run", ...check], { cwd: repo })).code, 0);
+    // The outer job is of kind other, so it always runs and only the inner check can be skipped.
+    const outer = (...flags) => ["run", "--label", "shop-api: test suite", "--kind", "other", ...flags, "--", NODE, CLI, "run", ...check];
+    const forced = await cli(box, outer("--no-skip"), { cwd: repo });
+    assert.deepEqual([forced.code, forced.stdout, forced.stderr.includes("skipped:")], [0, "inner ran\n", false], forced.stderr);
+    const plain = await cli(box, outer(), { cwd: repo });
+    assert.deepEqual([plain.code, plain.stdout], [0, ""]);
+    assert.equal(plain.stderr.includes('skipped: "shop-api: unit tests"'), true, plain.stderr);
+    assert.deepEqual(journal(box).map((line) => [line.label, line.outcome, line.nested ?? false]), [
+        ["shop-api: unit tests", "ran", false],
+        ["shop-api: unit tests", "ran", true], ["shop-api: test suite", "ran", false],
+        ["shop-api: unit tests", "skipped", true], ["shop-api: test suite", "ran", false],
+    ]);
+});
+
 test("passed: a failing run on the commit gives no stamp", async () => {
     const box = sandbox(), repo = makeRepo(join(box.work, "docs-site"));
     assert.equal((await cli(box, ["run", "--label", "docs-site: link check", "--", NODE, "-e", "process.exit(2)"], { cwd: repo })).code, 2);

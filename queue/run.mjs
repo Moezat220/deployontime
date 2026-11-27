@@ -22,10 +22,12 @@ import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
 import {
     addWait, append, cmdString, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp,
 } from "./journal.mjs";
-import { cmdStem, kindOf } from "./kinds.mjs";
+import { alsoBuilds, cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
-import { JOB_MARKER, markerOf, PARENT_MARKER, parentJob, placeKey, slotMarkerOf, stillRunning } from "./nested.mjs";
+import {
+    JOB_MARKER, markerOf, NO_SKIP_MARKER, PARENT_MARKER, parentJob, placeKey, slotMarkerOf, stillRunning,
+} from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
@@ -79,12 +81,15 @@ export function planJob(request, settings, journalRows) {
 /** The pass stamp on which a job is skipped, or null when it must run. Only a job of a kind in SKIPPABLE_KINDS is
  *  ever skipped, and only on a stamp from skipStamp: a run of the same project, label and command, in the same folder
  *  and with the same code fingerprint, that passed on this commit with a clean tree, while the tree is still clean
- *  now, with no failure of it on the commit since.
- *  job: { kind, label, command, cwd, fingerprint, project (the folder's project, as journal lines store it), commit
- *  ({ head, clean }, read when the job was queued), noSkip, at, tz }. rows: the journal rows. */
+ *  now, with no failure of it on the commit since. A job whose label or command also names a build or a deploy is
+ *  never skipped on a guessed kind, since its output may be needed; only --kind test or --kind lint allows it.
+ *  job: { kind, kindGiven (true when --kind was given), label, command, cwd, fingerprint, folderProject (the
+ *  project of the folder, as journal lines store it in project), commit ({ head, clean }, read when the job was
+ *  queued), noSkip, at, tz }. rows: the journal rows. */
 export function skipFor(job, rows) {
     if (job.noSkip || !SKIPPABLE_KINDS.includes(job.kind)) return null;
-    const folder = { project: job.project, ...job.commit };
+    if (!job.kindGiven && alsoBuilds(job.label, job.command)) return null;
+    const folder = { project: job.folderProject, ...job.commit };
     const check = { label: job.label, cmd: job.command, cwd: job.cwd, fp: job.fingerprint };
     return skipStamp(rows, folder, check, { tz: job.tz, at: job.at });
 }
@@ -211,7 +216,9 @@ export async function waitForPlace(job, deps) {
  *  are in place, so the caller can remove the ones it had until then without a moment in which a signal finds none.
  *  The job finds the marker of its slot in JOB_MARKER and in PARENT_MARKER. A nested run passes its note in place of
  *  a slot and the marker of the outermost job's slot as slotMarker, so its job finds that slot in JOB_MARKER and the
- *  note in PARENT_MARKER, and the note gets the job's process group and is removed at the end the same way.
+ *  note in PARENT_MARKER, and the note gets the job's process group and is removed at the end the same way. With
+ *  job.noSkip the job finds "1" in NO_SKIP_MARKER, so the runs nested in it are never skipped; without it the
+ *  variable is left out.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
@@ -230,6 +237,9 @@ export function runJob(job, slot, deps) {
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const stdio = ["inherit", "inherit", "inherit", "pipe"];
     const env = { ...process.env, [JOB_MARKER]: job.slotMarker ?? markerOf(slot), [PARENT_MARKER]: markerOf(slot) };
+    // Only this job's own --no-skip, or the one it was handed as a nested run, reaches the runs nested in it.
+    delete env[NO_SKIP_MARKER];
+    if (job.noSkip) env[NO_SKIP_MARKER] = "1";
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
@@ -451,9 +461,11 @@ export async function runCommand(args, ctx, deps) {
         say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}`);
         return EXIT.refused;
     }
+    // --no-skip on the outer job reaches every run nested in it.
+    const noSkip = parsed.noSkip || (!!outer && deps.env?.[NO_SKIP_MARKER] === "1");
     const stamp = skipFor({
-        kind: plan.kind, label, command, cwd, fingerprint: print, project: folder, commit: before,
-        noSkip: parsed.noSkip, at: queuedAt, tz,
+        kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command, cwd, fingerprint: print,
+        folderProject: folder, commit: before, noSkip, at: queuedAt, tz,
     }, rows);
     if (stamp) {
         const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));
@@ -475,6 +487,7 @@ export async function runCommand(args, ctx, deps) {
     const watch = watchLeave(signals, deps.sleep);
     const job = {
         pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal, maxWait, handOver: watch.drop,
+        noSkip,
     };
     const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
     try {

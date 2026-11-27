@@ -15,6 +15,9 @@ import { psRows } from "./ps.mjs";
 export const JOB_MARKER = "DOTIME_JOB";
 /** The environment variable that carries the marker of a job's direct parent: a slot, or a nested run's note. */
 export const PARENT_MARKER = "DOTIME_PARENT";
+/** The environment variable that tells the runs nested in a job, at any depth, that the job was started with
+ *  --no-skip, so they run too. It is set to "1" or left out, and only a nested run heeds it. */
+export const NO_SKIP_MARKER = "DOTIME_NO_SKIP";
 
 const SLOT_FORM = /^slot-\d+$/;
 const NESTED_FORM = /^nested-\d+$/;
