@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, makeRepo, settingEnv, tempDir, track, until } from "./testkit.mjs";
+import { cleanEnv, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("cli");
 const { historyRow, main, statusLines } = await import("./cli.mjs");
@@ -410,6 +410,23 @@ test("status, history and passed --cwd: work from a folder that was removed", as
     const passed = await fromGone(box, ["passed", "--cwd", repo]);
     assert.deepEqual([passed.code, passed.stderr], [1, ""]);
     assert.equal(passed.stdout.startsWith("no stamp: "), true);
+});
+
+test("passed: without --cwd, from a folder that was removed, one clear line and the usage exit code", async () => {
+    const passed = await fromGone(sandbox(), ["passed"]);
+    assert.deepEqual([passed.code, passed.stdout, passed.stderr],
+        [2, "", "dotime-queue: the current folder was removed; start the job from a folder that exists\n"]);
+});
+
+test("passed: a repository with no commits yet is named as such, exit 1", async () => {
+    const box = sandbox(), empty = join(box.work, "new-library"), plain = join(box.work, "plain-folder");
+    mkdirSync(empty);
+    mkdirSync(plain);
+    testGit(empty, "init", "-q");
+    const fresh = await cli(box, ["passed"], { cwd: empty });
+    assert.deepEqual([fresh.code, fresh.stdout], [1, "no stamp: this repository has no commits yet\n"]);
+    const outside = await cli(box, ["passed", "--cwd", plain]);
+    assert.deepEqual([outside.code, outside.stdout], [1, "no stamp: this folder is not a git checkout\n"]);
 });
 
 test("run: from a folder that was removed, a usage error is reported as usual and a valid run is refused", async () => {

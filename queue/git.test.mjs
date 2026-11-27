@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { git as testGit, isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
 
 isolateProcess("git");
-const { git, gitState, porcelainClean, readOnlyGit, repoName } = await import("./git.mjs");
+const { git, gitState, isRepository, porcelainClean, readOnlyGit, repoName } = await import("./git.mjs");
 const { folderProject } = await import("./project.mjs");
 
 test("git: the output as text or bytes, and null when git fails", () => {
@@ -48,6 +48,12 @@ test("porcelainClean: clean for no output and for untracked node_modules links o
 
 test("gitState: null answers outside a repository", () => {
     assert.deepEqual(gitState(tempDir("journal")), { head: null, clean: null });
+});
+
+test("isRepository: true in a repository, also one with no commits yet, and false outside git", () => {
+    const empty = tempDir("git-empty");
+    testGit(empty, "init", "-q");
+    assert.deepEqual([isRepository(makeRepo(tempDir("git-repo"))), isRepository(empty), isRepository(tempDir("git-none"))], [true, true, false]);
 });
 
 test("gitState: reports the commit, and clean until a file changes or appears", () => {

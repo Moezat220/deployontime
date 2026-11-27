@@ -68,11 +68,13 @@ export function readLines(file) {
 }
 
 const shortId = (commit) => String(commit).slice(0, 8);
-/** Looks for a passing run on the commit a folder is at. folder = { project, head, clean }; match narrows the runs to
- *  those with the text in their label or command. Returns { stamp: the run or null, text: one line to print }. */
+/** Looks for a passing run on the commit a folder is at. folder = { project, head, clean, repository }, where
+ *  repository says whether a folder without a head is a git repository that has no commits yet; match narrows the
+ *  runs to those with the text in their label or command. Returns { stamp: the run or null, text: one line to print }. */
 export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
     const none = (why) => ({ stamp: null, text: `no stamp: ${why}` });
     const wanted = String(match).toLowerCase();
+    if (!folder.head && folder.repository) return none("this repository has no commits yet");
     if (!folder.head) return none("this folder is not a git checkout");
     if (folder.clean == null) return none("git status could not be read");
     if (!folder.clean) return none("the working tree has uncommitted changes");

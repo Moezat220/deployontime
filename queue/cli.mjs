@@ -6,12 +6,12 @@ import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
 import { gateReason } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
-import { gitState } from "./git.mjs";
+import { gitState, isRepository } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
 import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
-import { EXIT, realDeps, runCommand } from "./run.mjs";
+import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -64,9 +64,17 @@ export function cmdStatus({ settings, files }, { readHealth: read = readHealth, 
     return 0;
 }
 
-/** Prints the pass stamp of the folder in ctx.cwd and returns 0, or 1 when there is none. */
-function cmdPassed(args, { files, tz, cwd }) {
-    const folder = { project: folderProject(cwd), ...gitState(cwd) };
+/** Prints the pass stamp of the folder in --cwd, else of the current folder, and returns 0, or 1 when there is none.
+ *  A current folder that was removed is a usage error, as for `run`. */
+function cmdPassed(args, { files, tz }) {
+    const read = jobFolder({ cwd: opt(args, "--cwd") || undefined }, { cwd: () => process.cwd() });
+    if (read.error) {
+        say(read.error);
+        return EXIT.usage;
+    }
+    const { cwd } = read;
+    const commit = gitState(cwd);
+    const folder = { project: folderProject(cwd), ...commit, repository: commit.head !== null || isRepository(cwd) };
     const found = findStamp(readLines(files.journal), folder, opt(args, "--match") || "", { tz });
     console.log(found.text);
     return found.stamp ? 0 : 1;
@@ -109,7 +117,7 @@ export async function main(args = process.argv.slice(2)) {
     // `run` reads it only after its arguments were found valid.
     const ctx = { settings: loadSettings(), files: paths(), tz: timeZone() };
     if (command === "status") return cmdStatus(ctx);
-    if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
+    if (command === "passed") return cmdPassed(args, ctx);
     if (command === "history") return cmdHistory(args, ctx);
     return runCommand(args, ctx, runDeps(ctx));
 }

@@ -125,6 +125,7 @@ test("findStamp: the match text narrows runs by label or command, in any letter 
 
 test("findStamp: explains each reason for not finding one", () => {
     assert.equal(stamp([run()], { ...folder, head: null }).text, "no stamp: this folder is not a git checkout");
+    assert.equal(stamp([run()], { ...folder, head: null, clean: null, repository: true }).text, "no stamp: this repository has no commits yet");
     assert.equal(stamp([run()], { ...folder, clean: null }).text, "no stamp: git status could not be read");
     assert.equal(stamp([run()], { ...folder, clean: false }).text, "no stamp: the working tree has uncommitted changes");
     assert.equal(stamp([run({ project: "shop-api" })]).text, "no stamp: no finished run on record, project mobile-app");

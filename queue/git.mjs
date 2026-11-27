@@ -41,6 +41,11 @@ export function gitState(cwd) {
     return { head, clean: status == null ? null : porcelainClean(status) };
 }
 
+/** Is the folder inside a git repository? True also for a repository that has no commits yet. */
+export function isRepository(cwd) {
+    return git(cwd, ["rev-parse", "--git-dir"], { timeout: 3000 }) !== null;
+}
+
 /** The folder name of the repository a folder belongs to, or null outside git. A linked worktree reports its main
  *  repository. */
 export function repoName(cwd) {

@@ -309,7 +309,7 @@ export function realDeps({ readHealth, notify, after }) {
 
 /** The folder the job runs in: ctx.cwd when given, else the current folder, read through deps.cwd(). Returns
  *  { cwd } or { error } when the current folder was removed. */
-function jobFolder(ctx, deps) {
+export function jobFolder(ctx, deps) {
     if (ctx.cwd !== undefined) return { cwd: ctx.cwd };
     try {
         return { cwd: deps.cwd() };
