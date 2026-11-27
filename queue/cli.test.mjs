@@ -1,4 +1,3 @@
-import { constants as osConstants } from "node:os";
 // The end-to-end tests start the real cli.mjs. Each one gets its own state folder inside the temp folder, short timers
 // and health limits so wide that no reading of this computer shuts the gate, both from that folder's config.json,
 // and notices that go to the log file only. Tests that need a made-up health reading or a clock that jumps ahead
@@ -6,6 +5,7 @@ import { constants as osConstants } from "node:os";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
