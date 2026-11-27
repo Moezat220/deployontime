@@ -15,13 +15,13 @@ import { cmdString, findStamp, historyWindow, parseLines, readLines, summarize }
 import { folderProject } from "../queue/project.mjs";
 import { snapshot } from "../queue/slots.mjs";
 import {
-    createJob, JOB_ID_RE, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess, START_GRACE_MS, tailLines,
+    activeJobs, createJob, JOB_ID_RE, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess, START_GRACE_MS, tailLines,
 } from "./jobs.mjs";
 
 const RUNNER = fileURLToPath(new URL("./runner.mjs", import.meta.url));
 export const KINDS = Object.freeze(["test", "lint", "build", "deploy", "debug", "other"]);
-// Exit codes of dotime-queue itself, for a job whose journal line is missing (see queue/README.md, Exit codes).
-const EXIT_OUTCOMES = { 2: "usage-error", 3: "refused", 75: "gave-up", 130: "left" };
+// A usage error is the one end of dotime-queue run that writes no journal line (see queue/README.md, Exit codes).
+const USAGE_EXIT = 2;
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 // "<project>: <task>": the project part is what the queue reads as the project, up to 40 characters before the colon.
 const LABEL_RE = /^[^:\s][^:]{0,39}:\s*\S/;
@@ -165,7 +165,9 @@ export function argumentProblems(args, schema) {
 }
 
 class ArgumentError extends Error {}
+class Refusal extends Error {}
 const fail = (message) => { throw new ArgumentError(message); };
+const refuse = (message) => { throw new Refusal(message); };
 
 /** The folder a tool works in: an absolute path to an existing folder, given as its real path, or the server's own
  *  folder when none is given. */
@@ -246,7 +248,13 @@ function queueRun(args, ctx) {
     }
     const cwd = folderOf(args.cwd, ctx);
     const dir = jobsDir(ctx.files.home);
-    pruneJobs(dir);
+    pruneJobs(dir, { check: ctx.sameProcess });
+    const max = ctx.settings.mcpMaxJobs;
+    const active = activeJobs(dir, { check: ctx.sameProcess }).length;
+    if (active >= max) {
+        refuse(`refused: ${active} jobs started here are still waiting or running, and mcpMaxJobs in config.json allows `
+            + `${max}; wait until one has finished (see queue_job and queue_status), then start this one again`);
+    }
     const id = newJobId();
     const request = {
         v: 1, id, label, command: args.command, cwd, createdAt: Date.now(),
@@ -257,7 +265,7 @@ function queueRun(args, ctx) {
         ...(args.afterFix !== undefined ? { afterFix: args.afterFix.trim() } : {}),
     };
     createJob(dir, id, request);
-    ctx.startRunner(dir, id, cwd);
+    ctx.startRunner(dir, id, cwd, ctx.files.home);
     const lines = [
         `started job ${id}: "${label}", command ${cmdString(args.command)}, in ${cwd}`,
         "it waits for a slot under the queue's rules; call queue_job with this jobId for its state and output",
@@ -266,25 +274,23 @@ function queueRun(args, ctx) {
 }
 
 /** Starts the runner of a job detached: in a session and process group of its own, with no tie to this process's
- *  standard streams, so it keeps going when the server exits or is stopped. */
-export function startRunner(dir, id, cwd, env = process.env) {
-    const child = spawn(process.execPath, [RUNNER, dir, id], { cwd, detached: true, stdio: "ignore", env });
+ *  standard streams, so it keeps going when the server exits or is stopped. home is the state folder as an absolute
+ *  path: the runner and the queue run in the job's folder, where a relative DOTIME_HOME would name another folder. */
+export function startRunner(dir, id, cwd, home, env = process.env) {
+    const child = spawn(process.execPath, [RUNNER, dir, id], { cwd, detached: true, stdio: "ignore", env: { ...env, DOTIME_HOME: home } });
     child.on("error", () => { /* the job shows as lost once START_GRACE_MS has passed */ });
     child.unref();
     return child.pid;
 }
 
-/** The journal line of a finished job: the one with its label, folder and command that was queued closest to the
- *  moment its queue process started, and not before it. */
+/** The journal line of a finished job: the one its own queue process wrote, found by that process's pid. A line
+ *  queued before the process started is from an earlier process that had the same pid. No line: null, never the
+ *  line of another job. */
 function journalLine(request, pid, journalFile) {
-    if (!pid) return null;
-    const command = cmdString(request.command);
+    if (!Number.isInteger(pid?.queuePid)) return null;
     const from = pid.startedAt - 2000;
-    const rows = parseLines(readLines(journalFile))
-        .filter((row) => row.label === request.label && row.cwd === request.cwd && row.cmd === command)
-        .filter((row) => Date.parse(row.queuedAt) >= from);
-    rows.sort((a, b) => Math.abs(Date.parse(a.queuedAt) - pid.startedAt) - Math.abs(Date.parse(b.queuedAt) - pid.startedAt));
-    return rows[0] ?? null;
+    return parseLines(readLines(journalFile))
+        .find((row) => row.pid === pid.queuePid && row.label === request.label && Date.parse(row.queuedAt) >= from) ?? null;
 }
 
 /** Where a job stands now: { state, position? }. */
@@ -322,7 +328,7 @@ function queueJob(args, ctx) {
     if (where.state === "lost") head += "; its runner ended without a result, see the output";
     if (job.exit) {
         const row = journalLine(request, job.pid, ctx.files.journal);
-        const outcome = row?.outcome ?? EXIT_OUTCOMES[job.exit.exit] ?? null;
+        const outcome = row?.outcome ?? (job.exit.exit === USAGE_EXIT ? "usage-error" : null);
         Object.assign(info, {
             exitCode: job.exit.exit, outcome, ok: job.exit.exit === 0 && (outcome === "ran" || outcome === "skipped"),
             endedAt: new Date(job.exit.endedAt).toISOString(),
@@ -349,7 +355,7 @@ const HANDLERS = {
 /** The deps a real server hands to the tools, on top of the settings, files and zone read for each call. */
 export const realToolDeps = (env) => ({
     env, cwd: () => process.cwd(), readHealth, sameProcess,
-    startRunner: (dir, id, cwd) => startRunner(dir, id, cwd, env),
+    startRunner: (dir, id, cwd, home) => startRunner(dir, id, cwd, home, env),
 });
 
 /** Runs a tool and gives the tools/call result: { content, structuredContent, isError }. A tool name that is not
@@ -363,9 +369,12 @@ export function callTool(name, args, ctx) {
     if (problems.length) return error(`invalid arguments for ${name}: ${problems.join("; ")}`);
     try {
         const out = HANDLERS[name](args, ctx);
-        return { content: [{ type: "text", text: out.text }], structuredContent: out.structured, isError: false };
+        // The fields again as JSON text, for clients that do not read structuredContent.
+        const content = [{ type: "text", text: out.text }, { type: "text", text: JSON.stringify(out.structured) }];
+        return { content, structuredContent: out.structured, isError: false };
     } catch (e) {
         if (e instanceof ArgumentError) return error(`invalid arguments for ${name}: ${e.message}`);
+        if (e instanceof Refusal) return error(`${name} ${e.message}`);
         return error(`${name} failed: ${e?.message ?? String(e)}`);
     }
 }

@@ -365,8 +365,9 @@ export function runJob(job, slot, deps) {
 }
 
 /** The writer of a job's one journal line. note({ startedAt, commit, tally, details }) fills in any of those as the
- *  job goes; finish() writes the line once and ignores later calls. */
-export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now }) {
+ *  job goes; finish() writes the line once and ignores later calls. pid, when given, is the pid of the `run` process,
+ *  kept with the line so a caller that started that process can find its own line. */
+export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now, pid }) {
     const known = { startedAt: null, commit: { head: null, clean: null }, tally: {}, details };
     let written = false;
     return {
@@ -379,7 +380,7 @@ export function journalWriter({ label, folder, cwd, priority, queuedAt, command,
             const { head, clean } = known.commit;
             append(record({
                 label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, endedAt: now(), outcome,
-                exit, tally: known.tally, cmd: command, head, clean, extra: { ...known.details, ...more },
+                exit, tally: known.tally, cmd: command, head, clean, extra: { ...(pid ? { pid } : {}), ...known.details, ...more },
             }), file);
         },
     };
@@ -459,7 +460,7 @@ export async function runCommand(args, ctx, deps) {
     const outer = markers ? parentJob({ env: deps.env, pid, ...snapshot({ dirs: files }) }) : null;
     const details = outer ? { ...plan.details, nested: true } : plan.details;
     const journal = journalWriter({
-        label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now,
+        label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now, pid,
     });
     if (plan.refusal) {
         journal.note({ commit: before });

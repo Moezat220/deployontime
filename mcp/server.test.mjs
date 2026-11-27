@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, isolateProcess, makeRepo, pause, tempDir, track, until } from "../queue/testkit.mjs";
@@ -29,8 +29,8 @@ function sandbox(config = {}) {
 }
 
 /** Starts the server. detached: it leads its own process group, as a server started in a terminal does. */
-function startServer(box, { detached = false } = {}) {
-    const child = track(spawn(NODE, [SERVER], { cwd: box.repo, env: box.env, stdio: ["pipe", "pipe", "pipe"], detached }));
+function startServer(box, { detached = false, cwd = box.repo, env = box.env } = {}) {
+    const child = track(spawn(NODE, [SERVER], { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached }));
     const replies = [];
     let pending = "";
     let stderr = "";
@@ -222,6 +222,13 @@ test("lineReader: lines split across chunks are joined, and a line over the limi
     reader.end();
     assert.deepEqual(seen, ["abc", "def", "ok", "last"]);
     assert.equal(tooLong, 1);
+    const exact = [];
+    let over = 0;
+    const bounded = lineReader((line) => exact.push(line), () => { over++; }, 10);
+    bounded.push(Buffer.from("0123456789\n01234567890\n01234"));
+    bounded.push(Buffer.from("567890\nfits\n"));
+    assert.deepEqual(exact, ["0123456789", "fits"]);
+    assert.equal(over, 2);
 });
 
 // ---- the tools ----
@@ -376,6 +383,72 @@ test("argument checks: every bad argument is a tool error that says what is wron
     await server.close();
 });
 
+test("queue_job: two identical jobs started together each get their own journal line", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const command = nodeCommand("setTimeout(() => console.log('built'), 3000)");
+    const label = "shop: build pages";
+    // Both requests go out before either reply is read; the first one is stopped by its run limit.
+    const replies = [
+        server.call("queue_run", { label, command, cwd: box.repo, maxRunMin: 0.02 }),
+        server.call("queue_run", { label, command, cwd: box.repo }),
+    ];
+    const [limited, free] = (await Promise.all(replies)).map((r) => r.structuredContent.jobId);
+    const [stopped, ran] = [await jobUntil(server, limited), await jobUntil(server, free)];
+    assert.deepEqual([stopped.structuredContent.exitCode, stopped.structuredContent.outcome, stopped.structuredContent.ok], [124, "timed-out", false]);
+    assert.deepEqual([ran.structuredContent.exitCode, ran.structuredContent.outcome, ran.structuredContent.ok], [0, "ran", true]);
+    const pids = [limited, free].map((id) => JSON.parse(readFileSync(jobFiles(jobsFolder(box), id).pid, "utf8")).queuePid);
+    const lines = readFileSync(join(box.home, "journal.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(lines.map((line) => line.pid).sort(), [...pids].sort());
+    await server.close();
+});
+
+test("queue_job: a finished job with no journal line of its own has no outcome, even beside an identical one", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const args = { label: "shop: build pages", command: nodeCommand("console.log('built')") };
+    const done = await jobUntil(server, await runJob(server, box, args));
+    assert.equal(done.structuredContent.outcome, "ran");
+    const id = "cd".repeat(12);
+    const files = createJob(jobsFolder(box), id, { v: 1, id, ...args, cwd: box.repo, createdAt: Date.now() - 5000 });
+    writeFileSync(files.pid, JSON.stringify({ runnerPid: 1, runnerStartedAt: 0, queuePid: 999_999, startedAt: Date.now() - 5000 }));
+    writeFileSync(files.exit, JSON.stringify({ exit: 0, signal: null, endedAt: Date.now() }));
+    const orphan = await server.call("queue_job", { jobId: id });
+    assert.equal(orphan.structuredContent.outcome, null);
+    assert.equal(orphan.structuredContent.ok, false);
+    assert.match(orphan.content[0].text, /outcome unknown \(no journal line found\)/);
+    await server.close();
+});
+
+test("queue_run: a relative DOTIME_HOME is made absolute where the server starts, so the job uses the same state folder", async () => {
+    const box = sandbox();
+    const env = { ...box.env, DOTIME_HOME: basename(box.home) };
+    const server = startServer(box, { cwd: dirname(box.home), env });
+    const id = await runJob(server, box, { label: "shop: build pages", command: nodeCommand("console.log('built')") });
+    const done = await jobUntil(server, id);
+    assert.deepEqual([done.structuredContent.exitCode, done.structuredContent.outcome], [0, "ran"]);
+    assert.equal(existsSync(join(box.home, "journal.jsonl")), true);
+    assert.equal(existsSync(join(box.repo, basename(box.home))), false, "no second state folder inside the job's folder");
+    await server.close();
+});
+
+test("queue_run: past mcpMaxJobs jobs that still wait or run, a further one is refused until one has finished", async () => {
+    const box = sandbox({ mcpMaxJobs: 1 });
+    const server = startServer(box);
+    const flag = join(tempDir("mcp-flag"), "go");
+    const first = await runJob(server, box, { label: "shop: build site", command: nodeCommand(untilFile(flag)) });
+    const filesBefore = jobFilesOf(box).length;
+    const refused = await server.call("queue_run", { label: "shop: build docs", command: nodeCommand("1"), cwd: box.repo });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /^queue_run refused: 1 jobs started here are still waiting or running, and mcpMaxJobs in config\.json allows 1;/);
+    assert.equal(jobFilesOf(box).length, filesBefore, "nothing was started");
+    writeFileSync(flag, "");
+    await jobUntil(server, first);
+    const later = await runJob(server, box, { label: "shop: build docs", command: nodeCommand("1") });
+    assert.equal((await jobUntil(server, later)).structuredContent.exitCode, 0);
+    await server.close();
+});
+
 test("queue_job: an unknown id is a tool error, and a job whose runner ended without a result is lost", async () => {
     const box = sandbox();
     const server = startServer(box);
@@ -435,7 +508,7 @@ test("pruneJobs: old finished jobs go, an active one stays, and the newest are k
     assert.throws(() => jobFiles(dir, "../x"), /not a job id/);
 });
 
-test("tailLines: the last lines only, cut when very long, and never through a symlink", () => {
+test("tailLines: the last lines only, cut when very long, and never through a symlink or from a FIFO", () => {
     const dir = tempDir("mcp-tail");
     const log = join(dir, "job.log");
     writeFileSync(log, `${Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n")}\n${"z".repeat(3000)}\n`);
@@ -450,4 +523,6 @@ test("tailLines: the last lines only, cut when very long, and never through a sy
     assert.deepEqual(tailLines(join(dir, "link.log"), 5), []);
     mkdirSync(join(dir, "folder.log"));
     assert.deepEqual(tailLines(join(dir, "folder.log"), 5), []);
+    assert.equal(spawnSync("mkfifo", [join(dir, "pipe.log")]).status, 0);
+    assert.deepEqual(tailLines(join(dir, "pipe.log"), 5), [], "a FIFO is refused without waiting for a writer");
 });

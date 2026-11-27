@@ -133,8 +133,8 @@ export function createServer({ context, log = () => {} }) {
     };
 }
 
-/** Splits a byte stream into lines and hands each one to onLine. A line longer than maxBytes is dropped as it comes,
- *  and onTooLong() is called once for it. Returns { push(chunk), end() }. */
+/** Splits a byte stream into lines and hands each one to onLine. A line longer than maxBytes, its newline not
+ *  counted, is dropped as it comes, and onTooLong() is called once for it. Returns { push(chunk), end() }. */
 export function lineReader(onLine, onTooLong, maxBytes = MAX_LINE_BYTES) {
     let parts = [];
     let size = 0;
@@ -150,7 +150,11 @@ export function lineReader(onLine, onTooLong, maxBytes = MAX_LINE_BYTES) {
             let from = 0;
             for (let at = chunk.indexOf(10); at >= 0; at = chunk.indexOf(10, from)) {
                 if (dropping) dropping = false;
-                else {
+                else if (size + at - from > maxBytes) {
+                    parts = [];
+                    size = 0;
+                    onTooLong();
+                } else {
                     parts.push(chunk.subarray(from, at));
                     flush();
                 }

@@ -208,15 +208,15 @@ test("journalWriter: note() fills in the start, commit, wait and details, and fi
     const writer = journalWriter({
         label: "docs-site: build", folder: "docs-site", cwd: box.work, priority: false, queuedAt: NOW,
         command: "pnpm run build", details: { kind: "build" }, file: box.ctx.files.journal, now: () => NOW + 3 * MINUTE,
+        pid: 4321,
     });
     writer.note({ commit: { head: "ab12cd34ef", clean: true }, tally: { slots: 60_000 } });
     writer.note({ startedAt: NOW + MINUTE, details: { kind: "lint" } });
     writer.finish("ran", 0);
     writer.finish("ran", 1);
     const lines = journal(box);
-    assert.deepEqual(lines.map((line) => [line.outcome, line.exit, line.head, line.clean, line.waitBy.slots, line.runMin, line.kind]), [
-        ["ran", 0, "ab12cd34ef", true, 1, 2, "lint"],
-    ]);
+    const facts = (line) => [line.outcome, line.exit, line.head, line.clean, line.waitBy.slots, line.runMin, line.kind, line.pid];
+    assert.deepEqual(lines.map(facts), [["ran", 0, "ab12cd34ef", true, 1, 2, "lint", 4321]]);
 });
 
 // ---- runJob ----

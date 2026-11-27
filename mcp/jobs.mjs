@@ -64,16 +64,30 @@ export function runnerActive(job, now = Date.now(), check = sameProcess) {
     return now - (Number(job.request?.createdAt) || 0) < START_GRACE_MS;
 }
 
-/** Removes the jobs older than keepDays whose runner is done, then the oldest done ones beyond keepJobs, and any
- *  stray file of a job whose request is gone once it is older than keepDays. Returns the ids removed. */
-export function pruneJobs(dir, { now = Date.now(), keepDays = KEEP_DAYS, keepJobs = KEEP_JOBS, check = sameProcess } = {}) {
+/** The ids that have at least one job file in the folder. */
+function jobIds(dir) {
     let names = [];
-    try { names = readdirSync(dir); } catch { return []; }
+    try { names = readdirSync(dir); } catch { return new Set(); }
     const ids = new Set();
     for (const name of names) {
         const id = name.slice(0, 24);
         if (JOB_ID_RE.test(id) && EXTENSIONS.includes(name.slice(24))) ids.add(id);
     }
+    return ids;
+}
+
+/** The ids of the jobs whose runner may still be working (see runnerActive). */
+export function activeJobs(dir, { now = Date.now(), check = sameProcess } = {}) {
+    return [...jobIds(dir)].filter((id) => {
+        const job = readJob(dir, id);
+        return job.request && runnerActive(job, now, check);
+    });
+}
+
+/** Removes the jobs older than keepDays whose runner is done, then the oldest done ones beyond keepJobs, and any
+ *  stray file of a job whose request is gone once it is older than keepDays. Returns the ids removed. */
+export function pruneJobs(dir, { now = Date.now(), keepDays = KEEP_DAYS, keepJobs = KEEP_JOBS, check = sameProcess } = {}) {
+    const ids = jobIds(dir);
     const done = [];
     const removed = [];
     const drop = (id) => {
@@ -98,12 +112,13 @@ export function pruneJobs(dir, { now = Date.now(), keepDays = KEEP_DAYS, keepJob
     return removed;
 }
 
-/** The last count lines of a job log, each cut to MAX_LINE characters. Only the end of the file is read, and a
- *  symlink in place of the log is refused. */
+/** The last count lines of a job log, each cut to MAX_LINE characters. Only the end of the file is read. Anything
+ *  but a regular file in place of the log is refused: a symlink is never followed, and a FIFO is opened without
+ *  waiting for a writer. */
 export function tailLines(file, count) {
     if (count <= 0) return [];
     let fd;
-    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW); } catch { return []; }
+    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return []; }
     try {
         const stat = fstatSync(fd);
         if (!stat.isFile()) return [];

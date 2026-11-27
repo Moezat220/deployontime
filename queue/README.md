@@ -667,6 +667,7 @@ default. Only a missing file is silent.
 | --- | --- | --- |
 | `slots` | 2 | Jobs that may run at once. At least 1; a fraction is rounded down. |
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
+| `mcpMaxJobs` | 20 | Jobs started by `dotime-mcp` that may wait or run at once; `queue_run` refuses a further one with a tool error. Each costs two Node processes while it waits. A whole number, at least 1. |
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
@@ -748,7 +749,8 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
 `limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
 `afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested` or `stamp` (on a line with
-outcome `skipped`: the passing run it relied on). Copies of the queue that share
+outcome `skipped`: the passing run it relied on). Lines written by `run` also carry `pid`, the pid of the `run`
+process, so whoever started that process can find its own line. Copies of the queue that share
 a state folder all read the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:

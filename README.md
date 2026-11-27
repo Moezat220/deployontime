@@ -146,7 +146,8 @@ server settings:
 
 Clients differ in where that file lives and in how its top level is named; see your client's documentation. Without
 `npm link`, use `"command": "node", "args": ["<path to the clone>/mcp/server.mjs"]`. To use another state folder, add
-`"env": { "DOTIME_HOME": "<folder>" }`, as for the command.
+`"env": { "DOTIME_HOME": "<absolute path of the folder>" }`, as for the command. A relative path is taken from the
+folder the server starts in, and its jobs are handed that absolute path.
 
 | Tool | Arguments | What it gives |
 | --- | --- | --- |
@@ -161,6 +162,9 @@ is `"<project>: <task>"`. The command is a list of words and never goes through 
 and runs under the same rules as one started from the shell, in a process group of its own, and keeps running when
 the server exits. Its output and pid files are kept in `mcp-jobs/` in the state folder for 7 days, and at most 200
 finished jobs are kept. `--priority` and `--max-wait` are not offered: such a job waits at most the usual 60 minutes.
+Each waiting job costs two Node processes, so `queue_run` refuses a new job while 20 that it started still wait or
+run; `mcpMaxJobs` in the queue's `config.json` sets that number. Every tool result has the readable lines as text,
+then the same fields as JSON text, and the fields in `structuredContent`.
 
 The shell commands keep working as before; both share the same state folder, slots and journal. The server speaks MCP
 revision 2026-07-28 (no handshake: each request names its version in `_meta`, and `server/discover` lists the
