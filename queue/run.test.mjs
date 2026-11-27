@@ -175,6 +175,16 @@ test("waitForSlot: takes one health reading per poll, also when it prints why it
     assert.deepEqual([said.length, readings], [2, 4], "four polls, each with one reading");
 });
 
+test("waitForSlot: carries on an earlier wait, so the wait limit counts from its start and its time is booked with it", async () => {
+    const box = sandbox({ slots: 1 }), clock = fakeClock(), said = [];
+    takeSlot(process.pid, "docs-site: build", 1, {}, box.ctx.files);
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+    const earlier = { waitFrom: NOW - 2 * MINUTE, tally: { nested: 2 * MINUTE } };
+    const got = await waitForSlot(waiter(box, { maxWait: 2, ...earlier }), { ...clock, readHealth: () => CALM, say: (t) => said.push(t) });
+    assert.deepEqual([got.gaveUp, got.tally], [true, { nested: 2 * MINUTE }]);
+    assert.equal(said[0].startsWith("gave up: exit 75, position 1, 2 min waited; "), true, said[0]);
+});
+
 test("waitForSlot: leaves the line when a signal asks for it", async () => {
     const box = sandbox({ slots: 1 }), clock = fakeClock();
     takeSlot(process.pid, "docs-site: build", 1, {}, box.ctx.files);
@@ -193,19 +203,19 @@ test("realDeps: the real command reads git and stores notices through the same d
 
 // ---- journalWriter ----
 
-test("journalWriter: note() fills in the start, commit and wait, and finish() writes one line", () => {
+test("journalWriter: note() fills in the start, commit, wait and details, and finish() writes one line", () => {
     const box = sandbox();
     const writer = journalWriter({
         label: "docs-site: build", folder: "docs-site", cwd: box.work, priority: false, queuedAt: NOW,
         command: "pnpm run build", details: { kind: "build" }, file: box.ctx.files.journal, now: () => NOW + 3 * MINUTE,
     });
     writer.note({ commit: { head: "ab12cd34ef", clean: true }, tally: { slots: 60_000 } });
-    writer.note({ startedAt: NOW + MINUTE });
+    writer.note({ startedAt: NOW + MINUTE, details: { kind: "lint" } });
     writer.finish("ran", 0);
     writer.finish("ran", 1);
     const lines = journal(box);
-    assert.deepEqual(lines.map((line) => [line.outcome, line.exit, line.head, line.clean, line.waitBy.slots, line.runMin]), [
-        ["ran", 0, "ab12cd34ef", true, 1, 2],
+    assert.deepEqual(lines.map((line) => [line.outcome, line.exit, line.head, line.clean, line.waitBy.slots, line.runMin, line.kind]), [
+        ["ran", 0, "ab12cd34ef", true, 1, 2, "lint"],
     ]);
 });
 
@@ -355,6 +365,27 @@ test("run: a nested run that waits for a place starts once its parent's place is
     const started = "starts now that a nested place is free: no slot, no place in line, no health gate";
     assert.equal(d.said.at(-1), `nested: inside "docs-site: test suite", pid ${process.ppid}; ${started}`);
     assert.deepEqual([journal(box)[0].outcome, journal(box)[0].nested, nestedNotes(box), places(box)], ["ran", true, [], []]);
+});
+
+test("run: a nested run whose parent ends while it waits for a place stops waiting and joins the line as a normal run", async () => {
+    const { box, blocker } = fullPlacesBox(), other = track(spawn(NODE, ["-e", FOREVER], { stdio: "ignore" }));
+    const d = nestedDeps(box, { readHealth: () => CALM });
+    const run = settle(runCommand(["run", "--label", "docs-site: unit tests", "--max-wait", "0", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps));
+    await until(() => d.said.length === 1);
+    // The parent ends: its place is freed and another job takes its slot.
+    rmSync(join(box.home, "slots", "slot-0.json"));
+    takeSlot(other.pid, "shop-api: e2e", 1, {}, box.ctx.files);
+    rmSync(blocker);
+    await until(() => d.said.some((line) => line.startsWith("in line: position 1")));
+    assert.equal(d.said[1], `parent gone: "docs-site: test suite", pid ${process.ppid}, ended while this run waited for a nested place; joins the line as a normal run`);
+    assert.equal(d.said[2].endsWith('no free slot: 1 of 1 taken, by "shop-api: e2e"'), true, d.said[2]);
+    assert.equal(run.done, false, "it waits for the slot and does not run beside the job in it");
+    assert.deepEqual([nestedNotes(box), places(box), readdirSync(join(box.home, "line")).length], [[], [], 1]);
+    other.kill("SIGKILL");
+    assert.equal(await run.result, 0);
+    const [line] = journal(box);
+    assert.deepEqual([line.outcome, line.exit, line.nested, Object.keys(line.waitBy).sort()], ["ran", 0, undefined, ["nested", "slots"]]);
+    assert.deepEqual([slots(box), nestedNotes(box), places(box), readdirSync(join(box.home, "line")), d.signals.eventNames()], [[], [], [], [], []]);
 });
 
 test("run: a signal while a nested run waits for a place ends it with 130 and leaves no place, note or line entry", async () => {

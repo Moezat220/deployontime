@@ -22,7 +22,7 @@ import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } fro
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
-import { JOB_MARKER, markerOf, outerJob, placeKey } from "./nested.mjs";
+import { JOB_MARKER, markerOf, outerJob, placeKey, stillRunning } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
@@ -73,16 +73,18 @@ export function planJob(request, settings, journalRows) {
     };
 }
 
-/** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files }. Priority
- *  plays no part in here: it is in the job's ticket, which orders the line, and in slotMeta.
+/** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
+ *  tally }; waitFrom and tally, when given, carry on an earlier wait, so the wait limit counts from its start and the
+ *  time is booked with it. Priority plays no part in here: it is in the job's ticket, which orders the line, and in
+ *  slotMeta.
  *  deps: { now, sleep, readHealth, say, leaving }; leaving() names a signal that asked the job to leave, or null.
  *  Returns { slot, tally, waitFrom }, { gaveUp: true, tally } or { left: signal, tally }; tally is the waiting time
  *  per gate in ms. */
 export async function waitForSlot(job, deps) {
     const { pid, label, maxWait, settings, files } = job;
     const max = settings.slots;
-    const tally = {};
-    const waitFrom = deps.now();
+    const tally = { ...job.tally };
+    const waitFrom = job.waitFrom ?? deps.now();
     let shownPosition = 0;
     let shownAt = 0;
     for (;;) {
@@ -131,7 +133,9 @@ export async function waitForSlot(job, deps) {
  *  runs that wait under the same parent take the places in the order their notes were written. job: { pid, label,
  *  parent, maxWait, settings, files }, where parent is the job from outerJob(). deps: { now, sleep, say, leaving },
  *  as for waitForSlot. Returns { place, tally, waitFrom, atOnce }, where atOnce is true when the first look found a
- *  place, { gaveUp: true, tally } or { left: signal, tally }. */
+ *  place, { gaveUp: true, tally }, { left: signal, tally }, or { parentGone: true, tally, waitFrom } once the parent
+ *  has ended: the run is then no longer inside a job, and must not start without a slot. The parent is checked on
+ *  every poll, and once more after a place was taken. */
 export async function waitForPlace(job, deps) {
     const { pid, label, parent, maxWait, settings, files } = job;
     const max = settings.nestedPerJob;
@@ -146,12 +150,17 @@ export async function waitForPlace(job, deps) {
         const signal = deps.leaving?.() ?? null;
         if (signal) return { left: signal, tally };
         const snap = snapshot({ dirs: files, prune: true });
+        if (!stillRunning(parent, snap)) return { parentGone: true, tally, waitFrom };
         const taken = snap.places.filter((p) => p.parent === key).length;
         const waiters = snap.nested.filter((n) => n.waiting && under(n)).sort((a, b) => a.at - b.at || a.pid - b.pid);
         const index = waiters.findIndex((n) => n.pid === pid);
         const position = index < 0 ? waiters.length + 1 : index + 1;
         if (position <= max - taken) {
             const place = takePlace(pid, label, key, max, files);
+            if (place && !stillRunning(parent, snapshot({ dirs: files }))) {
+                releaseSlot(place, pid);
+                return { parentGone: true, tally, waitFrom };
+            }
             if (place) return { place, tally, waitFrom, atOnce: shownPosition === 0 && !Object.keys(tally).length };
         }
         const ahead = position - 1;
@@ -322,10 +331,10 @@ export function runJob(job, slot, deps) {
     return result;
 }
 
-/** The writer of a job's one journal line. note({ startedAt, commit, tally }) fills in any of those as the job goes;
- *  finish() writes the line once and ignores later calls. */
+/** The writer of a job's one journal line. note({ startedAt, commit, tally, details }) fills in any of those as the
+ *  job goes; finish() writes the line once and ignores later calls. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now }) {
-    const known = { startedAt: null, commit: { head: null, clean: null }, tally: {} };
+    const known = { startedAt: null, commit: { head: null, clean: null }, tally: {}, details };
     let written = false;
     return {
         note(fields) {
@@ -337,7 +346,7 @@ export function journalWriter({ label, folder, cwd, priority, queuedAt, command,
             const { head, clean } = known.commit;
             append(record({
                 label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, endedAt: now(), outcome,
-                exit, tally: known.tally, cmd: command, head, clean, extra: { ...details, ...more },
+                exit, tally: known.tally, cmd: command, head, clean, extra: { ...known.details, ...more },
             }), file);
         },
     };
@@ -437,8 +446,13 @@ export async function runCommand(args, ctx, deps) {
     };
     const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
     try {
-        if (outer) return await runNested({ ...job, outer }, waitDeps, deps);
-        return await runInLine(job, waitDeps, deps);
+        if (!outer) return await runInLine(job, waitDeps, deps);
+        const nested = await runNested({ ...job, outer }, waitDeps, deps);
+        if (!nested.parentGone) return nested.exit;
+        say(`parent gone: "${outer.label}", pid ${outer.pid}, ended while this run waited for a nested place; `
+            + "joins the line as a normal run");
+        journal.note({ details: plan.details });
+        return await runInLine({ ...job, waitFrom: nested.waitFrom, tally: nested.tally }, waitDeps, deps);
     } finally {
         watch.drop();
     }
@@ -479,8 +493,8 @@ function endOfWait(waited, journal, leaving) {
     return null;
 }
 
-/** Runs a job that waits in line for a slot. job is the one runJob takes, without waitFrom, and with maxWait.
- *  waitDeps are deps with the wakeable sleep and leaving() of runCommand. */
+/** Runs a job that waits in line for a slot. job is the one runJob takes, with maxWait, and with waitFrom and tally
+ *  only when it carries on an earlier wait. waitDeps are deps with the wakeable sleep and leaving() of runCommand. */
 async function runInLine(job, waitDeps, deps) {
     const { pid, label, priority, kind, limit, project, cwd, settings, files, journal, maxWait } = job;
     const { signals } = deps;
@@ -496,7 +510,8 @@ async function runInLine(job, waitDeps, deps) {
         ...(priority ? { priority: true } : {}),
     };
     try {
-        const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files }, waitDeps);
+        const { waitFrom, tally } = job;
+        const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files, waitFrom, tally }, waitDeps);
         slot = waited.slot ?? null;
         const ended = endOfWait(waited, journal, waitDeps.leaving());
         if (ended !== null) return ended;
@@ -512,7 +527,9 @@ async function runInLine(job, waitDeps, deps) {
  *  when all are taken. It is noted in the nested folder from the start, so `status` can show it under its parent, and
  *  the note is the marker its own job is handed. job is the one runJob takes, without waitFrom, and with outer and
  *  maxWait; waitDeps are as for runInLine. While it waits, INT and TERM take it out as they take a job out of the
- *  line; from the handlers runJob adds onwards everything is the same as for a job in a slot. */
+ *  line; from the handlers runJob adds onwards everything is the same as for a job in a slot. Resolves with { exit },
+ *  or with { parentGone: true, tally, waitFrom } when the parent ended while the run waited; its note is removed
+ *  then, and the caller sends it to the line. */
 async function runNested(job, waitDeps, deps) {
     const { pid, label, outer, files, journal, maxWait, settings } = job;
     const { signals, say } = deps;
@@ -528,12 +545,13 @@ async function runNested(job, waitDeps, deps) {
     try {
         const waited = await waitForPlace({ pid, label, parent: outer, maxWait, settings, files }, waitDeps);
         place = waited.place ?? null;
+        if (waited.parentGone && !waitDeps.leaving()) return waited;
         const ended = endOfWait(waited, journal, waitDeps.leaving());
-        if (ended !== null) return ended;
+        if (ended !== null) return { exit: ended };
         say(waited.atOnce ? `${intro}; starts at once: no slot, no place in line, no health gate`
             : `${intro}; starts now that a nested place is free: no slot, no place in line, no health gate`);
         updateSlot(note, pid, { waiting: undefined });
-        return await runJob({ ...job, waitFrom: waited.waitFrom }, note, deps);
+        return { exit: await runJob({ ...job, waitFrom: waited.waitFrom }, note, deps) };
     } finally {
         leave();
         signals.off("exit", leave);

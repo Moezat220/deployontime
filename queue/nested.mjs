@@ -45,3 +45,12 @@ export function outerJob({ marker, pid, holders, nested = [], rows = null }) {
     const above = ancestors(rows ?? psRows(probeProcessTree()), pid).slice(1);
     return above.some((row) => row.pid === holder.pid) ? holder : null;
 }
+
+/** Whether parent, the job from outerJob(), still runs: its slot or note is there with the same pid and start time,
+ *  and is still that of a running job. holders and nested: from snapshot(). Once the job has ended its file is gone,
+ *  or belongs to a later job, and this gives false. */
+export function stillRunning(parent, { holders, nested = [] }) {
+    const pool = SLOT_FORM.test(markerOf(parent.file)) ? holders : nested;
+    return pool.some((h) => h.file === parent.file && h.pid === parent.pid && h.born === parent.born && realHolder(h)
+        && !h.waiting);
+}

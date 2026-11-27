@@ -153,6 +153,9 @@ places, and only for them: never for a slot and never for the health gate, so it
 Nested runs waiting under the same parent take the places in the order they started. While it waits, a nested run
 prints an `in line for a nested place:` line that names its parent, gives up with exit 75 at the `--max-wait` limit,
 leaves with exit 130 on INT or TERM, and books its waiting time in the journal under `nested`, as a run in line does.
+A waiting nested run checks on every poll that its parent still runs. If the parent has ended, the run is no longer
+inside a job: it prints a `parent gone:` line and joins the line as a normal run, waits for a slot and the health
+gate, and is journalled without `nested`. Its `--max-wait` limit still counts from when it began to wait.
 A nested run inside a nested run counts against its own parent, not against the outermost job: each nested run hands
 its job a `DOTIME_JOB` that names the nested run itself. So with `nestedPerJob` at 1 several levels of nesting still
 run, each level in the one place of the level above.

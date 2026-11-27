@@ -325,6 +325,39 @@ test("run: one job that starts 20 nested runs side by side never has more than n
     assert.deepEqual([slots(box), nestedNotes(box), places(box)], [[], [], []]);
 });
 
+test("run: a nested run whose parent ends while it waits for a place waits for a slot like any run, and shows in the line", async () => {
+    const box = sandbox({ config: { slots: 1, nestedPerJob: 1 } }), f = (name) => join(box.work, name);
+    const stamp = (name) => `require("node:fs").writeFileSync(${J(f(name))}, String(Date.now()));`;
+    const shardA = [CLI, "run", "--label", "docs-site: shard a", "--max-wait", "0.5", "--", NODE, "-e", `${stamp("a.start")} ${untilFile(f("a.release"))}`];
+    const shardB = [CLI, "run", "--label", "docs-site: shard b", "--max-wait", "0.5", "--", NODE, "-e", stamp("b.start")];
+    // The outer job starts shard a, then shard b once a runs, and ends once b waits and the test says so.
+    const fanOut = `const { spawn } = require("node:child_process"), fs = require("node:fs"); let b = false; `
+        + `const go = (words) => spawn(${J(NODE)}, words, { stdio: "ignore" }); go(${J(shardA)}); `
+        + `const t = setInterval(() => { if (!fs.existsSync(${J(f("a.start"))})) return; if (!b) { b = true; go(${J(shardB)}); } `
+        + `if (fs.readdirSync(${J(join(box.home, "nested"))}).length >= 2 && fs.existsSync(${J(f("outer.release"))})) process.exit(0); }, 20);`;
+    const outer = start(box, ["run", "--label", "docs-site: test suite", "--", NODE, "-e", fanOut]);
+    await until(() => slots(box).length === 1);
+    const nextJob = `${stamp("next.start")} const fs = require("node:fs"); `
+        + `const t = setInterval(() => { if (fs.existsSync(${J(f("next.release"))})) { clearInterval(t); ${stamp("next.end")} } }, 20);`;
+    const next = start(box, ["run", "--label", "shop-api: e2e", "--max-wait", "0.5", "--", NODE, "-e", nextJob]);
+    await until(() => readdirSync(join(box.home, "line")).length === 1 && nestedNotes(box).length === 2);
+    writeFileSync(f("outer.release"), "");
+    assert.equal((await outer.done).code, 0);
+    await until(() => existsSync(f("next.start")));
+    writeFileSync(f("a.release"), "");
+    await until(() => journal(box).some((line) => line.label === "docs-site: shard a"));
+    const waitingB = 'waiting 1 "docs-site: shard b": pid ';
+    await until(async () => (await cli(box, ["status"])).stdout.includes(waitingB));
+    assert.equal(existsSync(f("b.start")), false, "shard b does not run beside the job that holds the slot");
+    writeFileSync(f("next.release"), "");
+    assert.equal((await next.done).code, 0);
+    await until(() => journal(box).some((line) => line.label === "docs-site: shard b"));
+    assert.equal(Number(readFileSync(f("b.start"), "utf8")) >= Number(readFileSync(f("next.end"), "utf8")), true);
+    const b = journal(box).find((line) => line.label === "docs-site: shard b");
+    assert.deepEqual([b.outcome, b.exit, b.nested ?? false, "nested" in b.waitBy, "slots" in b.waitBy], ["ran", 0, false, true, true]);
+    assert.deepEqual([slots(box), nestedNotes(box), places(box)], [[], [], []]);
+});
+
 test("run: three levels of nesting finish with nestedPerJob 1 and one slot, each level the parent of the next", async () => {
     const box = sandbox({ config: { slots: 1, nestedPerJob: 1 } }), seen = [0, 1, 2, 3].map((n) => join(box.work, `marker-${n}`));
     const level3 = innerRun("docs-site: level 3", NODE, "-e", saveMarker(seen[3]));

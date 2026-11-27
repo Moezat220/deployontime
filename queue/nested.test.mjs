@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isolateProcess } from "./testkit.mjs";
 
 isolateProcess("nested");
-const { JOB_MARKER, markerOf, outerJob, placeKey } = await import("./nested.mjs");
+const { JOB_MARKER, markerOf, outerJob, placeKey, stillRunning } = await import("./nested.mjs");
 
 // A run (pid 5104) started by a shell (5103) inside a job (5102) under its wrapper (5101), whose queue process is
 // 5100; 5200 is an unrelated process that holds the other slot.
@@ -67,6 +67,19 @@ test("outerJob: a nested run's marker names its own note and is checked as stric
     assert.equal(findDeep("nested-5104", 5108, []), null, "notes are only looked up among the nested runs");
     assert.equal(outerJob({ marker: "slot-0", pid: 5108, holders: [], nested: [{ ...NOTE, file: "/state/nested/slot-0.json" }], rows: DEEP_ROWS }), null,
         "a slot marker is never looked up among the notes");
+});
+
+test("stillRunning: the parent's slot or note is still there with the same pid and start time, and still running", () => {
+    const [slotJob] = HOLDERS;
+    assert.equal(stillRunning(slotJob, { holders: HOLDERS, nested: [] }), true);
+    assert.equal(stillRunning(slotJob, { holders: [], nested: [] }), false, "the slot was freed");
+    assert.equal(stillRunning(slotJob, { holders: [{ ...slotJob, pid: 5400 }] }), false, "a later job holds the slot");
+    assert.equal(stillRunning(slotJob, { holders: [{ ...slotJob, born: slotJob.born + 9000 }] }), false, "same pid, later start");
+    assert.equal(stillRunning(slotJob, { holders: [], nested: [{ ...slotJob, file: "/state/nested/slot-0.json" }] }), false,
+        "a slot is never looked up among the notes");
+    assert.equal(stillRunning(NOTE, { holders: HOLDERS, nested: [NOTE] }), true);
+    assert.equal(stillRunning(NOTE, { holders: HOLDERS, nested: [] }), false, "the note was removed");
+    assert.equal(stillRunning(NOTE, { holders: HOLDERS, nested: [{ ...NOTE, pgid: undefined }] }), false, "no process group");
 });
 
 test("placeKey: the parent's marker and start time", () => {
