@@ -2,14 +2,17 @@
 // as a script in a temp project folder. Nothing outside the temp folders is written.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+    chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, tempDir } from "./testkit.mjs";
+import { cleanEnv, isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
 
 const home = isolateProcess("setup");
-const { applyPlan, BEGIN, blockText, END, mcpLines, planFolder, planText } = await import("./setup.mjs");
+const { applyPlan, BEGIN, BLOCK_LINES, blockText, END, fencedLines, importedPaths, mcpLines, planFolder, planText } =
+    await import("./setup.mjs");
 const { cmdSetup } = await import("./cli.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -67,7 +70,130 @@ test("planText: a begin marker without an end, two blocks, or an end before the 
     }
 });
 
+test("planText: marker lines inside a fenced code block are an example, not the block", () => {
+    for (const fence of ["```", "~~~~"]) {
+        const text = `# Notes\n\n${fence}md\n${BEGIN}\nan example\n${END}\n${fence}\n`;
+        assert.deepEqual(planText(text), { action: "add", text: `${text}\n${blockText()}\n` }, fence);
+    }
+    const real = `${"```"}\n${BEGIN}\n${END}\n${"```"}\n\n${BEGIN}\nold\n${END}\n`;
+    assert.equal(planText(real).text, `${"```"}\n${BEGIN}\n${END}\n${"```"}\n\n${blockText()}\n`);
+});
+
+test("planText: spaces or a tab after a marker are tolerated, and the marker is written plain again", () => {
+    const planned = planText(`# Notes\n${BEGIN}  \nold\n${END}\t\n`);
+    assert.deepEqual(planned, { action: "update", text: `# Notes\n${blockText()}\n` });
+    assert.equal(planText(`${BEGIN} \r\nold\r\n${END} \r\n`).text, `${blockText("\r\n")}\r\n`);
+});
+
+test("planText: a byte order mark at the start is kept; one in front of the begin marker is refused", () => {
+    const bom = "\uFEFF# Shop API\n";
+    assert.deepEqual(planText(bom), { action: "add", text: `${bom}\n${blockText()}\n` });
+    assert.match(planText(`\uFEFF${blockText()}\n`).error, /markers do not form one begin and one end/);
+});
+
+test("the block names exits 75, 124 and 3, and what to do after exit 3", () => {
+    const text = BLOCK_LINES.join(" ");
+    for (const part of ["Exit 75", "exit 124", "Exit 3", "failed twice on unchanged code", "--after-fix"]) {
+        assert.equal(text.includes(part), true, part);
+    }
+});
+
+test("fencedLines: backtick and tilde fences, a longer closing fence, and an unclosed one", () => {
+    assert.deepEqual(fencedLines(["a", "```js", "b", "~~~", "````", "c"]), [false, true, true, true, true, false]);
+    assert.deepEqual(fencedLines(["~~~", "```", "~~~ ", "d"]), [true, true, true, false]);
+    assert.deepEqual(fencedLines(["```", "e"]), [true, true]);
+    assert.deepEqual(fencedLines(["    ```", "f"]), [false, false]);
+});
+
+test("importedPaths: @ paths outside code, with an escaped space; none in a code span or block", () => {
+    const text = ["@AGENTS.md", "See @docs/my\\ notes.md and `@skip.md`.", "```", "@fenced.md", "```", "the price is 3@5 each", ""]
+        .join("\n");
+    assert.deepEqual(importedPaths(text), ["AGENTS.md", "docs/my notes.md"]);
+});
+
 // ---- planFolder and applyPlan ----
+
+const plan = (dir) => planFolder(dir).changes.map((c) => [c.file, c.action]);
+
+test("planFolder: a .claude/CLAUDE.md gets the block, and no AGENTS.md is created beside it", () => {
+    const dir = tempDir("setup-dotclaude");
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", "CLAUDE.md"), OWN);
+    assert.deepEqual(plan(dir), [[".claude/CLAUDE.md", "add"]]);
+    writeFileSync(join(dir, "AGENTS.md"), OWN);
+    assert.deepEqual(plan(dir), [["AGENTS.md", "add"], [".claude/CLAUDE.md", "add"]]);
+});
+
+test("planFolder: a lone CLAUDE.local.md gets the block, beside a new AGENTS.md, with a note that says why", () => {
+    const dir = tempDir("setup-local");
+    writeFileSync(join(dir, "CLAUDE.local.md"), OWN);
+    const planned = planFolder(dir);
+    const actions = planned.changes.map((c) => [c.file, c.action]);
+    assert.deepEqual(actions, [["AGENTS.md", "create"], ["CLAUDE.local.md", "add"]]);
+    assert.match(planned.notes.join(" "), /^note: CLAUDE\.local\.md gets the block because Claude Code reads it/);
+    writeFileSync(join(dir, "AGENTS.md"), OWN);
+    assert.deepEqual(plan(dir), [["AGENTS.md", "add"], ["CLAUDE.local.md", "add"]]);
+});
+
+test("planFolder: beside a CLAUDE.md, a CLAUDE.local.md is left alone unless it holds the block already", () => {
+    const dir = tempDir("setup-local-shared");
+    writeFileSync(join(dir, "CLAUDE.md"), OWN);
+    writeFileSync(join(dir, "CLAUDE.local.md"), OWN);
+    assert.deepEqual(planFolder(dir).notes, []);
+    assert.deepEqual(plan(dir), [["CLAUDE.md", "add"]]);
+    writeFileSync(join(dir, "CLAUDE.local.md"), `${OWN}\n${BEGIN}\nold\n${END}\n`);
+    assert.deepEqual(plan(dir), [["CLAUDE.md", "add"], ["CLAUDE.local.md", "update"]]);
+});
+
+test("planFolder: a Claude Code file that imports AGENTS.md is skipped when AGENTS.md gets the block", () => {
+    const dir = tempDir("setup-import");
+    writeFileSync(join(dir, "CLAUDE.md"), "@AGENTS.md\n\nSay hello first.\n");
+    assert.deepEqual(plan(dir), [["CLAUDE.md", "add"]]);
+    writeFileSync(join(dir, "AGENTS.md"), OWN);
+    const planned = planFolder(dir);
+    assert.deepEqual(planned.changes.map((c) => [c.file, c.action]), [["AGENTS.md", "add"], ["CLAUDE.md", "imported"]]);
+    assert.deepEqual(applyPlan(planned).lines,
+        ["would add the block to AGENTS.md", "would skip CLAUDE.md: it imports AGENTS.md, which holds the block"]);
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", "CLAUDE.md"), "Read @../AGENTS.md first.\n");
+    writeFileSync(join(dir, "CLAUDE.md"), "Not an import: `@AGENTS.md`.\n");
+    assert.deepEqual(plan(dir), [["AGENTS.md", "add"], ["CLAUDE.md", "add"], [".claude/CLAUDE.md", "imported"]]);
+});
+
+test("planFolder: a Claude Code file in a folder above gets a note when no file in the project has the block", () => {
+    const parent = tempDir("setup-above");
+    writeFileSync(join(parent, "CLAUDE.md"), OWN);
+    mkdirSync(join(parent, "shop-api"));
+    const planned = planFolder(join(parent, "shop-api"));
+    assert.deepEqual(planned.changes.map((c) => [c.file, c.action]), [["AGENTS.md", "create"]]);
+    const above = join(realpathSync(parent), "CLAUDE.md");
+    assert.deepEqual(planned.notes, [
+        `note: Claude Code reads ${above} and not AGENTS.md; to give it the block, add the`,
+        "line @shop-api/AGENTS.md to that file, or run setup in its folder",
+    ]);
+    writeFileSync(join(parent, "shop-api", "CLAUDE.md"), OWN);
+    assert.deepEqual(planFolder(join(parent, "shop-api")).notes, []);
+});
+
+test("planFolder: an agent file with a second hard link is refused, and the other name is not written", () => {
+    const dir = tempDir("setup-hardlink"), elsewhere = tempDir("setup-hardlink-elsewhere");
+    writeFileSync(join(elsewhere, "notes.md"), OWN);
+    linkSync(join(elsewhere, "notes.md"), join(dir, "CLAUDE.md"));
+    assert.equal(planFolder(dir).error,
+        "CLAUDE.md: has 2 hard links; setup does not write through one; replace it by a plain file");
+    const ran = cli(["--write"], dir);
+    assert.deepEqual([ran.status, ran.stdout], [1, ""]);
+    assert.equal(read(elsewhere, "notes.md"), OWN);
+    assert.deepEqual(readdirSync(dir), ["CLAUDE.md"]);
+});
+
+test("planFolder: an agent file name that is a folder is not a file", () => {
+    const dir = tempDir("setup-notfile");
+    mkdirSync(join(dir, "CLAUDE.md"));
+    assert.deepEqual(planFolder(dir), { error: "CLAUDE.md: is not a file" });
+    const ran = cli(["--write"], dir);
+    assert.deepEqual([ran.status, ran.stdout, ran.stderr], [1, "", "dotime-queue: setup: CLAUDE.md: is not a file\n"]);
+});
 
 test("planFolder: with no agent file, AGENTS.md is the one to create", () => {
     const dir = tempDir("setup-empty");
@@ -176,6 +302,42 @@ test("setup --cwd: works on another folder and leaves the current one alone", ()
     const missing = cli(["--cwd", join(there, "gone")], here);
     assert.deepEqual([missing.status, missing.stdout], [2, ""]);
     assert.equal(missing.stderr, `dotime-queue: setup: ${join(there, "gone")}: no such folder\n`);
+});
+
+test("setup --write: an AGENTS.md that is a dangling link is not followed, and nothing is created", () => {
+    const dir = tempDir("setup-dangling"), elsewhere = tempDir("setup-dangling-elsewhere");
+    symlinkSync(join(elsewhere, "made.md"), join(dir, "AGENTS.md"));
+    const ran = cli(["--write"], dir);
+    assert.equal(ran.status, 1);
+    assert.match(ran.stderr, /^dotime-queue: setup: AGENTS\.md: cannot be written \(EEXIST\)$/m);
+    assert.deepEqual([readdirSync(elsewhere), existsSync(join(dir, "AGENTS.md"))], [[], false]);
+});
+
+test("setup: without --cwd, works in the top folder of the git repository, and says which folder it used", () => {
+    const repo = makeRepo(join(tempDir("setup-git"), "shop-api"), { "src/main.txt": "x\n" });
+    const ran = cli(["--write"], join(repo, "src"));
+    assert.equal(ran.status, 0, ran.stderr);
+    const top = `setup: project folder ${realpathSync(repo)} (the top folder of the git repository)\n`;
+    assert.equal(ran.stdout.startsWith(top), true, ran.stdout);
+    assert.equal(read(repo, "AGENTS.md"), `${blockText()}\n`);
+    assert.deepEqual(readdirSync(join(repo, "src")), ["main.txt"]);
+    const plain = tempDir("setup-nogit");
+    const outside = cli([], plain);
+    const here = `setup: project folder ${realpathSync(plain)} (the current folder, which is not in git)\n`;
+    assert.equal(outside.stdout.startsWith(here), true, outside.stdout);
+    const named = cli(["--cwd", join(repo, "src")], plain);
+    assert.equal(named.stdout.startsWith(`setup: project folder ${realpathSync(join(repo, "src"))}\n`), true);
+});
+
+test("setup --write: a lone CLAUDE.local.md gets the block, and the note is printed", () => {
+    const dir = tempDir("setup-local-cli");
+    writeFileSync(join(dir, "CLAUDE.local.md"), OWN);
+    const ran = cli(["--write"], dir);
+    assert.equal(ran.status, 0, ran.stderr);
+    const lines = /^created AGENTS\.md\nadded the block to CLAUDE\.local\.md\nnote: CLAUDE\.local\.md gets/m;
+    assert.match(ran.stdout, lines);
+    assert.equal(read(dir, "CLAUDE.local.md"), `${OWN}\n${blockText()}\n`);
+    assert.equal(read(dir, "AGENTS.md"), `${blockText()}\n`);
 });
 
 const asRoot = { skip: isRoot && "root may write a read-only file" };

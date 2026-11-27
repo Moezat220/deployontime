@@ -17,7 +17,7 @@ git clone https://github.com/Moezat220/deployontime.git
 cd deployontime
 npm link                          # puts dotime-queue and dotime-mcp on the path
 cd <a project folder>
-dotime-queue setup --write        # adds the queue instruction to its AGENTS.md and CLAUDE.md
+dotime-queue setup --write        # adds the queue instruction to its agent files, at the git top folder
 ```
 
 Without `--write`, `setup` only shows what it would change. Without `npm link`, use `node <clone>/queue/cli.mjs`.

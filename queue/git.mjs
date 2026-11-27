@@ -53,3 +53,9 @@ export function repoName(cwd) {
     if (!gitDir) return null;
     return basename(gitDir.endsWith("/.git") ? dirname(gitDir) : gitDir);
 }
+
+/** The top folder of the repository a folder belongs to (the worktree's own, for a linked worktree), or null outside
+ *  git. */
+export function repoTop(cwd) {
+    return git(cwd, ["rev-parse", "--show-toplevel"], { timeout: 3000 })?.trim() || null;
+}

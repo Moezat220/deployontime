@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git as testGit, isolateProcess, makeRepo, tempDir } from "./testkit.mjs";
 
 isolateProcess("git");
-const { git, gitState, isRepository, porcelainClean, readOnlyGit, repoName } = await import("./git.mjs");
+const { git, gitState, isRepository, porcelainClean, readOnlyGit, repoName, repoTop } = await import("./git.mjs");
 const { folderProject } = await import("./project.mjs");
 
 test("git: the output as text or bytes, and null when git fails", () => {
@@ -33,6 +33,13 @@ test("repoName: the repository folder, the main one for a linked worktree, null 
     const plain = join(tempDir("git"), "scratch");
     mkdirSync(plain);
     assert.equal(repoName(plain), null);
+});
+
+test("repoTop: the top folder from a subfolder of a repository, null outside git", () => {
+    const repo = makeRepo(join(tempDir("git-top"), "shop-api"), { "src/main.txt": "x\n" });
+    assert.equal(repoTop(join(repo, "src")), realpathSync(repo));
+    assert.equal(repoTop(repo), realpathSync(repo));
+    assert.equal(repoTop(tempDir("git-top-plain")), null);
 });
 
 test("porcelainClean: clean for no output and for untracked node_modules links only", () => {

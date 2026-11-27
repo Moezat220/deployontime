@@ -117,15 +117,17 @@ dotime-queue setup           # shows what it would add, and changes nothing
 dotime-queue setup --write   # adds it
 ```
 
-It adds the queue instruction to the project's `AGENTS.md` and `CLAUDE.md`, between a begin and an end marker, or
-creates `AGENTS.md` when there is neither; a second run updates that block and leaves the rest of each file alone.
+It works in the top folder of the git repository. It adds the queue instruction to the project's `AGENTS.md`,
+`CLAUDE.md` and `.claude/CLAUDE.md`, between a begin and an end marker, or creates `AGENTS.md` when there is none; a
+second run updates that block and leaves the rest of each file alone.
 `--mcp` also prints the settings for the [MCP server](#use-with-an-mcp-client). The block says, in short:
 
 ```
 Start every test run, build and other heavy command through the queue:
 dotime-queue run --label "<project>: <task>" -- <command>
 A test or lint run that prints "skipped:" already passed on this exact commit and exits 0; add --no-skip in front
-of the -- only to run it again on purpose.
+of the -- only to run it again on purpose. Exit 75 means the job gave up waiting for a slot, 124 that it hit
+its run limit, 3 that the same check already failed twice on unchanged code.
 ```
 
 A coding agent that opens this repository finds what it needs in [AGENTS.md](AGENTS.md).

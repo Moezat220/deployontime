@@ -17,8 +17,8 @@ export const USAGE = [
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
     "  dotime-queue setup [--write] [--cwd <dir>] [--mcp]",
-    "      --write              add the queue instruction to AGENTS.md and CLAUDE.md (without it: only show)",
-    "      --cwd <dir>          the project folder, in place of the current one",
+    "      --write              add the queue instruction to the agent files (without it: only show)",
+    "      --cwd <dir>          the project folder, in place of the top of the git repository",
     "      --mcp                also print the MCP client settings for dotime-mcp",
     "  dotime-queue help",
 ].join("\n");

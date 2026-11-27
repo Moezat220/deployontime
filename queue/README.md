@@ -337,9 +337,24 @@ dotime-queue setup [--write] [--cwd <dir>] [--mcp]
 ```
 
 Puts the queue instruction into a project's agent instruction files, so the coding agents that work in it start
-their heavy commands through the queue. It looks in the project folder (the current folder, or the one `--cwd`
-names) for `AGENTS.md` and `CLAUDE.md`. Each one it finds gets the instruction block; when neither exists,
-`AGENTS.md` is created with the block alone. No other agent file is looked for.
+their heavy commands through the queue. The project folder is the one `--cwd` names; without it, the top folder of
+the git repository the current folder is in, or the current folder outside git. The first line says which folder
+was used. setup looks there for `AGENTS.md`, `CLAUDE.md` and `.claude/CLAUDE.md`. Each one it finds gets the
+instruction block; when none exists, `AGENTS.md` is created with the block alone.
+
+Claude Code does not read `AGENTS.md` when it finds a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` in the
+folder or above it. `CLAUDE.local.md` is one person's own file, usually kept out of git. When it is the only one of
+those three in the project folder, it gets the block too, beside the `AGENTS.md` that other agents read, and setup
+prints a note that says why; next to a `CLAUDE.md` or `.claude/CLAUDE.md` it is left alone, unless it holds the
+block already. Adding the block there is safer than a warning alone: it is the file Claude Code reads, the change
+sits between the markers, and a dry run shows it first. When no file in the project folder that Claude Code reads
+gets the block and a folder above holds one, setup prints a note that names it and the `@` import line to add;
+it never writes above the project folder.
+
+A `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` without the block that imports `AGENTS.md` with an `@`
+line (such as `@AGENTS.md`, or `@../AGENTS.md` in `.claude/CLAUDE.md`) is not given a copy of its own: Claude Code
+reads the block through the import. setup prints `would skip` or `skipped` for it, with the reason. An `@` inside
+a code span or a fenced code block is no import.
 
 Without `--write`, setup is a dry run: it prints `would create`, `would add the block to` or `would update the block
 in` for each file, then the block, and changes nothing. With `--write` it makes those changes and prints `created`,
@@ -350,11 +365,14 @@ The block starts with the line `<!-- dotime-queue setup: begin; ... -->` and end
 `<!-- dotime-queue setup: end -->`. A file without the block gets it at the end, after a blank line; a file with it
 gets only the lines from the begin marker to the end marker replaced. Every other byte of the file stays as it was,
 so running setup again changes nothing until the block's text changes in a newer version. A file whose lines end in
-CRLF gets the block in CRLF too. A file with a begin marker and no end marker, with two blocks, or with the end
+CRLF gets the block in CRLF too. Marker lines inside a fenced code block are an example and do not count; spaces
+after a marker do not matter. A file with a begin marker and no end marker, with two blocks, or with the end
 before the begin, is not changed: fix the markers by hand.
 
 setup writes only inside the project folder, and only the files it names. A `CLAUDE.md` that is a link to
-`AGENTS.md` is written once; an agent file that is a link to a file outside the project folder is refused. Before
+`AGENTS.md` is written once; an agent file that is a link to a file outside the project folder is refused, and so
+is one with a second hard link, since that other name may be outside the project folder. A missing `AGENTS.md`
+is created only when no file or link of that name exists, so a dangling link is never followed. Before
 anything is written, every file to change is checked: when one cannot be read or written (a read-only file, for
 example), setup names it, writes nothing and exits 1. It reads no settings and never touches the state folder.
 
@@ -814,7 +832,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
-| `setup.mjs` | The queue instruction block and where `setup` puts it in a project's agent files; the MCP settings it prints. | library | Reads and, with `--write`, writes `AGENTS.md` and `CLAUDE.md` in the project folder. |
+| `setup.mjs` | The queue instruction block and where `setup` puts it in a project's agent files; the MCP settings it prints. | library | Reads and, with `--write`, writes `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the project folder. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
 | `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |
@@ -831,7 +849,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `idle.mjs` | Idle verdicts from CPU samples; the dev-server test. | library | None. |
 | `stray.mjs` | Finds large test runs outside the queue. | library | None. |
 | `commands.mjs` | The test, shell and launcher command patterns, each with its reason. | library | None. |
-| `git.mjs` | The queue's git calls, read-only and with time limits. | library | Runs `git`. |
+| `git.mjs` | The queue's git calls, read-only and with time limits; the repository's top folder for `setup`. | library | Runs `git`. |
 | `project.mjs` | The project of a job: label prefix, repository name or folder name. | library | Runs `git` through `git.mjs`. |
 | `probes.mjs` | Readings from the operating system, one function each, with a macOS and a Linux branch where they differ. | library | Runs `ps`, on macOS also `memory_pressure`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`, on Linux `notify-send`; reads `/proc/meminfo` and the disk through `statfs`. |
 | `linux.mjs` | Readings Linux keeps in `/proc` and `/sys`, with their parsers. | library | Reads `/proc/meminfo` and `/sys/class/power_supply`. |

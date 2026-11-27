@@ -7,7 +7,7 @@ import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
 import { gateReason } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
-import { gitState, isRepository } from "./git.mjs";
+import { gitState, isRepository, repoTop } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
 import { markerOf } from "./nested.mjs";
@@ -125,12 +125,15 @@ function cmdHistory(args, { files, tz }) {
 }
 
 /** `setup`: shows, or with --write makes, the changes to the project's agent files, then with --mcp prints the MCP
- *  settings. Exits 0 when done, 1 when a file cannot be read or written (nothing is written then, unless a write
- *  itself fails part way, which it names), 2 when the folder in --cwd does not exist. */
-export function cmdSetup(args, { cwd = () => process.cwd(), print = console.log, warn = say, writeFile } = {}) {
+ *  settings. Without --cwd the project folder is the top folder of the git repository the current folder is in, or
+ *  the current folder outside git. Exits 0 when done, 1 when a file cannot be read or written (nothing is written
+ *  then, unless a write itself fails part way, which it names), 2 when the folder in --cwd does not exist. */
+export function cmdSetup(args, {
+    cwd = () => process.cwd(), top = repoTop, print = console.log, warn = say, writeFile,
+} = {}) {
     const write = args.includes("--write");
     const named = opt(args, "--cwd");
-    let dir = named;
+    let dir = named, where = "";
     if (dir === undefined) {
         try {
             dir = cwd();
@@ -138,15 +141,19 @@ export function cmdSetup(args, { cwd = () => process.cwd(), print = console.log,
             warn("the current folder was removed; run setup from a folder that exists, or name one with --cwd <dir>");
             return EXIT.usage;
         }
+        const repo = top(dir);
+        where = repo ? " (the top folder of the git repository)" : " (the current folder, which is not in git)";
+        dir = repo ?? dir;
     }
     const plan = planFolder(dir);
     if (plan.error) {
         warn(`setup: ${plan.error}`);
         return plan.folder ? EXIT.usage : 1;
     }
-    print(`setup: project folder ${plan.root}`);
+    print(`setup: project folder ${plan.root}${where}`);
     const done = applyPlan(plan, { write, ...(writeFile ? { writeFile } : {}) });
     for (const line of done.lines) print(line);
+    for (const line of plan.notes ?? []) print(line);
     if (done.error) {
         print(`changed: ${done.changed.join(", ") || "nothing"}`);
         warn(`setup: ${done.error}`);
