@@ -61,6 +61,10 @@ rm -rf ~/.dotime        # or the folder DOTIME_HOME names
 If you scheduled the [reaper](#reaper), also remove it from your scheduler (for cron or a systemd timer, see
 [the end of that section](#scheduling-the-reaper-with-cron)).
 
+Agents that use MCP can reach the queue as tools instead of shell commands: `dotime-mcp`, set up as described in
+[Use with an MCP client](../README.md#use-with-an-mcp-client). It runs the same `dotime-queue run` underneath, so
+everything in this manual applies to its jobs too.
+
 ### What differs on Linux
 
 The queue, `run`, `status`, `passed`, `history` and the reaper work the same on Linux. The readings come from
@@ -734,6 +738,7 @@ Environment variables:
 | `reaper-state.json` | CPU samples between reaper runs. |
 | `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
+| `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`) and its output (`.log`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
 
 A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
 started later.

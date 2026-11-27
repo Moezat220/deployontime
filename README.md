@@ -130,6 +130,42 @@ added it.
 
 Every command, flag, exit code and setting is in the [queue manual](queue/README.md).
 
+## Use with an MCP client
+
+`dotime-mcp` is an MCP server on standard input and output that offers the queue to agents as tools. It has no
+dependencies either, and `npm link` puts it on your path next to `dotime-queue`. Add one entry to your client's MCP
+server settings:
+
+```json
+{
+  "mcpServers": {
+    "dotime-queue": { "command": "dotime-mcp" }
+  }
+}
+```
+
+Clients differ in where that file lives and in how its top level is named; see your client's documentation. Without
+`npm link`, use `"command": "node", "args": ["<path to the clone>/mcp/server.mjs"]`. To use another state folder, add
+`"env": { "DOTIME_HOME": "<folder>" }`, as for the command.
+
+| Tool | Arguments | What it gives |
+| --- | --- | --- |
+| `queue_status` | none | The lines of `dotime-queue status`, with the slot and line counts as fields |
+| `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
+| `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
+| `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix` | Starts `dotime-queue run` in the background and returns a job id at once |
+| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), and the last lines of its output |
+
+`cwd` is an absolute path to an existing folder; without it, the folder the server was started in is used. The label
+is `"<project>: <task>"`. The command is a list of words and never goes through a shell. A job from `queue_run` waits
+and runs under the same rules as one started from the shell, in a process group of its own, and keeps running when
+the server exits. Its output and pid files are kept in `mcp-jobs/` in the state folder for 7 days, and at most 200
+finished jobs are kept. `--priority` and `--max-wait` are not offered: such a job waits at most the usual 60 minutes.
+
+The shell commands keep working as before; both share the same state folder, slots and journal. The server speaks MCP
+revision 2026-07-28 (no handshake: each request names its version in `_meta`, and `server/discover` lists the
+versions) and 2025-11-25 and earlier (opened with `initialize`).
+
 ## FAQ
 
 <details>
