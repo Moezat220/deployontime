@@ -201,7 +201,7 @@ export async function cmdIntegrate(args, ctx, deps) {
 /** `discard <id> [--force]`: removes the job's worktree and branch. Without --force it refuses, with exit 2 and
  *  nothing removed, while the branch has commits that are not in the job's base branch (or base commit), or the
  *  worktree has uncommitted changes, or the folder is there but git no longer knows it as a worktree. A folder git
- *  still lists but that is gone is pruned. ctx: { files }. deps: { say, env }. */
+ *  still lists but that is gone is forgotten (that one folder only). ctx: { files }. deps: { say, env }. */
 export function cmdDiscard(args, ctx, deps) {
     const { say } = deps;
     const env = deps.env ?? process.env;
