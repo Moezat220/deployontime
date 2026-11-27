@@ -47,7 +47,7 @@ was never broken. Each agent sees only its own run, so neither you nor the agent
 | **The computer is already busy** | New jobs pile on | Jobs wait while CPU, memory or disk is short, or the battery is low |
 | **A job hangs** | It can run until someone notices | It is stopped at its time limit, with everything it started (exit 124) |
 | **A check keeps failing on the same code** | An agent may keep re-running it | A third try is blocked for up to 6 hours (exit 3) until the code changes or `--after-fix` is given |
-| **This commit already has a green run** | It may run again | A test or lint check that already passed on the same clean commit is skipped (exit 0); `--no-skip` runs it anyway |
+| **This commit already has a green run** | It may run again | A test or lint check that already passed on the same clean commit, in the same folder, is skipped (exit 0); `--no-skip` runs it anyway |
 | **Where did the time go?** | No record | `dotime-queue history` totals waits and results per project |
 | **Dev servers left running** | They keep using memory | An optional reaper stops the idle ones |
 

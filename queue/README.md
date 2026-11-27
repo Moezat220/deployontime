@@ -72,8 +72,8 @@ Worth knowing before the first run:
 - A question mark in the task part of the label makes a debug job, stopped after 15 minutes:
   `"shop-api: does login work?"` is one.
 - A job waits in line at most 60 minutes, then exits 75. That is not a test failure.
-- A test or lint check that already passed on the same clean commit is skipped and exits 0 at once. `--no-skip` runs
-  it anyway.
+- A test or lint check that already passed on the same clean commit, in the same folder, is skipped and exits 0 at
+  once. `--no-skip` runs it anyway.
 - Times are printed in UTC unless `DOTIME_TZ` names another zone.
 
 ## Commands
@@ -141,8 +141,9 @@ Details:
 - `run` ends when the job's main process ends. A process the job started in the background and left running does
   not keep `run` waiting.
 
-**Checks that already passed.** A `test` or `lint` job that already passed on exactly this code is not run again.
-`run` prints one line, exits 0, takes no slot and starts nothing:
+**Checks that already passed.** A `test` or `lint` job that already passed on the same commit, in the same folder,
+with the same files named in its command, is not run again. `run` prints one line, exits 0, takes no slot and starts
+nothing:
 
 ```
 dotime-queue: skipped: "shop-api: unit tests" already passed on commit 0a1b2c3d (12 min ago); --no-skip runs it anyway
@@ -152,23 +153,29 @@ It skips a job only when all of these hold:
 
 - The job's kind is `test` or `lint`, as guessed from the label and command or given with `--kind` (see
   [Projects and kinds](#projects-and-kinds)). A `build`, `deploy`, `debug` or `other` job always runs, because its
-  output may be needed.
+  output may be needed. The guess takes the first kind that matches, and `test` comes before `build`: a job whose
+  label or command names both, such as `"shop-api: build and test"`, is a `test` job and can be skipped. Give such a
+  job `--kind build` when its output is needed.
 - The folder is a git checkout at a commit, with no uncommitted or untracked changes now.
-- The journal holds a pass stamp for this check, found by the same rules as [`passed`](#passed): runs in a repository
-  of the same name, with the same label and the same command line, on this commit, that began with a clean tree, and
-  the newest of them exited 0. Stopped and timed-out runs are left out, as `passed` leaves them out.
-- No run of the same check on this commit failed or hit its run limit after that pass, not even one that began with
-  uncommitted changes.
+- The journal holds a pass stamp for this check, found by the rules of [`passed`](#passed) but only among runs
+  started in the same folder, with the same label and the same command line: on this commit, begun with a clean tree,
+  and the newest of them exited 0. Stopped and timed-out runs are left out, as `passed` leaves them out. A pass in
+  another folder of the same repository, such as another package, never counts.
+- That passing run has the same code fingerprint as the job now (see [Repeated failures](#repeated-failures)). With a
+  clean tree, the fingerprint covers the files the command names, so a script outside git that has changed since,
+  such as `node ../tools/check.js`, makes the job run.
+- No run of the same check in this folder on this commit failed or hit its run limit after that pass, not even one
+  that began with uncommitted changes.
 
-The stamp has no age limit: the same commit with a clean tree is the same code. What git does not track is not part
-of the check, such as installed packages in an ignored folder, tools or the environment. After changing those, or to
-run a flaky test again, give `--no-skip`: the job then runs, and its result counts like that of any run. A nested
-run follows the same rules. A check that is refused because it failed twice is refused before this is looked at.
+The stamp has no age limit. Other things outside git are not part of the check: files the command reads without
+naming them, installed packages in an ignored folder, tools and the environment. After changing those, or to run a
+flaky test again, give `--no-skip`: the job then runs, and its result counts like that of any run. A nested run
+follows the same rules. A check that is refused because it failed twice is refused before this is looked at.
 
 A skipped job is journalled with outcome `skipped`, exit 0, its commit, and the stamp it relied on in `stamp`
 (`head`, `endedAt` and `runMin` of the passing run). A skipped line is never a stamp itself, never a sample for the
 [run limits](#run-limits), and never a pass or an attempt for [Repeated failures](#repeated-failures). `history`
-counts the skipped jobs and the run time they saved.
+counts the skipped jobs and the run time they saved, and leaves them out of its wait median and p90.
 
 **Nested runs.** A job may run the queue itself, for example an `npm test` script that calls `dotime-queue run`, or
 an agent at work inside a queued job. Such an inner run would wait for a slot that its own outer job holds, and with

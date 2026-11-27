@@ -7,7 +7,7 @@ import { isolateProcess, tempDir } from "./testkit.mjs";
 isolateProcess("journal");
 const {
     addWait, append, clockMinutes, cmdString, findStamp, historyWindow, isFailedRun, isStopped, jobEnd,
-    lineProject, parseLines, readLines, record, summarize,
+    lineProject, parseLines, readLines, record, skipStamp, summarize,
 } = await import("./journal.mjs");
 
 const MINUTE = 60_000, START = Date.UTC(2031, 2, 14, 16, 30);
@@ -239,23 +239,44 @@ test("summarize: skipped jobs are counted per project with the run time of the s
     assert.deepEqual([byProject["docs-site"].skipped, byProject["docs-site"].savedMin], [1, 1.2]);
 });
 
-test("findStamp and skipStamp: a skipped line is never a stamp, and a failure after the pass on the commit voids it", async () => {
-    const { skipStamp } = await import("./journal.mjs");
+test("findStamp and skipStamp: a skipped line is never a stamp, and a failure after the pass on the commit voids it", () => {
     const folder = { project: "mobile-app", head: "1a2b3c4d5e6f", clean: true };
-    const check = { label: "mobile-app: integration suite", cmd: "npm run test:integration" };
+    const check = { label: "mobile-app: integration suite", cmd: "npm run test:integration", cwd: "/srv/mobile-app", fp: "c0ffee" };
+    const line = (fields = {}) => run({ cwd: check.cwd, fp: check.fp, ...fields });
     const opts = { tz: "UTC", at: START + 60 * MINUTE };
     assert.equal(findStamp([skippedLine()], folder, "", opts).stamp, null);
-    assert.equal(skipStamp([skippedLine()], folder, check, opts), null);
-    const pass = run({ endedAt: iso(0) });
-    assert.equal(skipStamp([pass, skippedLine({ endedAt: iso(5) })], folder, check, opts).endedAt, iso(0));
+    assert.equal(skipStamp([skippedLine({ cwd: check.cwd, fp: check.fp })], folder, check, opts), null);
+    const pass = line({ endedAt: iso(0) });
+    assert.equal(skipStamp([pass, skippedLine({ endedAt: iso(5), cwd: check.cwd, fp: check.fp })], folder, check, opts).endedAt, iso(0));
     assert.equal(skipStamp([pass], folder, { ...check, label: "mobile-app: unit tests" }, opts), null);
     assert.equal(skipStamp([pass], folder, { ...check, cmd: "npm run test:unit" }, opts), null);
     assert.equal(skipStamp([pass], { ...folder, clean: false }, check, opts), null);
-    for (const later of [run({ endedAt: iso(9), exit: 1, clean: false }), run({ endedAt: iso(9), outcome: "timed-out", exit: 124 })]) {
+    for (const later of [line({ endedAt: iso(9), exit: 1, clean: false }), line({ endedAt: iso(9), outcome: "timed-out", exit: 124 })]) {
         assert.equal(skipStamp([pass, later], folder, check, opts), null, JSON.parse(later).outcome);
     }
-    const elsewhere = run({ endedAt: iso(9), exit: 1, head: "9e8d7c6b5a4f" });
+    const elsewhere = line({ endedAt: iso(9), exit: 1, head: "9e8d7c6b5a4f" });
     assert.equal(skipStamp([pass, elsewhere], folder, check, opts).endedAt, iso(0), "a failure on another commit");
-    const stoppedLater = run({ endedAt: iso(9), outcome: "stopped", exit: 143 });
+    const stoppedLater = line({ endedAt: iso(9), outcome: "stopped", exit: 143 });
     assert.equal(skipStamp([pass, stoppedLater], folder, check, opts).endedAt, iso(0), "a stopped run says nothing");
+});
+
+test("skipStamp: the stamp must come from the same folder, with the same code fingerprint", () => {
+    const folder = { project: "mobile-app", head: "1a2b3c4d5e6f", clean: true };
+    const check = { label: "mobile-app: integration suite", cmd: "npm run test:integration", cwd: "/srv/mobile-app/web", fp: "c0ffee" };
+    const opts = { tz: "UTC", at: START + 60 * MINUTE };
+    const pass = run({ endedAt: iso(0), cwd: check.cwd, fp: check.fp });
+    assert.equal(skipStamp([pass], folder, check, opts).endedAt, iso(0));
+    assert.equal(skipStamp([pass], folder, { ...check, cwd: "/srv/mobile-app/api" }, opts), null, "another folder");
+    assert.equal(skipStamp([pass], folder, { ...check, fp: "beef" }, opts), null, "another fingerprint");
+    assert.equal(skipStamp([pass], folder, { ...check, fp: null }, opts), null, "no fingerprint now");
+    assert.equal(skipStamp([run({ endedAt: iso(0), cwd: check.cwd })], folder, check, opts), null, "no fingerprint on the pass");
+    const failedElsewhere = run({ endedAt: iso(9), exit: 1, cwd: "/srv/mobile-app/api", fp: check.fp });
+    assert.equal(skipStamp([pass, failedElsewhere], folder, check, opts).endedAt, iso(0), "a failure in another folder");
+});
+
+test("summarize: skipped jobs never waited, so they are left out of the wait median and p90", () => {
+    const lines = [4, 6, 8].map((waitMin, i) => run({ queuedAt: iso(i), startedAt: iso(i), endedAt: iso(i + 1), waitMin }));
+    for (let i = 0; i < 3; i++) lines.push(skippedLine({ queuedAt: iso(10 + i), endedAt: iso(10 + i) }));
+    const { all } = summarize(lines, START, START + 60 * MINUTE);
+    assert.deepEqual([all.jobs, all.skipped, all.waitMedian, all.waitP90, all.waitMinTotal], [6, 3, 6, 8, 18]);
 });

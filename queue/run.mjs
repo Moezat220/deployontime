@@ -1,13 +1,13 @@
-// The `run` command, in three steps: planJob decides the limit and whether the job is refused, and skipFor whether a
-// check that already passed on this commit is skipped; waitForSlot waits in line until a slot is taken (for a nested
-// run, waitForPlace waits until a place under its parent job is), and runJob runs the job in its own process group
-// under the limit. runCommand chains them and returns the exit code; it never
-// ends the process itself. These come in through deps, so tests can drive each step: the clock, sleeping and timers,
-// the health reading, the commit read when the job is queued and again when it starts, the current folder, starting
-// the job, signals sent to it and signals received, messages, notifications and stored notices, and the environment
-// in which a nested run finds the marker of its parent job. The rest is done directly: the slot, line, nested, place
-// and journal files in the folders named by files, the git calls for the project name and the code fingerprint, the
-// process table read by snapshot and killTree, and this process's own pid and node binary.
+// The `run` command, in four steps: planJob decides the limit and whether the job is refused, skipFor whether a check
+// that already passed on this code is skipped, waitForSlot waits in line until a slot is taken (for a nested run,
+// waitForPlace waits until a place under its parent job is), and runJob runs the job in its own process group under
+// the limit. runCommand chains them and returns the exit code; it never ends the process itself. These come in
+// through deps, so tests can drive each step: the clock, sleeping and timers, the health reading, the commit read when
+// the job is queued and again when it starts, the current folder, starting the job, signals sent to it and signals
+// received, messages, notifications and stored notices, and the environment in which a nested run finds the marker
+// of its parent job. The rest is done directly: the slot, line, nested, place and journal files in the folders named
+// by files, the git calls for the project name and the code fingerprint, the process table read by snapshot and
+// killTree, and this process's own pid and node binary.
 import { spawn as spawnProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,9 @@ import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate
 import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
-import { addWait, append, cmdString, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp } from "./journal.mjs";
+import {
+    addWait, append, cmdString, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp,
+} from "./journal.mjs";
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
@@ -75,14 +77,16 @@ export function planJob(request, settings, journalRows) {
 }
 
 /** The pass stamp on which a job is skipped, or null when it must run. Only a job of a kind in SKIPPABLE_KINDS is
- *  ever skipped, and only on a stamp from skipStamp: a run of the same project, label and command that passed on this
- *  commit with a clean tree, while the tree is still clean now, with no failure of it on the commit since.
- *  job: { kind, label, command, project (the folder's project, as journal lines store it), commit ({ head, clean },
- *  read when the job was queued), noSkip, at, tz }. rows: the journal rows. */
+ *  ever skipped, and only on a stamp from skipStamp: a run of the same project, label and command, in the same folder
+ *  and with the same code fingerprint, that passed on this commit with a clean tree, while the tree is still clean
+ *  now, with no failure of it on the commit since.
+ *  job: { kind, label, command, cwd, fingerprint, project (the folder's project, as journal lines store it), commit
+ *  ({ head, clean }, read when the job was queued), noSkip, at, tz }. rows: the journal rows. */
 export function skipFor(job, rows) {
     if (job.noSkip || !SKIPPABLE_KINDS.includes(job.kind)) return null;
     const folder = { project: job.project, ...job.commit };
-    return skipStamp(rows, folder, { label: job.label, cmd: job.command }, { tz: job.tz, at: job.at });
+    const check = { label: job.label, cmd: job.command, cwd: job.cwd, fp: job.fingerprint };
+    return skipStamp(rows, folder, check, { tz: job.tz, at: job.at });
 }
 
 /** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
@@ -448,7 +452,8 @@ export async function runCommand(args, ctx, deps) {
         return EXIT.refused;
     }
     const stamp = skipFor({
-        kind: plan.kind, label, command, project: folder, commit: before, noSkip: parsed.noSkip, at: queuedAt, tz,
+        kind: plan.kind, label, command, cwd, fingerprint: print, project: folder, commit: before,
+        noSkip: parsed.noSkip, at: queuedAt, tz,
     }, rows);
     if (stamp) {
         const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));

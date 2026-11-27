@@ -109,15 +109,19 @@ export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
  *  needed, so those always run. */
 export const SKIPPABLE_KINDS = Object.freeze(["test", "lint"]);
 
-/** The pass stamp that lets `run` skip a job, or null. job = { label, cmd }: the stamp must come from a run with the
- *  same label and the same command line, found by findStamp under its own conditions (a clean folder at a commit, and
- *  a newest clean run of that check on the commit that passed). On top of that, no run of the same check on that
- *  commit may have failed or hit its run limit after the stamp, even one that began with uncommitted changes. Lines
- *  of skipped jobs never count: findStamp only takes runs that ran. */
+/** The pass stamp that lets `run` skip a job, or null. job = { label, cmd, cwd, fp }: the stamp must come from a run
+ *  with the same label and the same command line, in the same folder, found by findStamp under its own conditions (a
+ *  clean folder at a commit, and a newest clean run of that check on the commit that passed). Its code fingerprint
+ *  must equal the job's, so a changed file that the command names outside git is not skipped; a missing fingerprint
+ *  on either side is no match. On top of that, no run of the same check on that commit may have failed or hit its
+ *  run limit after the stamp, even one that began with uncommitted changes. Lines of skipped jobs never count:
+ *  findStamp only takes runs that ran. */
 export function skipStamp(lines, folder, job, { tz, at = Date.now() }) {
-    const sameCheck = parseLines(lines).filter((row) => row.label === job.label && row.cmd === job.cmd);
+    const sameCheck = parseLines(lines)
+        .filter((row) => row.label === job.label && row.cmd === job.cmd && row.cwd === job.cwd);
     const { stamp } = findStamp(sameCheck, folder, "", { tz, at });
-    if (!stamp) return null;
+    const stampPrint = stamp?.fp ?? stamp?.fingerprint;
+    if (!stamp || !job.fp || !stampPrint || stampPrint !== job.fp) return null;
     const passedAt = Date.parse(stamp.endedAt);
     const failedLater = sameCheck.some((row) => row.project === folder.project && row.head === folder.head
         && Date.parse(row.endedAt) > passedAt && (isFailedRun(row) || row.outcome === "timed-out"));
@@ -169,7 +173,8 @@ export function clockMinutes(waits, runs = []) {
 }
 
 function totals(rows, until) {
-    const waits = rows.map((row) => row.waitMin);
+    // A skipped job never waited, so it is left out of the wait percentiles.
+    const waits = rows.filter((row) => !isSkipped(row)).map((row) => row.waitMin);
     const waitBy = {};
     for (const row of rows) {
         for (const [gate, min] of Object.entries(row.waitBy ?? {})) {

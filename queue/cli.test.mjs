@@ -550,6 +550,24 @@ test("run: a check that passed on this clean commit is skipped, runs again once 
     ]);
 });
 
+test("run: a pass in one folder of a repository is no stamp for the same check in another folder of it", async () => {
+    // The same script in both folders, so the code fingerprint is the same; each folder's own settings file decides.
+    const script = 'process.exit(require("./expected.json").exit)\n';
+    const repo = makeRepo(join(tempDir("cli-mono"), "mono"), {
+        "packages/cart/check.js": script, "packages/cart/expected.json": '{ "exit": 0 }\n',
+        "packages/billing/check.js": script, "packages/billing/expected.json": '{ "exit": 1 }\n',
+    });
+    const box = sandbox(), args = ["run", "--label", "mono: unit tests", "--", NODE, "check.js"];
+    const cart = join(repo, "packages", "cart"), billing = join(repo, "packages", "billing");
+    assert.equal((await cli(box, args, { cwd: cart })).code, 0);
+    const other = await cli(box, args, { cwd: billing });
+    assert.deepEqual([other.code, other.stderr], [1, ""], "the other folder's check ran and failed");
+    assert.equal((await cli(box, args, { cwd: cart })).stderr.startsWith('dotime-queue: skipped: "mono: unit tests"'), true,
+        "a failure in another folder leaves the first folder's stamp alone");
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 0], ["ran", 1], ["skipped", 0]]);
+    assert.equal(journal(box)[0].fp, journal(box)[1].fp, "only the folder tells the two checks apart");
+});
+
 test("passed: a failing run on the commit gives no stamp", async () => {
     const box = sandbox(), repo = makeRepo(join(box.work, "docs-site"));
     assert.equal((await cli(box, ["run", "--label", "docs-site: link check", "--", NODE, "-e", "process.exit(2)"], { cwd: repo })).code, 2);

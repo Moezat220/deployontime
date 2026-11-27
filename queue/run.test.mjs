@@ -719,6 +719,19 @@ test("run: no skip with uncommitted changes, on another commit, without a git an
     }
 });
 
+test("run: no skip once a file the command names has changed outside git, as the code fingerprint shows", async () => {
+    const box = sandbox(), job = countingJob(), label = "shop-api: lint";
+    assert.equal((await runAt(box, job.args(label))).code, 0);
+    const script = job.args(label).at(-1);
+    writeFileSync(script, `${readFileSync(script, "utf8")}// edited\n`);
+    const edited = await runAt(box, job.args(label));
+    assert.deepEqual([edited.code, edited.said, job.runs()], [0, [], 2]);
+    assert.notEqual(journal(box)[1].fp, journal(box)[0].fp);
+    // The edited script has passed now, and is skipped on that pass.
+    assert.deepEqual((await runAt(box, job.args(label))).said, [skippedText(label)]);
+    assert.deepEqual(outcomes(box), ["ran", "ran", "skipped"]);
+});
+
 test("run: only test and lint jobs are skipped, by the kind given with --kind when there is one", async () => {
     for (const [label, flags, second] of [
         ["shop-api: build", [], "ran"],
