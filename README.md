@@ -69,6 +69,10 @@ dotime-queue run --label "shop-api: unit tests" -- npm test
    what its kind has learned (which can be as short as 10 minutes) needs `--max-run <minutes>`.
 4. **Record.** Its wait, run time and result go into a journal that later runs and `history` use.
 
+When a check fails that both passed and failed before on the same commit from a clean tree, `run` adds a `flaky:` line
+saying the failure may not come from the change; it is advice only and changes no exit code. Timeouts, stops and runs
+with uncommitted changes never count, and `dotime-queue flaky` lists the flaky checks.
+
 Only commands started through the queue are queued. A command an agent runs directly, such as a plain `npm test`, is
 not. The queue never edits your repository; it keeps its state in `~/.dotime`.
 
@@ -177,7 +181,7 @@ folder the server starts in, and its jobs are handed that absolute path.
 | `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
 | `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
 | `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix` | Starts `dotime-queue run` in the background and returns a job id at once |
-| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), and the last lines of its output |
+| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed run of a flaky check), and the last lines of its output |
 
 `cwd` is an absolute path to an existing folder; without it, the folder the server was started in is used. The label
 is `"<project>: <task>"`. The command is a list of words and never goes through a shell. A job from `queue_run` waits

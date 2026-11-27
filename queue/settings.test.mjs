@@ -160,6 +160,20 @@ test("loadSettings: nestedPerJob is a whole number of 1 or more, 2 by default", 
     }
 });
 
+test("loadSettings: flakyWindowDays is a whole number of 1 or more, 14 by default", () => {
+    assert.equal(DEFAULTS.flakyWindowDays, 14);
+    for (const value of [1, 7, 90]) {
+        const { settings, warnings } = load({ flakyWindowDays: value });
+        assert.deepEqual([settings.flakyWindowDays, warnings], [value, []]);
+    }
+    for (const value of [0, -1, 1.5, "14", null]) {
+        const { settings, warnings } = load({ flakyWindowDays: value });
+        assert.equal(settings.flakyWindowDays, 14, JSON.stringify(value));
+        assert.deepEqual(warnings, [`setting ignored: flakyWindowDays is ${JSON.stringify(value)}, `
+            + "needs a whole number of 1 or more, default 14 kept"]);
+    }
+});
+
 test("loadSettings: a fractional slot count is rounded down", () => {
     assert.equal(load({ slots: 3.8 }).settings.slots, 3);
 });

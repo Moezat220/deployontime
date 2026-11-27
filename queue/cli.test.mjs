@@ -68,6 +68,7 @@ test("main: returns the exit code of each command instead of ending the process"
     assert.equal(await main(["history", "--days", "abc"]), 2);
     assert.equal(await main(["passed", "--mach", "lint"]), 2);
     assert.equal(await main(["history", "--day", "2040-01-01"]), 0);
+    assert.equal(await main(["flaky", "--days", "0"]), 2);
 });
 
 test("statusLines: one line per running job, per waiting job and for the gate", () => {
@@ -176,11 +177,12 @@ test("historyRow: how jobs ended, then how long they waited, then what held them
     };
     assert.equal(
         historyRow("shop-api", totals),
-        "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1; "
+        "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, flaky 0; "
             + "waited: jobs 4, sum 31.5 min, clock 18 min, clock with no job running 2.5 min, median 0.5 min, p90 11 min; "
             + "held by: slots 27 min, disk 4.5 min",
     );
     assert.equal(historyRow("docs-site", { ...totals, waitBy: {} }).endsWith("; held by: nothing"), true);
+    assert.equal(historyRow("shop-api", totals, 2).startsWith("shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, flaky 2; "), true);
 });
 
 test("historyRow: skipped jobs and the run time they saved follow the outcomes, once there are any", () => {
@@ -190,7 +192,7 @@ test("historyRow: skipped jobs and the run time they saved follow the outcomes, 
     };
     assert.equal(
         historyRow("shop-api", totals),
-        "shop-api: jobs 5, failed 1, stopped 0, timed out 0, refused 0, gave up 0, skipped 3 (saved 13.5 min); "
+        "shop-api: jobs 5, failed 1, stopped 0, timed out 0, refused 0, gave up 0, skipped 3 (saved 13.5 min), flaky 0; "
             + "waited: jobs 0, sum 0 min, clock 0 min, clock with no job running 0 min, median 0 min, p90 0 min; held by: nothing",
     );
     assert.equal(historyRow("shop-api", { ...totals, skipped: 0, savedMin: 0 }).includes("skipped"), false);
@@ -567,8 +569,8 @@ test("run: a check that passed on this clean commit is skipped, runs again once 
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.clean]), [["ran", 0, true], ["skipped", 0, true], ["ran", 0, false]]);
     const rows = (await cli(box, ["history", "--days", "1"])).stdout.trimEnd().split("\n");
     assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]), [
-        "all projects: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min)",
-        "shop-api: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min)",
+        "all projects: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min), flaky 0",
+        "shop-api: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min), flaky 0",
     ]);
 });
 
@@ -643,11 +645,36 @@ test("history: one row for all projects and one per project", async () => {
     assert.equal(today.code, 0);
     assert.equal(/^history: \d{4}-\d\d-\d\d so far, zone UTC, jobs 2$/.test(rows[0]), true);
     assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), [
-        "all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0",
-        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0",
-        "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0",
+        "all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 0",
+        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0",
+        "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 0",
     ]);
     assert.equal((await cli(box, ["history", "--day", "2040-01-01"])).stdout, "history: 2040-01-01, zone UTC, jobs 0\n");
+});
+
+test("flaky and history: a check that passed and failed on one clean commit is listed, and counted per project", async () => {
+    const box = sandbox(), repo = makeRepo(join(box.work, "shop-api"));
+    const none = await cli(box, ["flaky"], { cwd: repo });
+    assert.deepEqual([none.code, none.stdout, none.stderr], [0, "flaky: none in 14 days\n", ""]);
+    const runs = join(tempDir("cli-flaky"), "runs");
+    const script = `const fs = require("node:fs"); const seen = fs.existsSync(${JSON.stringify(runs)}); `
+        + `fs.writeFileSync(${JSON.stringify(runs)}, "x"); process.exit(seen ? 1 : 0)`;
+    const args = ["run", "--label", "shop-api: unit tests", "--no-skip", "--", NODE, "-e", script];
+    assert.deepEqual(await cli(box, args, { cwd: repo }).then((r) => [r.code, r.stderr]), [0, ""]);
+    const failed = await cli(box, args, { cwd: repo });
+    assert.deepEqual([failed.code, failed.stderr], [1, "dotime-queue: flaky: this check passed and failed on the same commit once in 14 days, "
+        + "last 0 min ago; the failure may not come from your change\n"]);
+    await cli(box, ["run", "--label", "docs-site: build", "--", NODE, "-e", "process.exit(0)"], { cwd: repo });
+    const listed = await cli(box, ["flaky", "--days", "3"], { cwd: tempDir("cli-elsewhere") });
+    assert.deepEqual([listed.code, listed.stderr], [0, ""]);
+    const command = journal(box)[0].cmd;
+    assert.equal(listed.stdout, `shop-api: unit tests; mixed on 1 commit, 1 pass and 1 failure, last 0 min ago; command ${command}\n`);
+    const rows = (await cli(box, ["history", "--days", "1"])).stdout.trimEnd().split("\n");
+    assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), [
+        "all projects: jobs 3, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 1",
+        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0",
+        "shop-api: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 1",
+    ]);
 });
 
 test("usage: exit 2 with a message for bad input, exit 0 for help", async () => {
@@ -672,6 +699,13 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     ]);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
+    for (const days of ["0", "abc", "1.5", "-3"]) {
+        const badFlakyDays = await cli(box, ["flaky", `--days=${days}`]);
+        const wanted = [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"];
+        assert.deepEqual([badFlakyDays.code, badFlakyDays.stdout, badFlakyDays.stderr], wanted, days);
+    }
+    const flakyFlag = await cli(box, ["flaky", "--day", "2040-01-01"]);
+    assert.deepEqual([flakyFlag.code, flakyFlag.stderr], [2, "dotime-queue: unknown option --day\n"]);
     const statusFlag = await cli(box, ["status", "--all"]);
     assert.deepEqual([statusFlag.code, statusFlag.stderr], [2, "dotime-queue: unknown option --all\n"]);
     for (const word of ["help", "--help"]) assert.deepEqual([(await cli(box, [word])).code, (await cli(box, [word])).stdout], [0, `${USAGE}\n`]);

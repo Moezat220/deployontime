@@ -7,11 +7,12 @@ import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { statusLines, historyRow } from "../queue/cli.mjs";
+import { historyLines, statusLines } from "../queue/cli.mjs";
+import { flakyFor } from "../queue/flaky.mjs";
 import { gateReason } from "../queue/gate.mjs";
 import { gitState, isRepository } from "../queue/git.mjs";
 import { healthVerdict, readHealth, savedCpuTimes } from "../queue/health.mjs";
-import { cmdString, findStamp, historyWindow, parseLines, readLines, summarize } from "../queue/journal.mjs";
+import { cmdString, findStamp, historyWindow, isFailedRun, lineProject, parseLines, readLines } from "../queue/journal.mjs";
 import { folderProject } from "../queue/project.mjs";
 import { snapshot } from "../queue/slots.mjs";
 import {
@@ -103,8 +104,9 @@ export const TOOLS = Object.freeze([
         title: "Job state",
         description: "The state of a job started with queue_run: starting, waiting, running, finished or lost (its "
             + "runner ended without a result). For a finished job: the exit code and the outcome from the queue "
-            + "journal (ran, skipped, refused, timed-out, gave-up, left, stopped, could-not-start). Also the last "
-            + "lines of its output.",
+            + "journal (ran, skipped, refused, timed-out, gave-up, left, stopped, could-not-start). flaky is null, or "
+            + "for a failed run of a check that also passed on the same clean commit, the counts and a note. Also the "
+            + "last lines of its output.",
         inputSchema: {
             type: "object",
             properties: {
@@ -217,9 +219,7 @@ function queuePassed(args, ctx) {
 function queueHistory(args, ctx) {
     const days = args.days ?? 7;
     const range = historyWindow({ days, tz: ctx.tz });
-    const { all, byProject } = summarize(readLines(ctx.files.journal), range.from, range.to);
-    const lines = [`history: ${range.title}, jobs ${all.jobs}`];
-    if (all.jobs) for (const [name, totals] of [["all projects", all], ...Object.entries(byProject)]) lines.push(historyRow(name, totals));
+    const { all, byProject, lines } = historyLines(readLines(ctx.files.journal), range);
     return result(lines, { days, jobs: all.jobs, all, byProject, lines });
 }
 
@@ -283,14 +283,22 @@ export function startRunner(dir, id, cwd, home, env = process.env) {
     return child.pid;
 }
 
-/** The journal line of a finished job: the one its own queue process wrote, found by that process's pid. A line
- *  queued before the process started is from an earlier process that had the same pid. No line: null, never the
- *  line of another job. */
-function journalLine(request, pid, journalFile) {
+/** The journal line of a finished job, among the parsed journal rows: the one its own queue process wrote, found by
+ *  that process's pid. A line queued before the process started is from an earlier process that had the same pid.
+ *  No line: null, never the line of another job. */
+function journalLine(request, pid, rows) {
     if (!Number.isInteger(pid?.queuePid)) return null;
     const from = pid.startedAt - 2000;
-    return parseLines(readLines(journalFile))
+    return rows
         .find((row) => row.pid === pid.queuePid && row.label === request.label && Date.parse(row.queuedAt) >= from) ?? null;
+}
+
+/** The flaky facts of the check a finished job ran, for a failed run or a refusal only, else null: the same note
+ *  `dotime-queue run` prints then. */
+function flakyOf(row, journal, { settings }) {
+    if (!row || !(isFailedRun(row) || row.outcome === "refused")) return null;
+    const check = { label: row.label, cmd: row.cmd, project: lineProject(row), cwd: row.cwd };
+    return flakyFor(journal, check, { now: Date.now(), windowDays: settings.flakyWindowDays });
 }
 
 /** Where a job stands now: { state, position? }. */
@@ -327,7 +335,9 @@ function queueJob(args, ctx) {
     if (where.state === "starting" && !job.pid) head += ` (no runner yet; lost after ${START_GRACE_MS / 1000} s)`;
     if (where.state === "lost") head += "; its runner ended without a result, see the output";
     if (job.exit) {
-        const row = journalLine(request, job.pid, ctx.files.journal);
+        const journal = parseLines(readLines(ctx.files.journal));
+        const row = journalLine(request, job.pid, journal);
+        const flaky = flakyOf(row, journal, ctx);
         const outcome = row?.outcome ?? (job.exit.exit === USAGE_EXIT ? "usage-error" : null);
         Object.assign(info, {
             exitCode: job.exit.exit, outcome, ok: job.exit.exit === 0 && (outcome === "ran" || outcome === "skipped"),
@@ -335,10 +345,12 @@ function queueJob(args, ctx) {
             ...(job.exit.signal ? { signal: job.exit.signal } : {}),
             ...(job.exit.error ? { error: job.exit.error } : {}),
             ...(row?.stamp ? { stamp: row.stamp } : {}),
+            flaky,
         });
         head += `, exit ${job.exit.exit ?? "none"}${job.exit.signal ? ` (signal ${job.exit.signal})` : ""}`;
         head += `, outcome ${outcome ?? "unknown (no journal line found)"}`;
         if (job.exit.error) head += `; ${job.exit.error}`;
+        if (flaky) head += `; ${flaky.note}`;
     }
     const count = args.tailLines ?? 40;
     const tail = tailLines(job.files.log, count);

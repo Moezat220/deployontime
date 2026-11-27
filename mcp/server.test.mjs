@@ -287,9 +287,31 @@ test("queue_run: a failing command finishes with its own exit code, outcome ran,
     assert.equal(failed.structuredContent.exitCode, 1);
     assert.equal(failed.structuredContent.outcome, "ran");
     assert.equal(failed.structuredContent.ok, false);
+    assert.equal(failed.structuredContent.flaky, null);
     assert.match(failed.content[0].text, /^job [0-9a-f]{24} "shop: lint": finished, exit 1, outcome ran\nlast 1 lines of output:\ntwo problems$/);
     const short = await server.call("queue_job", { jobId: id, tailLines: 0 });
     assert.equal(short.content[0].text.includes("two problems"), false);
+    await server.close();
+});
+
+test("queue_job: a check that passed and then failed on the same clean commit is flaky; its pass is not", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const runs = join(tempDir("mcp-flaky"), "runs");
+    const script = `const fs = require("node:fs"); const seen = fs.existsSync(${JSON.stringify(runs)}); `
+        + `fs.writeFileSync(${JSON.stringify(runs)}, "x"); process.exit(seen ? 1 : 0)`;
+    const args = { label: "shop: unit tests", command: nodeCommand(script), noSkip: true };
+    const passed = (await jobUntil(server, await runJob(server, box, args))).structuredContent;
+    assert.deepEqual([passed.exitCode, passed.flaky], [0, null]);
+    const failed = await jobUntil(server, await runJob(server, box, args));
+    const note = "flaky: this check passed and failed on the same commit once in 14 days, last 0 min ago; "
+        + "the failure may not come from your change";
+    assert.equal(failed.structuredContent.exitCode, 1);
+    assert.deepEqual(failed.structuredContent.flaky, {
+        mixedCommits: 1, passes: 1, fails: 1, lastEndedAt: failed.structuredContent.flaky.lastEndedAt, note,
+    });
+    assert.match(failed.structuredContent.flaky.lastEndedAt, /^\d{4}-\d\d-\d\dT/);
+    assert.match(failed.content[0].text, new RegExp(`^job [0-9a-f]{24} "shop: unit tests": finished, exit 1, outcome ran; ${note}\n`));
     await server.close();
 });
 

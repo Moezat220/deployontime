@@ -10,17 +10,21 @@ const failed = (row) => row.outcome === "timed-out" || isFailedRun(row);
 const bothDiffer = (a, b) => a != null && b != null && a !== b;
 // The journal stores the fingerprint as fp. Lines that call it fingerprint are read as well.
 const printOf = (row) => row.fp ?? row.fingerprint;
+/** Is a journal row a run of the same check as job ({ label, cmd, project, cwd })? Runs are one check when their
+ *  labels match, unless the job is unlabelled; failing that, when command, project and folder all match, where a
+ *  folder missing on either side matches. The repeated-failure stop and the flaky flag both use this one rule. */
+export function sameCheck(job, row) {
+    const sameFolder = !job.cwd || !row.cwd || row.cwd === job.cwd;
+    return (job.label !== UNLABELLED && row.label === job.label)
+        || (!!job.cmd && row.cmd === job.cmd && lineProject(row) === job.project && sameFolder);
+}
 /** Should this run be refused because the same check just failed twice on the same code?
  *  job = { label, cmd, project, cwd, head, fingerprint, at }.
  *  Returns { refuse: false }, { refuse: false, changed: "commit" | "files" | "command" }, or
  *  { refuse: true, reason }. */
 export function failStop(lines, job, limitSettings, tz) {
-    // Runs are one check when their labels match; failing that, when command, project and folder all match.
-    const sameFolder = (row) => !job.cwd || !row.cwd || row.cwd === job.cwd;
-    const sameCheck = (row) => (job.label !== UNLABELLED && row.label === job.label)
-        || (!!job.cmd && row.cmd === job.cmd && lineProject(row) === job.project && sameFolder(row));
     const finished = parseLines(lines)
-        .filter((row) => row.endedAt && countsAsAttempt(row) && sameCheck(row))
+        .filter((row) => row.endedAt && countsAsAttempt(row) && sameCheck(job, row))
         .sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt));
     const [last, previous] = finished;
     if (!last || !previous || !failed(last) || !failed(previous)) return { refuse: false };

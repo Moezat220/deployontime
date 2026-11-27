@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clockTime, dateTime, dayOf, dayStart, minutesSince, shiftDay, zoneOffset } from "./clock.mjs";
+import { ageText, clockTime, dateTime, dayOf, dayStart, minutesSince, shiftDay, zoneOffset } from "./clock.mjs";
 
 const HOUR = 3_600_000;
 const MOMENT = Date.UTC(2031, 6, 20, 9, 40);
@@ -48,4 +48,13 @@ test("minutesSince: rounds to whole minutes and is never negative", () => {
     assert.equal(minutesSince(MOMENT, MOMENT + 150_000), 3);
     assert.equal(minutesSince(MOMENT, MOMENT + 20_000), 0);
     assert.equal(minutesSince(MOMENT + 5 * 60_000, MOMENT), 0);
+});
+
+test("ageText: minutes below an hour, hours below two days, days after that, never negative", () => {
+    assert.equal(ageText(MOMENT, MOMENT + 20_000), "0 min ago");
+    assert.equal(ageText(MOMENT, MOMENT + 59 * 60_000), "59 min ago");
+    assert.equal(ageText(MOMENT, MOMENT + 2 * HOUR + 10 * 60_000), "2 h ago");
+    assert.equal(ageText(MOMENT, MOMENT + 47 * HOUR), "47 h ago");
+    assert.equal(ageText(MOMENT, MOMENT + 72 * HOUR), "3 days ago");
+    assert.equal(ageText(MOMENT + HOUR, MOMENT), "0 min ago");
 });

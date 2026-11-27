@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
-// and gate; `passed` looks up a pass stamp; `history` sums up the journal; `setup` puts the queue instruction into a
-// project's agent files. queue/README.md describes each in full.
+// and gate; `passed` looks up a pass stamp; `history` sums up the journal; `flaky` lists the checks that passed and
+// failed on one commit; `setup` puts the queue instruction into a project's agent files. queue/README.md describes
+// each in full.
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
@@ -9,6 +10,7 @@ import { gateReason } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
 import { gitState, isRepository, repoTop } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
+import { flakyChecks, flakyCounts, flakyLines } from "./flaky.mjs";
 import { notify } from "./notify.mjs";
 import { markerOf } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
@@ -65,18 +67,32 @@ function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
 }
 
 /** One line of `history` for a project's totals. Skipped jobs are named only when there are any, with the run time
- *  of the passing runs they relied on as the time saved. */
-export function historyRow(name, t) {
+ *  of the passing runs they relied on as the time saved. flaky: the number of flaky checks in the range. */
+export function historyRow(name, t, flaky = 0) {
     const gates = Object.entries(t.waitBy).map(([gate, min]) => `${gate} ${min} min`).join(", ") || "nothing";
     const skipped = t.skipped ? `, skipped ${t.skipped} (saved ${t.savedMin} min)` : "";
     return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, `
-        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}; `
+        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}, flaky ${flaky}; `
         + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, `
         + `clock with no job running ${t.blockedOnlyMin} min, `
         + `median ${t.waitMedian} min, p90 ${t.waitP90} min; held by: ${gates}`;
 }
 
+/** The lines of `history` for journal lines over a range from historyWindow(): the title, then, when there were
+ *  jobs, the all-projects row and one row per project. The flaky count of a row is the checks that passed and failed
+ *  on one commit with runs ended in the range. */
+export function historyLines(lines, range) {
+    const { all, byProject } = summarize(lines, range.from, range.to);
+    const flaky = flakyCounts(flakyChecks(lines, { from: range.from, now: range.to }));
+    const out = [`history: ${range.title}, jobs ${all.jobs}`];
+    if (!all.jobs) return { all, byProject, lines: out };
+    out.push(historyRow("all projects", all, flaky.all));
+    for (const [name, t] of Object.entries(byProject)) out.push(historyRow(name, t, flaky.byProject[name] ?? 0));
+    return { all, byProject, lines: out };
+}
+
 const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
+const DAYS_ERROR = "--days: needs a whole number of days, 1 or more";
 
 /** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`, and
  *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. */
@@ -113,14 +129,24 @@ function cmdHistory(args, { files, tz }) {
         return EXIT.usage;
     }
     if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) {
-        say("--days: needs a whole number of days, 1 or more");
+        say(DAYS_ERROR);
         return EXIT.usage;
     }
     const range = historyWindow({ day, days: daysText === undefined ? 7 : Number(daysText), tz });
-    const { all, byProject } = summarize(readLines(files.journal), range.from, range.to);
-    console.log(`history: ${range.title}, jobs ${all.jobs}`);
-    if (!all.jobs) return 0;
-    for (const [name, t] of [["all projects", all], ...Object.entries(byProject)]) console.log(historyRow(name, t));
+    for (const line of historyLines(readLines(files.journal), range).lines) console.log(line);
+    return 0;
+}
+
+/** `flaky`: one line per check that passed and failed on one clean commit in the last --days days (by default the
+ *  flakyWindowDays setting), newest first, or one line that there is none. Exits 0, or 2 for a bad --days. */
+export function cmdFlaky(args, { settings, files }, { print = console.log, warn = say, now = Date.now() } = {}) {
+    const daysText = opt(args, "--days");
+    if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) {
+        warn(DAYS_ERROR);
+        return EXIT.usage;
+    }
+    const windowDays = daysText === undefined ? settings.flakyWindowDays : Number(daysText);
+    for (const line of flakyLines(readLines(files.journal), { now, windowDays })) print(line);
     return 0;
 }
 
@@ -190,6 +216,7 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "status") return cmdStatus(ctx);
     if (command === "passed") return cmdPassed(args, ctx);
     if (command === "history") return cmdHistory(args, ctx);
+    if (command === "flaky") return cmdFlaky(args, ctx);
     return runCommand(args, ctx, runDeps(ctx));
 }
 

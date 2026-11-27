@@ -15,12 +15,13 @@ import { parseRunArgs, USAGE, USAGE_EXIT } from "./args.mjs";
 import { minutesSince } from "./clock.mjs";
 import { failStop } from "./failstop.mjs";
 import { fingerprint } from "./fingerprint.mjs";
+import { flakyNoteFor } from "./flaky.mjs";
 import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate.mjs";
 import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
 import {
-    addWait, append, cmdString, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp,
+    addWait, append, cmdString, isFailedRun, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp,
 } from "./journal.mjs";
 import { alsoBuilds, cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
@@ -381,23 +382,25 @@ export function runJob(job, slot, deps) {
 }
 
 /** The writer of a job's one journal line. note({ startedAt, commit, tally, details }) fills in any of those as the
- *  job goes; finish() writes the line once and ignores later calls. pid, when given, is the pid of the `run` process,
- *  kept with the line so a caller that started that process can find its own line. */
+ *  job goes; finish() writes the line once and ignores later calls, and written() gives that line, or null before.
+ *  pid, when given, is the pid of the `run` process, kept with the line so a caller that started that process can
+ *  find its own line. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now, pid }) {
     const known = { startedAt: null, commit: { head: null, clean: null }, tally: {}, details };
-    let written = false;
+    let written = null;
     return {
+        written: () => written,
         note(fields) {
             for (const name of Object.keys(known)) if (fields[name] !== undefined) known[name] = fields[name];
         },
         finish(outcome, exit, more = {}) {
             if (written) return;
-            written = true;
             const { head, clean } = known.commit;
-            append(record({
+            written = record({
                 label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, endedAt: now(), outcome,
                 exit, tally: known.tally, cmd: command, head, clean, extra: { ...(pid ? { pid } : {}), ...known.details, ...more },
-            }), file);
+            });
+            append(written, file);
         },
     };
 }
@@ -444,7 +447,8 @@ export function jobFolder(ctx, deps) {
  *  PARENT_MARKER or JOB_MARKER, is nested: once past the refusal check it runs with no slot, no place in line and no
  *  health gate, as soon as a place under that job is free. A test or lint check that already passed on the same clean
  *  commit is not run at all, nested or not, unless --no-skip is given: see skipFor. It takes no slot or place, is
- *  journalled as skipped with the stamp it relied on, and resolves with 0. */
+ *  journalled as skipped with the stamp it relied on, and resolves with 0. A failed run of a flaky check (see
+ *  flaky.mjs), and a repeated-failure refusal of one, also print the flaky note; it changes no exit code. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -478,17 +482,21 @@ export async function runCommand(args, ctx, deps) {
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now, pid,
     });
+    // The check as the repeated-failure stop and the flaky flag know it.
+    const check = { label, cmd: command, project, cwd };
+    const flakyOptions = { now: queuedAt, windowDays: settings.flakyWindowDays };
     if (plan.refusal) {
         journal.note({ commit: before });
         journal.finish("refused", EXIT.refused);
-        say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}`);
+        const note = flakyNoteFor(rows, check, flakyOptions);
+        say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}${note ? `; ${note}` : ""}`);
         return EXIT.refused;
     }
     // --no-skip on the outer job reaches every run nested in it.
     const noSkip = parsed.noSkip || (!!outer && deps.env?.[NO_SKIP_MARKER] === "1");
-    const check = { kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command };
+    const skipCheck = { kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command };
     const where = { cwd, fingerprint: print, folderProject: folder, commit: before };
-    const stamp = skipFor({ ...check, ...where, noSkip, at: queuedAt, tz }, rows);
+    const stamp = skipFor({ ...skipCheck, ...where, noSkip, at: queuedAt, tz }, rows);
     if (stamp) {
         const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));
         journal.note({ commit: before });
@@ -511,20 +519,36 @@ export async function runCommand(args, ctx, deps) {
         pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal, maxWait, handOver: watch.drop,
         // Nothing nested in a job that could not be skipped itself, such as a build, is ever skipped: the job may
         // need what its steps make.
-        noSkip: noSkip || !canSkip(check),
+        noSkip: noSkip || !canSkip(skipCheck),
     };
     const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
-    try {
-        if (!outer) return await runInLine(job, waitDeps, deps);
+    const runIt = async () => {
+        if (!outer) return runInLine(job, waitDeps, deps);
         const nested = await runNested({ ...job, outer }, waitDeps, deps);
         if (!nested.parentGone) return nested.exit;
         say(`parent gone: "${outer.label}", pid ${outer.pid}, ended while this run waited for a nested place; `
             + "joins the line as a normal run");
         journal.note({ details: plan.details });
-        return await runInLine({ ...job, waitFrom: nested.waitFrom, tally: nested.tally }, waitDeps, deps);
+        return runInLine({ ...job, waitFrom: nested.waitFrom, tally: nested.tally }, waitDeps, deps);
+    };
+    try {
+        const exit = await runIt();
+        const note = failedRunNote(journal.written(), check, files.journal, { ...flakyOptions, now: deps.now() });
+        if (note) say(note);
+        return exit;
     } finally {
         watch.drop();
     }
+}
+
+/** The flaky note for a job that ended as a failed run, or null: for a pass, a stop, a run limit or anything else that
+ *  is not a failed run, and for a check that is not flaky. The journal is read again, so the run that just ended
+ *  counts, as do runs that ended while it ran; its own line is added when the write of it failed. */
+function failedRunNote(row, check, journalFile, options) {
+    if (!row || !isFailedRun(row)) return null;
+    const rows = parseLines(readLines(journalFile));
+    const own = rows.some((r) => r.pid === row.pid && r.queuedAt === row.queuedAt && r.endedAt === row.endedAt);
+    return flakyNoteFor(own ? rows : [...rows, row], check, options);
 }
 
 /** Watches INT and TERM while a run waits: the first one is kept, and each wakes the wait. Returns { leaving, sleep,

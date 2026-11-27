@@ -906,3 +906,54 @@ test("run: a nested run is skipped by the same rules, without waiting for a plac
     const dirty = await runAt(box, job.args(label), { nested: true, clean: false });
     assert.deepEqual([dirty.code, job.runs(), outcomes(box).at(-1)], [0, 2, "ran"], "a nested run with changes runs");
 });
+
+// ---- the flaky note ----
+
+const FLAKY_ONCE = "flaky: this check passed and failed on the same commit once in 14 days, last 0 min ago; "
+    + "the failure may not come from your change";
+
+test("run: a failed run of a check that passed on the same clean commit prints the flaky note, with its own exit code", async () => {
+    const box = sandbox(), job = countingJob(), args = job.args("shop-api: unit tests", { flags: ["--no-skip"] });
+    assert.deepEqual((await runAt(box, args)).said, []);
+    job.failWith(5);
+    const failed = await runAt(box, args);
+    assert.deepEqual([failed.code, failed.said], [5, [FLAKY_ONCE]]);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 0], ["ran", 5]]);
+});
+
+test("run: a failed run of a check that is not flaky prints nothing extra, and a pass never prints the note", async () => {
+    const box = sandbox(), job = countingJob(), args = job.args("shop-api: unit tests", { flags: ["--no-skip"] });
+    const ran = (options) => runAt(box, args, options).then((r) => [r.code, r.said]);
+    job.failWith(5);
+    assert.deepEqual(await ran(), [5, []]);
+    // A pass on another commit, or one that began with uncommitted changes, does not make it flaky.
+    job.failWith(0);
+    assert.deepEqual(await ran({ head: OTHER_HEAD }), [0, []]);
+    assert.deepEqual(await ran({ clean: false }), [0, []]);
+    job.failWith(5);
+    assert.deepEqual(await ran(), [5, []]);
+    // A pass of a check that is flaky now still prints nothing; its next failure does.
+    job.failWith(0);
+    assert.deepEqual(await ran(), [0, []]);
+    job.failWith(5);
+    assert.deepEqual(await ran(), [5, [FLAKY_ONCE]]);
+});
+
+test("run: the repeated-failure refusal names the flaky note when the check is flaky, and stays exit 3", async () => {
+    const box = sandbox(), job = countingJob(), args = job.args("shop-api: unit tests", { flags: ["--no-skip"] });
+    job.failWith(5);
+    for (const attempt of [1, 2]) assert.equal((await runAt(box, args)).code, 5, `attempt ${attempt}`);
+    const plain = await runAt(box, args);
+    assert.equal(plain.code, EXIT.refused);
+    assert.match(plain.said.at(-1), /^refused: exit 3; same check failed twice on unchanged code: .*to run it anyway$/);
+    const flakyBox = sandbox();
+    job.failWith(0);
+    await runAt(flakyBox, args);
+    job.failWith(5);
+    for (const attempt of [1, 2]) assert.equal((await runAt(flakyBox, args)).code, 5, `attempt ${attempt}`);
+    const refused = await runAt(flakyBox, args);
+    assert.equal(refused.code, EXIT.refused);
+    assert.match(refused.said.at(-1), /^refused: exit 3; same check failed twice on unchanged code: .*to run it anyway; flaky: /);
+    assert.equal(refused.said.at(-1).endsWith(`; ${FLAKY_ONCE}`), true);
+    assert.equal(job.runs(), 5);
+});

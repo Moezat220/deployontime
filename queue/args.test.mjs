@@ -91,7 +91,15 @@ test("flagError: run ignores everything behind the --, which belongs to the job"
 });
 
 test("FLAGS: lists the subcommands the usage text names", () => {
-    assert.deepEqual(Object.keys(FLAGS), ["run", "status", "passed", "history", "setup"]);
+    assert.deepEqual(Object.keys(FLAGS), ["run", "status", "passed", "history", "flaky", "setup"]);
+    for (const name of Object.keys(FLAGS)) assert.match(USAGE, new RegExp(`^  dotime-queue ${name}\\b`, "m"), name);
+});
+
+test("flagError: flaky takes --days with a value and nothing else", () => {
+    assert.equal(flagError(["flaky"]), null);
+    assert.equal(flagError(["flaky", "--days", "7"]), null);
+    assert.equal(flagError(["flaky", "--day", "7"]), "unknown option --day");
+    assert.equal(flagError(["flaky", "--days"]), "option --days needs a value");
 });
 
 test("flagError: setup takes --cwd with a value and --write and --mcp alone", () => {

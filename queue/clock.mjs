@@ -47,3 +47,11 @@ export function dayStart(day, zone = "UTC") {
 }
 
 export const minutesSince = (then, now = Date.now()) => Math.max(0, Math.round((now - then) / MINUTE));
+/** How long ago a moment was, in the unit that reads best: "12 min ago" below an hour, "5 h ago" below two days,
+ *  else "3 days ago". Never negative. */
+export function ageText(then, now = Date.now()) {
+    const minutes = minutesSince(then, now);
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+}

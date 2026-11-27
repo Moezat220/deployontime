@@ -16,6 +16,7 @@ export const USAGE = [
     "  dotime-queue status",
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
+    "  dotime-queue flaky [--days <n>]",
     "  dotime-queue setup [--write] [--cwd <dir>] [--mcp]",
     "      --write              add the queue instruction to the agent files (without it: only show)",
     "      --cwd <dir>          the project folder, in place of the top of the git repository",
@@ -35,6 +36,7 @@ export const FLAGS = Object.freeze({
     status: { values: [], switches: [] },
     passed: { values: ["--match", "--cwd"], switches: [] },
     history: { values: ["--days", "--day"], switches: [] },
+    flaky: { values: ["--days"], switches: [] },
     setup: { values: ["--cwd"], switches: ["--write", "--mcp"] },
 });
 

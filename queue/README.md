@@ -71,7 +71,7 @@ everything in this manual applies to its jobs too.
 
 ### What differs on Linux
 
-The queue, `run`, `status`, `passed`, `history` and the reaper work the same on Linux. The readings come from
+The queue, `run`, `status`, `passed`, `history`, `flaky` and the reaper work the same on Linux. The readings come from
 other places: free memory and swap from `/proc/meminfo`, the battery from `/sys/class/power_supply`, and desktop
 notices go through `notify-send` (see [Health gate](#health-gate) and [Notices](#notices)). A server or desktop
 without a battery has no battery limit. The [scheduled-job report](#scheduled-job-report) reads launchd jobs and
@@ -129,8 +129,8 @@ or any other word in front of the `--` is refused with exit 2, for example `doti
 A word that starts with `--` is not taken as the value of the option in front of it: `--label --priority` is refused
 because `--label` has no value. Give `--label` a value, or, when the value itself starts with `--`, join it to the
 option with `=`: `--label=--priority`. The refusal message says both, with the value in single quotes when a shell
-would split or change it. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
-only the options shown for it.
+would split or change it. The job does not run. The same holds for `status`, `passed`, `history` and `flaky`:
+each accepts only the options shown for it.
 
 `run` started in a folder that was removed checks its options first, as above. When they are fine, it says
 `dotime-queue: the current folder was removed; start the job from a folder that exists` and exits 2; nothing is
@@ -322,14 +322,29 @@ dotime-queue history [--days <n> | --day <YYYY-MM-DD>]
 ```
 
 Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time and the gates
-that caused the waiting. Once a row has skipped jobs, its outcome counts end with `skipped N (saved M min)`, where
-M is the run time of the passing runs those jobs relied on. The waiting columns answer three questions. `sum`: how
-much waiting all jobs did together. `clock`: how long the line was not empty. `clock with no job running`: how much
-of that time jobs were waiting while none of this row's jobs ran, for example because the health gate was shut.
+that caused the waiting. Once a row has skipped jobs, its outcome counts end with `skipped N (saved M min)`, where M
+is the run time of the passing runs those jobs relied on. The outcome counts close with `flaky N`: the [flaky
+checks](#flaky-checks) of that row whose runs ended in the range. The waiting columns answer three questions. `sum`:
+how much waiting all jobs did together. `clock`: how long the line was not empty. `clock with no job running`: how
+much of that time jobs were waiting while none of this row's jobs ran, for example because the health gate was shut.
 `--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
-the `DOTIME_TZ` zone, UTC by default. `--days` takes a whole number of 1 or more and `--day` a date as
-`YYYY-MM-DD`; anything else exits 2. The median and p90 are nearest-rank percentiles, the same ones the run limits
-use.
+the `DOTIME_TZ` zone, UTC by default. `--days` takes a whole number of 1 or more and `--day` a date as `YYYY-MM-DD`;
+anything else exits 2. The median and p90 are nearest-rank percentiles, the same ones the run limits use.
+
+### `flaky`
+
+```
+dotime-queue flaky [--days <n>]
+```
+
+Lists the [flaky checks](#flaky-checks) of the last n days (default `flakyWindowDays`, 14), one line per check, the
+newest mixed run first, and exits 0. Each line names the check, how many commits it both passed and failed on, the
+passes and failures on those commits, how long ago the newest of those runs ended, and the command. With no flaky
+check it prints one line, `flaky: none in 14 days`. `--days` takes a whole number of 1 or more; anything else exits 2.
+
+```
+shop-api: unit tests; mixed on 3 commits, 5 passes and 3 failures, last 2 h ago; command npm test
+```
 
 ### `setup`
 
@@ -474,6 +489,30 @@ Two groups of untracked files are skipped, because a check rewrites them itself:
 `outputDirs`, at any depth, and files ending in `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif`, `.ico`, `.bmp`,
 `.mp4`, `.webm`, `.mov`, `.pdf`, `.zip`, `.gz`, `.tgz` or `.log`. Tracked files are never skipped. If your fix
 changes only such untracked files, the code counts as unchanged: pass `--after-fix "<note>"`.
+
+## Flaky checks
+
+A check is flaky when, within the last `flakyWindowDays` (14) days, it both passed and failed on the same commit in
+the same folder, each time from a clean tree. The same code gave two results, so a failure of it may come from the
+test or the machine and not from the change at hand. Checks are told apart the way
+[Repeated failures](#repeated-failures) tells them apart: by label, else by command, project and folder.
+
+Only runs that ended by themselves count: a pass is exit 0, a failure any other exit. A run that hit its run limit,
+was stopped, refused, skipped, gave up, left the line or could not start never counts, and neither does a run that
+began with uncommitted changes or outside a git checkout.
+
+The flag is advice only. It changes no exit code, no skip and no refusal, and nothing is run again. When a run of a
+flaky check fails, `run` prints one more line after the job ends; the run that just failed counts, so a check that
+passed earlier on this commit is flagged at its first failure. A `refused:` line of a flaky check ends with the same
+note, and `queue_job` gives it in its `flaky` field.
+
+```
+dotime-queue: flaky: this check passed and failed on the same commit 3 times in 14 days, last 2 h ago; the failure
+may not come from your change
+```
+
+`3 times` counts the commits, and `once` stands for one. `dotime-queue flaky` lists the flaky checks, and `history`
+counts them per project.
 
 ## Exit codes
 
@@ -730,6 +769,7 @@ default. Only a missing file is silent.
 | `slots` | 2 | Jobs that may run at once. At least 1; a fraction is rounded down. |
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
 | `mcpMaxJobs` | 20 | Jobs started by `dotime-mcp` that may wait or run at once; `queue_run` refuses a further one with a tool error. Each costs two Node processes while it waits. A whole number, at least 1. |
+| `flakyWindowDays` | 14 | How many days back the [flaky flag](#flaky-checks) and `dotime-queue flaky` read the journal. A whole number, at least 1. |
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
@@ -832,7 +872,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
-| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `setup` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
@@ -846,7 +886,8 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json` and removes its abandoned temporary files. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |
 | `kinds.mjs` | Job kinds and command stems. | library | None. |
-| `failstop.mjs` | The stop for a check that failed twice on unchanged code. | library | None. |
+| `failstop.mjs` | The stop for a check that failed twice on unchanged code, and the rule that tells two checks apart. | library | None. |
+| `flaky.mjs` | Flaky checks: the ones that passed and failed on one commit, the note `run` prints, and the `flaky` lines. | library | None. |
 | `fingerprint.mjs` | A short hash of the code under test. | library | Runs read-only git commands, reads files in the working tree. |
 | `journal.mjs` | Journal lines, pass stamps and `history` totals. | library | Reads and appends `journal.jsonl`. |
 | `notices.mjs` | Long-run and idle-slot notices and the notices store. | library | Writes `notices/`; runs `ps` for CPU samples. |
