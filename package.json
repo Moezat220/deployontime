@@ -1,6 +1,7 @@
 {
   "name": "deployontime",
-  "version": "0.1.0",
+  "mcpName": "io.github.Moezat220/deployontime",
+  "version": "0.1.1",
   "description": "A shared job queue that lets several coding agents use one computer without overloading it.",
   "type": "module",
   "license": "AGPL-3.0-only",
