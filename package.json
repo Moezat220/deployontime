@@ -1,17 +1,48 @@
 {
   "name": "deployontime",
   "version": "0.1.0",
-  "private": true,
   "description": "A shared job queue that lets several coding agents use one computer without overloading it.",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "keywords": [
+    "coding-agents",
+    "queue",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "mcp",
+    "test-runner",
+    "developer-tools"
+  ],
+  "homepage": "https://github.com/Moezat220/deployontime#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Moezat220/deployontime.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Moezat220/deployontime/issues"
+  },
   "engines": {
     "node": ">=22"
   },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "bin": {
     "dotime-queue": "queue/cli.mjs",
     "dotime-mcp": "mcp/server.mjs"
   },
+  "files": [
+    "queue/*.mjs",
+    "!queue/*.test.mjs",
+    "!queue/testkit.mjs",
+    "mcp/*.mjs",
+    "!mcp/*.test.mjs",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "scripts": {
     "test": "node --test"
   }
