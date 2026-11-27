@@ -133,6 +133,20 @@ test("statusLines: a nested run inside a nested run is shown one step further in
     ]);
 });
 
+test("statusLines: a nested run counts its minutes from when it started to run, not from when it began to wait", () => {
+    const now = Date.UTC(2031, 5, 9, 10, 0);
+    const holders = [{ file: "/state/slots/slot-0.json", label: "docs-site: test suite", pid: 3201, born: now - 20 * MINUTE, at: now - 20 * MINUTE }];
+    const inSlot = { outer: "slot-0", outerPid: 3201, outerBorn: now - 20 * MINUTE };
+    const nested = [
+        { label: "docs-site: unit tests", pid: 3205, ...inSlot, at: now - 12 * MINUTE, startedAt: now - 2 * MINUTE },
+        { label: "docs-site: link check", pid: 3206, ...inSlot, at: now - 7 * MINUTE, waiting: true },
+    ];
+    assert.deepEqual(statusLines({ holders, queue: [], nested, gate: "", max: 1, now }).slice(2, 4), [
+        '  nested "docs-site: unit tests": pid 3205, 2 min so far, no slot of its own',
+        '  nested "docs-site: link check": pid 3206, 7 min so far, waiting for a nested place under "docs-site: test suite"',
+    ]);
+});
+
 test("statusLines: a nested run is not shown under a later job that took the same slot after its outer job ended", () => {
     const now = Date.UTC(2031, 5, 9, 10, 0);
     const holders = [{ file: "/state/slots/slot-0.json", label: "shop-api: e2e", pid: 3301, born: now - 2 * MINUTE, at: now - MINUTE }];

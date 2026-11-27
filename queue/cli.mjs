@@ -24,7 +24,7 @@ const insideOf = (entry, h) => !!h.file && entry.outer === markerOf(h.file) && e
 /** The lines `status` prints. gate: the reason the gate is shut, or "". nested: the nested runs, each shown under the
  *  job whose slot or note, pid and start time it names in outer, outerPid and outerBorn, so a nested run inside a
  *  nested run is shown one step further in; they hold no slot and are not counted. One that waits for a place under
- *  its parent says so. */
+ *  its parent says so; its minutes count from when it began to wait, and once it runs, from when it started. */
 export function statusLines({ holders, queue, nested = [], gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
     for (const h of holders) {
@@ -55,7 +55,7 @@ export function statusLines({ holders, queue, nested = [], gate, max, now = Date
 function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
     for (const n of nested.filter((entry) => insideOf(entry, parent) && !shown.has(entry))) {
         shown.add(n);
-        const ran = `${minutesSince(n.at, now)} min so far`;
+        const ran = `${minutesSince(n.startedAt ?? n.at, now)} min so far`;
         const state = n.waiting ? `waiting for a nested place under "${parent.label}"` : "no slot of its own";
         lines.push(`${"  ".repeat(depth)}nested "${n.label}": pid ${n.pid}, ${ran}, ${state}`);
         nestedLines(n, nested, now, depth + 1, lines, shown);

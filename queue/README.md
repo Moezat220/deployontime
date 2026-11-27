@@ -180,7 +180,8 @@ Prints the taken slots, each running job with its limit and time left, the waiti
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
 with nothing after it prints the same as `status`. A [nested run](#run) is shown indented under the job it runs in,
 and a nested run inside a nested run one step further in; it holds no slot and is not counted as one. A nested run
-that waits for a place under its parent says `waiting for a nested place` and names the parent.
+that waits for a place under its parent says `waiting for a nested place` and names the parent. Its `min so far`
+counts from when it began to wait, and once it runs, from when it started to run.
 
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
