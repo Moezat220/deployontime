@@ -161,7 +161,10 @@ gate, and is journalled without `nested`. Its `--max-wait` limit still counts fr
 This limit is new: nested runs used to start at once, with no limit per job. Now no more than 2 run at once under one
 job unless `nestedPerJob` says otherwise. A job that fans out to many long shards, each a nested run, now runs them 2
 at a time; the rest wait, and a shard whose wait passes its `--max-wait` limit (`maxWaitMin`, 60 min by default)
-gives up with exit 75.
+gives up with exit 75. The outer job's own run limit keeps counting while its shards wait, and that limit was learned
+from runs made before this cap, when all shards ran at once. So a job that used to run 4 or more shards side by side
+can now take about twice as long and be stopped at its limit (exit 124, its shards with it) well before any shard
+reaches `--max-wait`. Give such a job `--max-run` on the outer run, or raise `nestedPerJob`.
 
 Nested runs of one parent that only work when they run at the same time wait the same way: a pipeline such as
 `dotime-queue run … | dotime-queue run …`, or a server and the tests that call it, both started through the queue.

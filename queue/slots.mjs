@@ -1,7 +1,7 @@
 // Slots, the waiting line, the nested runs and their places, stored as small JSON files in the state folder so
 // unrelated processes can share them without a server. A slot, and a nested run's place under its parent job, is
-// claimed with a hard link, which only one process can win. Every file is
-// written under a temporary name and then moved into place, so a reader never meets half a file.
+// claimed with a hard link, which only one process can win. Every file is written under a temporary name and then
+// moved into place, so a reader never meets half a file.
 import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { probeProcessAges } from "./probes.mjs";
