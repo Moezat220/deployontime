@@ -161,7 +161,8 @@ test("tools/list: the five tools in a fixed order, each with a strict object sch
     assert.deepEqual(byName.queue_run.required, ["label", "command"]);
     assert.deepEqual(byName.queue_run.properties.command.items, { type: "string", maxLength: 32768 });
     assert.deepEqual(byName.queue_run.properties.kind.enum, ["test", "lint", "build", "deploy", "debug", "other"]);
-    assert.deepEqual(Object.keys(byName.queue_run.properties), ["label", "command", "cwd", "kind", "maxRunMin", "noSkip", "afterFix"]);
+    assert.deepEqual(Object.keys(byName.queue_run.properties), ["label", "command", "cwd", "kind", "maxRunMin", "noSkip", "afterFix", "isolate"]);
+    assert.equal(byName.queue_run.properties.isolate.type, "boolean");
     assert.deepEqual(byName.queue_passed.required, ["match"]);
     assert.deepEqual(byName.queue_job.required, ["jobId"]);
     const { description, ...days } = byName.queue_history.properties.days;
@@ -622,6 +623,25 @@ test("queueArgs: every value is joined to its flag, and the command follows --",
     const args = queueArgs({ label: "--x: y", command: ["npm", "--", "test"], kind: "test", maxRunMin: 2.5, noSkip: true, afterFix: "--fixed" });
     assert.deepEqual(args, ["run", "--label=--x: y", "--kind=test", "--max-run=2.5", "--no-skip", "--after-fix=--fixed", "--", "npm", "--", "test"]);
     assert.deepEqual(queueArgs({ label: "a: b", command: ["make"] }), ["run", "--label=a: b", "--", "make"]);
+});
+
+test("queueArgs: isolate adds --isolate in front of the --, and false or absent adds nothing", () => {
+    assert.deepEqual(queueArgs({ label: "a: b", command: ["make"], isolate: true }), ["run", "--label=a: b", "--isolate", "--", "make"]);
+    assert.deepEqual(queueArgs({ label: "a: b", command: ["make"], isolate: false }), ["run", "--label=a: b", "--", "make"]);
+});
+
+test("queue_run: isolate true runs the job in a worktree of its own, and the checkout keeps its files", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const script = "require('node:fs').writeFileSync('notes.txt', 'edited\\n')";
+    const id = await runJob(server, box, { label: "shop: edit notes", command: nodeCommand(script), isolate: true });
+    const done = await jobUntil(server, id);
+    assert.equal(done.structuredContent.exitCode, 0);
+    assert.match(done.content[0].text, /dotime-queue: isolated in .*shop-[0-9a-f]{8} on branch dotime\/shop-edit-notes-[0-9a-f]{8}; integrate with/);
+    const row = readFileSync(join(box.home, "journal.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)).at(-1);
+    assert.equal(readFileSync(join(row.isolate.worktree, "notes.txt"), "utf8"), "edited\n");
+    assert.equal(readFileSync(join(box.repo, "notes.txt"), "utf8"), "first\n");
+    await server.close();
 });
 
 test("argumentProblems: names every problem at once", () => {

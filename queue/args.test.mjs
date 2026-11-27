@@ -91,7 +91,9 @@ test("flagError: run ignores everything behind the --, which belongs to the job"
 });
 
 test("FLAGS: lists the subcommands the usage text names", () => {
-    assert.deepEqual(Object.keys(FLAGS), ["run", "status", "passed", "history", "flaky", "setup"]);
+    assert.deepEqual(Object.keys(FLAGS), [
+        "run", "status", "passed", "history", "flaky", "setup", "integrate", "discard", "worktrees",
+    ]);
     for (const name of Object.keys(FLAGS)) assert.match(USAGE, new RegExp(`^  dotime-queue ${name}\\b`, "m"), name);
 });
 
@@ -204,4 +206,18 @@ test("flagError: the scripts beside the queue accept their own switches and noth
     assert.equal(flagError(["schedule-check", "--json", "--dry"], SCRIPT_FLAGS), null);
     assert.equal(flagError(["reaper", "--dryy"], SCRIPT_FLAGS), "unknown option --dryy");
     assert.equal(flagError(["schedule-check", "--json=yes"], SCRIPT_FLAGS), "option --json takes no value");
+});
+
+test("parseRunArgs: --isolate adds isolate: true, and without it the result has no isolate field", () => {
+    assert.equal(parseRunArgs(["run", "--isolate", "--label", "shop-api: rename", "--", "make"], DEFAULTS).isolate, true);
+    assert.equal("isolate" in parseRunArgs(["run", "--", "make", "--isolate"], DEFAULTS), false);
+    assert.equal(flagError(["run", "--isolate=yes", "--", "make"]), "option --isolate takes no value");
+});
+
+test("flagError: integrate looks only in front of the --, discard takes --force, worktrees takes nothing", () => {
+    assert.equal(flagError(["integrate", "--", "npm", "test", "--watch"]), null);
+    assert.equal(flagError(["integrate", "--fast", "--", "npm", "test"]), "unknown option --fast");
+    assert.equal(flagError(["discard", "--force"]), null);
+    assert.equal(flagError(["discard", "--forse"]), "unknown option --forse");
+    assert.equal(flagError(["worktrees", "--all"]), "unknown option --all");
 });

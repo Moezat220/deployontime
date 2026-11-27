@@ -30,6 +30,7 @@ export const DEFAULTS = Object.freeze({
         ].join("|"),
         keepPattern: "/Applications/|LaunchAgents",
     },
+    isolateLinks: [],
     outputDirs: [
         "node_modules", "dist", "build", "out", "coverage", ".cache", ".next", ".turbo", ".wrangler", ".vercel",
         "test-results", "playwright-report",
@@ -94,6 +95,9 @@ function parseOr(text, problem) {
     try { return JSON.parse(text); } catch { problem("invalid"); return {}; }
 }
 const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+/** A path below the top of a repository: relative, with no empty, "." or ".." step, and not into .git. */
+const insidePath = (x) => typeof x === "string" && x !== "" && !x.startsWith("/")
+    && x.split("/").every((step) => step !== "" && step !== "." && step !== "..") && x.split("/")[0] !== ".git";
 /** null when the value fits the setting, else a few words on what the setting needs. */
 function misfit(name, fallback, value) {
     if (typeof fallback === "number") {
@@ -101,6 +105,9 @@ function misfit(name, fallback, value) {
         // A longer timer would fire at once.
         if (name.endsWith("Ms") && value > MAX_TIMER_MS) return `${needs} and at most ${MAX_TIMER_MS}`;
         return typeof value === "number" && Number.isFinite(value) && fits(value) ? null : needs;
+    }
+    if (name === "isolateLinks") {
+        return Array.isArray(value) && value.every(insidePath) ? null : "a list of relative paths inside the repository";
     }
     if (Array.isArray(fallback)) {
         const folderName = (x) => typeof x === "string" && x !== "" && !x.includes("/");

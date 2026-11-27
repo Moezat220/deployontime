@@ -93,6 +93,8 @@ export const TOOLS = Object.freeze([
                 afterFix: text("string", "A note on what was fixed, to run a check that failed twice on unchanged code.", {
                     minLength: 1, maxLength: 500,
                 }),
+                isolate: text("boolean", "Run in a git worktree of its own on a new branch, so jobs side by side never edit "
+                    + "the same files; bring it back with dotime-queue integrate <id> -- <check> once it passed."),
             },
             required: ["label", "command"],
             additionalProperties: false,
@@ -225,13 +227,14 @@ function queueHistory(args, ctx) {
 
 /** The words of `dotime-queue run` for a request. Every value is joined to its flag with "=", so a value that starts
  *  with "--" is never read as the next flag, and the command follows "--". */
-export function queueArgs({ label, command, kind, maxRunMin, noSkip, afterFix }) {
+export function queueArgs({ label, command, kind, maxRunMin, noSkip, afterFix, isolate }) {
     return [
         "run", `--label=${label}`,
         ...(kind ? [`--kind=${kind}`] : []),
         ...(maxRunMin !== undefined ? [`--max-run=${maxRunMin}`] : []),
         ...(noSkip ? ["--no-skip"] : []),
         ...(afterFix !== undefined ? [`--after-fix=${afterFix}`] : []),
+        ...(isolate ? ["--isolate"] : []),
         "--", ...command,
     ];
 }
@@ -263,6 +266,7 @@ function queueRun(args, ctx) {
         ...(args.maxRunMin !== undefined ? { maxRunMin: args.maxRunMin } : {}),
         ...(args.noSkip ? { noSkip: true } : {}),
         ...(args.afterFix !== undefined ? { afterFix: args.afterFix.trim() } : {}),
+        ...(args.isolate ? { isolate: true } : {}),
     };
     createJob(dir, id, request);
     ctx.startRunner(dir, id, cwd, ctx.files.home);

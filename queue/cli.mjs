@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
 // and gate; `passed` looks up a pass stamp; `history` sums up the journal; `flaky` lists the checks that passed and
-// failed on one commit; `setup` puts the queue instruction into a project's agent files. queue/README.md describes
-// each in full.
+// failed on one commit; `setup` puts the queue instruction into a project's agent files; `integrate`, `discard` and
+// `worktrees` handle the worktrees of isolated runs. queue/README.md describes each in full.
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
@@ -17,6 +17,7 @@ import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
 import { applyPlan, blockText, mcpLines, planFolder } from "./setup.mjs";
 import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
+import { cmdDiscard, cmdIntegrate, cmdWorktrees } from "./integrate.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -202,7 +203,9 @@ export async function main(args = process.argv.slice(2)) {
         return 0;
     }
     const command = args.length ? args[0] : "status";
-    const badFlag = command === "run" ? null : flagError([command, ...args.slice(1)]);
+    // integrate and discard take a job id first, and read their own flags.
+    const ownFlags = ["run", "integrate", "discard"].includes(command);
+    const badFlag = ownFlags ? null : flagError([command, ...args.slice(1)]);
     if (badFlag) {
         say(badFlag);
         return EXIT.usage;
@@ -217,6 +220,17 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "passed") return cmdPassed(args, ctx);
     if (command === "history") return cmdHistory(args, ctx);
     if (command === "flaky") return cmdFlaky(args, ctx);
+    if (command === "worktrees") return cmdWorktrees(ctx);
+    if (command === "discard") return cmdDiscard(args, ctx, { say });
+    if (command === "integrate") {
+        const read = jobFolder({}, { cwd: () => process.cwd() });
+        if (read.error) {
+            say("integrate: the current folder was removed; run integrate in a folder of the repository");
+            return EXIT.usage;
+        }
+        const run = (runArgs, more) => runCommand(runArgs, { ...ctx, ...more, runIn: more.cwd }, runDeps(ctx));
+        return cmdIntegrate(args, { ...ctx, cwd: read.cwd }, { say, run });
+    }
     return runCommand(args, ctx, runDeps(ctx));
 }
 

@@ -82,6 +82,8 @@ export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
     if (!folder.clean) return none("the working tree has uncommitted changes");
     const runs = parseLines(lines)
         .filter((row) => row.project === folder.project && row.head && row.outcome === "ran" && !isStopped(row))
+        // An isolated run ran in a worktree of its own and changed files there: it vouches for nothing here.
+        .filter((row) => !row.isolate)
         .filter((row) => !wanted || `${row.label ?? ""}\n${row.cmd ?? ""}`.toLowerCase().includes(wanted))
         .sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt));
     const scope = `project ${folder.project}${wanted ? `, filter "${match}"` : ""}`;

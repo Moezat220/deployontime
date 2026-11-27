@@ -34,6 +34,7 @@ import { folderProject, jobProject } from "./project.mjs";
 import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
+import { finishIsolate, journalFacts, makeWorktree, prepareIsolate } from "./worktree.mjs";
 
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
 export const EXIT = { usage: USAGE_EXIT, refused: 3, gaveUp: 75, timedOut: 124, noStart: NO_START_EXIT, left: 130 };
@@ -234,7 +235,10 @@ export async function waitForPlace(job, deps) {
 }
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
- *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver, slotMarker }, where journal
+ *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver, slotMarker, runIn, isolate },
+ *  where runIn, when given, is the folder the command starts in in place of the current one, isolate, when given,
+ *  makes the worktree of an isolated run with isolate.start() before anything else, which gives { cwd } to run in or
+ *  { error }, after which the job is journalled as could-not-start, and journal
  *  is the writer from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers
  *  are in place, so the caller can remove the ones it had until then without a moment in which a signal finds none.
  *  The job finds the marker of its slot in JOB_MARKER and in PARENT_MARKER. A nested run passes its note in place of
@@ -251,8 +255,18 @@ export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
     const killGraceMs = settings.limits.killGraceMs;
     const { say, signals } = deps;
+    let runIn = job.runIn;
+    if (job.isolate) {
+        const made = job.isolate.start();
+        if (made.error) {
+            journal.finish("could-not-start", EXIT.noStart);
+            say(`start failed: exit ${EXIT.noStart}, ${made.error}`);
+            return Promise.resolve(EXIT.noStart);
+        }
+        runIn = made.cwd;
+    }
     // The commit is read at this point because it is what a pass stamp will vouch for.
-    const commit = deps.gitState(job.cwd);
+    const commit = deps.gitState(runIn ?? job.cwd);
     const startedAt = deps.now();
     journal.note({ commit, startedAt });
     if (startedAt - job.waitFrom > 5000) say(`started: ${minutesSince(job.waitFrom, startedAt)} min in line`);
@@ -263,7 +277,8 @@ export function runJob(job, slot, deps) {
     // Only this job's own --no-skip, or the one it was handed as a nested run, reaches the runs nested in it.
     delete env[NO_SKIP_MARKER];
     if (job.noSkip) env[NO_SKIP_MARKER] = "1";
-    const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env });
+    const where = runIn ? { cwd: runIn } : {};
+    const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env, ...where });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
         if (signalGroup(child.pid, signal, deps.kill).sent) return;
@@ -381,12 +396,13 @@ export function runJob(job, slot, deps) {
     return result;
 }
 
-/** The writer of a job's one journal line. note({ startedAt, commit, tally, details }) fills in any of those as the
- *  job goes; finish() writes the line once and ignores later calls, and written() gives that line, or null before.
+/** The writer of a job's one journal line. note({ startedAt, commit, tally, details, extra }) fills in any of those
+ *  as the job goes, where extra holds fields written after the details; finish() writes the line once and ignores
+ *  later calls, and written() gives that line, or null before.
  *  pid, when given, is the pid of the `run` process, kept with the line so a caller that started that process can
  *  find its own line. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now, pid }) {
-    const known = { startedAt: null, commit: { head: null, clean: null }, tally: {}, details };
+    const known = { startedAt: null, commit: { head: null, clean: null }, tally: {}, details, extra: {} };
     let written = null;
     return {
         written: () => written,
@@ -398,7 +414,7 @@ export function journalWriter({ label, folder, cwd, priority, queuedAt, command,
             const { head, clean } = known.commit;
             written = record({
                 label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, endedAt: now(), outcome,
-                exit, tally: known.tally, cmd: command, head, clean, extra: { ...(pid ? { pid } : {}), ...known.details, ...more },
+                exit, tally: known.tally, cmd: command, head, clean, extra: { ...(pid ? { pid } : {}), ...known.details, ...known.extra, ...more },
             });
             append(written, file);
         },
@@ -440,16 +456,21 @@ export function jobFolder(ctx, deps) {
     }
 }
 
-/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd }; without cwd
- *  the current folder is read, and only after the arguments were found valid, so a usage error is reported the same
- *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
+/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd, runIn }; without
+ *  cwd the current folder is read, and only after the arguments were found valid, so a usage error is reported the
+ *  same way in a folder that was removed; runIn, when given, is the folder the command starts in, when that is not
+ *  the current one. A signal while the job waits takes it out of the line and resolves with 130
  *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in, in
  *  PARENT_MARKER or JOB_MARKER, is nested: once past the refusal check it runs with no slot, no place in line and no
  *  health gate, as soon as a place under that job is free. A test or lint check that already passed on the same clean
  *  commit is not run at all, nested or not, unless --no-skip is given: see skipFor. It takes no slot or place, is
  *  journalled as skipped with the stamp it relied on, and resolves with 0. A failed run of a flaky check (see
  *  flaky.mjs), and a repeated-failure refusal of one, also print the flaky note; it changes no exit code. A job that
- *  ran at least settings.notifyDoneMin minutes sends a done notice after its journal line is written. */
+ *  ran at least settings.notifyDoneMin minutes sends a done notice after its journal line is written. With --isolate
+ *  (see worktree.mjs) the folder must be a clean git checkout, else exit 2 before anything is journalled; the job is
+ *  never skipped, its worktree is made once it holds its slot, so a job that is refused, gives up or leaves the line
+ *  leaves none, and the command runs there. The check stays the one of the folder the run was started in, so the
+ *  repeated-failure stop and the flaky flag see isolated runs as runs of that folder. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -465,6 +486,11 @@ export async function runCommand(args, ctx, deps) {
         return EXIT.usage;
     }
     const { cwd } = folderRead;
+    const isolated = parsed.isolate ? prepareIsolate(cwd) : null;
+    if (isolated?.error) {
+        say(isolated.error);
+        return EXIT.usage;
+    }
     const { label, cmd, priority, maxWait, maxRun, afterFix } = parsed;
     const queuedAt = deps.now();
     const folder = folderProject(cwd);
@@ -497,7 +523,8 @@ export async function runCommand(args, ctx, deps) {
     const noSkip = parsed.noSkip || (!!outer && deps.env?.[NO_SKIP_MARKER] === "1");
     const skipCheck = { kind: plan.kind, kindGiven: parsed.kind !== undefined, label, command };
     const where = { cwd, fingerprint: print, folderProject: folder, commit: before };
-    const stamp = skipFor({ ...skipCheck, ...where, noSkip, at: queuedAt, tz }, rows);
+    // An isolated run changes files, so a pass before it says nothing about it.
+    const stamp = isolated ? null : skipFor({ ...skipCheck, ...where, noSkip, at: queuedAt, tz }, rows);
     if (stamp) {
         const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));
         journal.note({ commit: before });
@@ -521,7 +548,24 @@ export async function runCommand(args, ctx, deps) {
         // Nothing nested in a job that could not be skipped itself, such as a build, is ever skipped: the job may
         // need what its steps make.
         noSkip: noSkip || !canSkip(skipCheck),
+        ...(ctx.runIn ? { runIn: ctx.runIn } : {}),
     };
+    let made = null;
+    if (isolated) {
+        job.isolate = {
+            start() {
+                const worktree = makeWorktree({
+                    label, checkout: isolated.checkout, home: files.home, links: settings.isolateLinks, pid, command,
+                    now: deps.now(),
+                });
+                if (worktree.state) {
+                    made = worktree.state;
+                    journal.note({ extra: { isolate: journalFacts(made) } });
+                }
+                return worktree;
+            },
+        };
+    }
     const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
     const runIt = async () => {
         if (!outer) return runInLine(job, waitDeps, deps);
@@ -536,6 +580,10 @@ export async function runCommand(args, ctx, deps) {
         const exit = await runIt();
         const note = failedRunNote(journal.written(), check, files.journal, { ...flakyOptions, now: deps.now() });
         if (note) say(note);
+        if (made) {
+            const done = { home: files.home, now: new Date(deps.now()).toISOString() };
+            for (const line of finishIsolate(made, journal.written(), exit, done)) say(line);
+        }
         sendDone(journal.written(), settings.notifyDoneMin, deps.notify);
         return exit;
     } finally {

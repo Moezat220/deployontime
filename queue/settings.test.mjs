@@ -234,3 +234,16 @@ test("README settings table: every number setting has a row, and each row's mark
         for (const [value, no] of probes) assert.equal(refused(key, value), no, `${key} = ${value}: README marking "${meaning}"`);
     }
 });
+
+test("loadSettings: isolateLinks is a list of relative paths inside the repository, empty by default", () => {
+    assert.deepEqual(DEFAULTS.isolateLinks, []);
+    const fine = load({ isolateLinks: ["node_modules", "packages/ui/node_modules", ".env"] });
+    assert.deepEqual([fine.settings.isolateLinks, fine.warnings], [["node_modules", "packages/ui/node_modules", ".env"], []]);
+    for (const bad of [["/etc"], ["../secrets"], ["a//b"], ["./x"], [".git/hooks"], [""], [7], "node_modules"]) {
+        const { settings, warnings } = load({ isolateLinks: bad });
+        assert.deepEqual(settings.isolateLinks, [], JSON.stringify(bad));
+        assert.deepEqual(warnings, [
+            `setting ignored: isolateLinks is ${JSON.stringify(bad)}, needs a list of relative paths inside the repository, default [] kept`,
+        ]);
+    }
+});

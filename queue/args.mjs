@@ -13,6 +13,10 @@ export const USAGE = [
     '      --after-fix "<note>" run a check that failed twice on unchanged code',
     "      --priority           join the line at the front",
     "      --no-skip            run a test or lint check that already passed on this commit",
+    "      --isolate            run in a git worktree of its own, on a new branch",
+    "  dotime-queue integrate <id> -- <check command>",
+    "  dotime-queue discard <id> [--force]",
+    "  dotime-queue worktrees",
     "  dotime-queue status",
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
@@ -32,12 +36,15 @@ export function shellWord(text) {
 
 /** Per subcommand: flags that take a value, and flags that stand alone. */
 export const FLAGS = Object.freeze({
-    run: { values: ["--label", "--max-wait", "--max-run", "--kind", "--after-fix"], switches: ["--priority", "--no-skip"] },
+    run: { values: ["--label", "--max-wait", "--max-run", "--kind", "--after-fix"], switches: ["--priority", "--no-skip", "--isolate"] },
     status: { values: [], switches: [] },
     passed: { values: ["--match", "--cwd"], switches: [] },
     history: { values: ["--days", "--day"], switches: [] },
     flaky: { values: ["--days"], switches: [] },
     setup: { values: ["--cwd"], switches: ["--write", "--mcp"] },
+    integrate: { values: [], switches: [] },
+    discard: { values: [], switches: ["--force"] },
+    worktrees: { values: [], switches: [] },
 });
 
 /** The flags of the two scripts that run beside the queue, which take switches only. */
@@ -50,14 +57,14 @@ export const SCRIPT_FLAGS = Object.freeze({
 export const USAGE_EXIT = 2;
 
 /** null when every word fits the subcommand's flags, else the message to print. args[0] is the subcommand; for
- *  `run` only the words in front of "--" are looked at. A value may not be empty, and no flag may be given twice.
+ *  `run` and `integrate` only the words in front of "--" are looked at. A value may not be empty, and no flag may be given twice.
  *  A value that starts with "--" is taken only in the --name=value spelling: in the other one it is read as the
  *  next flag, and the message says how to write it. */
 export function flagError(args, table = FLAGS) {
     const allowed = table[args[0]];
     if (!allowed) return null;
     const cut = args.indexOf("--");
-    const words = args.slice(1, args[0] === "run" && cut >= 0 ? cut : args.length);
+    const words = args.slice(1, ["run", "integrate"].includes(args[0]) && cut >= 0 ? cut : args.length);
     const seen = new Set();
     for (let i = 0; i < words.length; i++) {
         const word = words[i];
@@ -114,8 +121,9 @@ export function parseMaxWait(args, fallback) {
     return raw !== "" && Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
 }
 
-/** Reads the words of `run`. Returns { label, cmd, priority, noSkip, maxWait, maxRun, kind, afterFix }, or { error }
- *  with the text to print. settings.maxWaitMin is the wait limit without --max-wait. */
+/** Reads the words of `run`. Returns { label, cmd, priority, noSkip, maxWait, maxRun, kind, afterFix }, with
+ *  isolate: true added for --isolate, or { error } with the text to print. settings.maxWaitMin is the wait limit
+ *  without --max-wait. */
 export function parseRunArgs(args, settings) {
     const cut = args.indexOf("--");
     if (args[0] !== "run" || cut < 0 || cut === args.length - 1) return { error: USAGE };
@@ -134,5 +142,6 @@ export function parseRunArgs(args, settings) {
         maxRun,
         kind: opt(args, "--kind"),
         afterFix: opt(args, "--after-fix")?.trim() || null,
+        ...(flagWords(args).includes("--isolate") ? { isolate: true } : {}),
     };
 }
