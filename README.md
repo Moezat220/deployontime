@@ -70,6 +70,26 @@ dotime-queue run --label "shop-api: unit tests" -- npm test
 Only commands started through the queue are queued. A command an agent runs directly, such as a plain `npm test`, is
 not. The queue never edits your repository; it keeps its state in `~/.dotime`.
 
+## Measured
+
+On a 10-core Mac, 4 agents start the same CPU-heavy test suite at the same moment: 100 tests each, and a test fails
+when it runs more than 1.6 times slower than it does alone. After a failure an agent waits a few seconds and runs the
+suite again, up to 8 times. Three runs each way:
+
+| | Started directly | Through `dotime-queue` |
+| --- | --- | --- |
+| **Tests that failed on the first try** | 400 of 400, in every run | 0 of 400, in every run |
+| **Time until every agent had a green run** | 373 s in one run; in the other two, some agents were still red after 8 tries (453 s and 468 s) | 57 to 58 s |
+| **Suite runs** | 25 to 32 | 4 |
+
+The code under test never changes, so every failure comes from the busy computer. The suite is a stand-in, not a real
+project, and your numbers will differ with your machine and your tests. To run it yourself (it keeps every core busy
+for about half an hour; it uses a temporary state folder and repository):
+
+```
+node bench/run.mjs
+```
+
 ## Install
 
 Requirements: macOS, Node 22 or newer, git 2.31 or newer. No npm packages are downloaded.
