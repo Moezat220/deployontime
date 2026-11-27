@@ -6,7 +6,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
 import {
-    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeBusyCpuPct, probeDiskFreeGB, probeGroupOf, probeLoad, probeMemoryFreePct,
+    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeBusyCpuPct, probeCpuTimes, probeDiskFreeGB,
+    probeGroupOf, probeLoad, probeMemoryFreePct,
     probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct,
     runTool, showDesktopNotice, toolEnv,
 } from "./probes.mjs";
@@ -87,6 +88,18 @@ test("cpuBusyPct: null when no time passed or the counters went backwards", () =
     assert.equal(cpuBusyPct(same, same), null);
     assert.equal(cpuBusyPct([core(500, 0, 100)], [core(100, 0, 600)]), null);
     assert.equal(cpuBusyPct(undefined, same), null);
+});
+
+test("probeCpuTimes: the time and the times of each core, nothing else", () => {
+    const got = probeCpuTimes(() => 12_345);
+    assert.equal(got.at, 12_345);
+    assert.equal(got.cpus.length >= 1, true);
+    for (const cpu of got.cpus) {
+        assert.deepEqual(Object.keys(cpu), ["times"]);
+        assert.equal(["user", "nice", "sys", "idle", "irq"].every((name) => Number.isFinite(cpu.times[name])), true);
+    }
+    const share = cpuBusyPct(got.cpus, probeCpuTimes().cpus);
+    assert.equal(share === null || (share >= 0 && share <= 100), true, "share between two snapshots out of range");
 });
 
 test("probeBusyCpuPct: two snapshots one window apart, null when a snapshot fails", () => {

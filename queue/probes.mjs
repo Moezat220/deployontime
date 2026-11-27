@@ -40,6 +40,10 @@ export function cpuBusyPct(before, after) {
     return (busy / total) * 100;
 }
 
+/** The CPU times of each core now, as { at, cpus: [{ times }] }, small enough to keep in a file for a later
+ *  cpuBusyPct(). */
+export const probeCpuTimes = (now = Date.now) => ({ at: now(), cpus: cpus().map(({ times }) => ({ times })) });
+
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** How busy the CPU is right now: the busy share over windowMs, in percent, or null. It waits windowMs. */
