@@ -587,7 +587,8 @@ the job made, and a `node_modules` folder left out of the commit; the end line t
 from the job folder`. Copy out what you want to keep before you integrate. A change to a tracked file made in the job's
 worktree while the check ran keeps the worktree, and the line says so. The git steps that run hooks or change files
 (`worktree add`, the commit, the merge and the fast-forward) have no time limit, so a slow hook is never cut off
-halfway.
+halfway. The other side of that: a `post-checkout` hook that hangs during `worktree add` holds the job's slot until
+you stop it, because the run limit starts only when the command does.
 
 The temporary worktree is `<id>-integrate-<pid>-<random>` in `worktrees/`, with a file `<name>.owner.json` that holds
 the start time of the `integrate` process. When that process was killed before it could clean up, the next

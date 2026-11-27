@@ -210,8 +210,11 @@ export function dropLeftovers(home, env, { same = sameProcess } = {}) {
     const dropped = [];
     for (const name of temps) {
         const owner = readJson(ownerFile(home, name));
-        const pid = Number(TEMP_RE.exec(name)[2]);
-        if (same(pid, owner?.born)) continue;
+        const [, id, pid] = TEMP_RE.exec(name);
+        // Integrate writes the owner file before it makes the worktree, so a folder without one, or with one that names
+        // another job, is not a temporary worktree: a job folder <repo>-<id> of a repo named like one stays.
+        if (owner?.job !== id) continue;
+        if (same(Number(pid), owner.born)) continue;
         const folder = join(dir, name);
         const top = [owner?.top, gitDirOf(folder)].find((path) => path && existsSync(path));
         if (top) forgetWorktree(top, folder, env);

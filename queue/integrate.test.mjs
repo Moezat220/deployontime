@@ -284,14 +284,14 @@ test("worktrees, integrate and discard remove a temporary integrate worktree who
     const plant = (pid, born) => {
         const name = `0a1b2c3d-integrate-${pid}-${born === MY_BORN ? "11111111" : "22222222"}`;
         git(box.repo, "worktree", "add", "-q", "--detach", join(dir, name), "HEAD");
-        writeFileSync(join(dir, `${name}.owner.json`), JSON.stringify({ pid, born, top: box.repo }));
+        writeFileSync(join(dir, `${name}.owner.json`), JSON.stringify({ pid, born, top: box.repo, job: "0a1b2c3d" }));
         return join(dir, name);
     };
     const dead = plant(await deadPid(), MY_BORN - 1000);
     const live = plant(process.pid, MY_BORN);
     const reused = join(dir, `0a1b2c3d-integrate-${process.pid}-33333333`);
     git(box.repo, "worktree", "add", "-q", "--detach", reused, "HEAD");
-    writeFileSync(`${reused}.owner.json`, JSON.stringify({ pid: process.pid, born: MY_BORN - 3_600_000, top: box.repo }));
+    writeFileSync(`${reused}.owner.json`, JSON.stringify({ pid: process.pid, born: MY_BORN - 3_600_000, top: box.repo, job: "0a1b2c3d" }));
     assert.equal(worktreeCount(box.repo), 4);
     assert.deepEqual(await cli(box, ["worktrees"]), { code: 0, stdout: "worktrees: none\n", stderr: "" });
     assert.deepEqual([existsSync(dead), existsSync(`${dead}.owner.json`), existsSync(reused), existsSync(live)], [false, false, false, true]);
@@ -300,6 +300,20 @@ test("worktrees, integrate and discard remove a temporary integrate worktree who
     const again = plant(await deadPid(), MY_BORN);
     assert.equal((await cli(box, ["discard", job.id])).code, 0);
     assert.deepEqual([existsSync(again), existsSync(live), worktreeCount(box.repo)], [false, true, 2]);
+});
+
+test("a folder named like a temporary integrate worktree stays when it has no owner file or one that names another job", async () => {
+    const box = sandbox();
+    const dir = join(box.home, "worktrees");
+    mkdirSync(dir, { recursive: true });
+    const dead = await deadPid();
+    const bare = join(dir, `abcdef12-integrate-${dead}-0a1b2c3d`);
+    const other = join(dir, `abcdef12-integrate-${dead}-4e5f6a7b`);
+    for (const folder of [bare, other]) git(box.repo, "worktree", "add", "-q", "--detach", folder, "HEAD");
+    writeFileSync(join(bare, "work.txt"), "not committed\n");
+    writeFileSync(`${other}.owner.json`, JSON.stringify({ pid: dead, born: MY_BORN - 1000, top: box.repo, job: "99999999" }));
+    assert.equal((await cli(box, ["worktrees"])).code, 0);
+    assert.deepEqual([existsSync(join(bare, "work.txt")), existsSync(other), worktreeCount(box.repo)], [true, true, 3]);
 });
 
 test("discard: commits that git cannot count are an issue, not 0 commits ahead; --force still removes the job", async () => {
