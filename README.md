@@ -110,7 +110,16 @@ npm link                 # puts the dotime-queue command on your path
 dotime-queue status
 ```
 
-Then tell your agents to use it. For example, add this to their instruction file (such as `AGENTS.md` or `CLAUDE.md`):
+Then tell your agents to use it. In the folder of each project they work in, run:
+
+```
+dotime-queue setup           # shows what it would add, and changes nothing
+dotime-queue setup --write   # adds it
+```
+
+It adds the queue instruction to the project's `AGENTS.md` and `CLAUDE.md`, between a begin and an end marker, or
+creates `AGENTS.md` when there is neither; a second run updates that block and leaves the rest of each file alone.
+`--mcp` also prints the settings for the [MCP server](#use-with-an-mcp-client). The block says, in short:
 
 ```
 Start every test run, build and other heavy command through the queue:
@@ -118,6 +127,8 @@ dotime-queue run --label "<project>: <task>" -- <command>
 A test or lint run that prints "skipped:" already passed on this exact commit and exits 0; add --no-skip in front
 of the -- only to run it again on purpose.
 ```
+
+A coding agent that opens this repository finds what it needs in [AGENTS.md](AGENTS.md).
 
 You do not need to tell agents to call `dotime-queue passed` first: `run` checks for a pass by itself, in the same
 folder, with the same label, command and code. `--no-skip` on an outer job also reaches the checks it runs through the
