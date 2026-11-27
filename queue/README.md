@@ -157,6 +157,18 @@ leaves with exit 130 on INT or TERM, and books its waiting time in the journal u
 A waiting nested run checks on every poll that its parent still runs. If the parent has ended, the run is no longer
 inside a job: it prints a `parent gone:` line and joins the line as a normal run, waits for a slot and the health
 gate, and is journalled without `nested`. Its `--max-wait` limit still counts from when it began to wait.
+
+This limit is new: nested runs used to start at once, with no limit per job. Now no more than 2 run at once under one
+job unless `nestedPerJob` says otherwise. A job that fans out to many long shards, each a nested run, now runs them 2
+at a time; the rest wait, and a shard whose wait passes its `--max-wait` limit (`maxWaitMin`, 60 min by default)
+gives up with exit 75.
+
+Nested runs of one parent that only work when they run at the same time wait the same way: a pipeline such as
+`dotime-queue run … | dotime-queue run …`, or a server and the tests that call it, both started through the queue.
+With more of them than `nestedPerJob`, the ones beyond it wait for a place that none of the others give up, until
+`--max-wait` ends them with 75. For such jobs, raise `nestedPerJob` in `config.json` to the number that must run at
+once, for example `{ "nestedPerJob": 4 }`, or start only one side through the queue.
+
 A nested run inside a nested run counts against its own parent, not against the outermost job: each nested run hands
 its job a `DOTIME_PARENT` that names the nested run itself, while `DOTIME_JOB` keeps naming the outer slot at every
 level. So with `nestedPerJob` at 1 several levels of nesting still run, each level in the one place of the level
