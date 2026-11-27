@@ -12,8 +12,8 @@ const ROWS = [
     { pid: 5104, ppid: 5103 }, { pid: 5200, ppid: 1 },
 ];
 const HOLDERS = [
-    { file: "/state/slots/slot-0.json", pid: 5100, label: "docs-site: test suite" },
-    { file: "/state/slots/slot-1.json", pid: 5200, label: "shop-api: e2e" },
+    { file: "/state/slots/slot-0.json", pid: 5100, label: "docs-site: test suite", born: 1_900_000_000_000, pgid: 5101 },
+    { file: "/state/slots/slot-1.json", pid: 5200, label: "shop-api: e2e", born: 1_900_000_100_000, pgid: 5201 },
 ];
 const find = (marker, pid = 5104) => outerJob({ marker, pid, holders: HOLDERS, rows: ROWS })?.label ?? null;
 
@@ -30,6 +30,16 @@ test("outerJob: a marker is genuine only for a held slot whose holder is an ance
     assert.equal(find("slot-0", 5100), null, "the holder itself is not nested in its own slot");
 });
 
+test("outerJob: a slot file without the pid above 1, start time and process group of a running job is not trusted", () => {
+    const [real] = HOLDERS, rows = [{ pid: 1, ppid: 0 }, ...ROWS];
+    const check = (holder) => outerJob({ marker: "slot-0", pid: 5104, holders: [holder], rows })?.pid ?? null;
+    assert.equal(check(real), 5100);
+    assert.equal(check({ ...real, born: undefined }), null, "no start time");
+    assert.equal(check({ ...real, pgid: undefined }), null, "no process group: the job has not started");
+    assert.equal(check({ file: real.file, pid: 1, label: "forged" }), null, "pid 1, an ancestor of every process");
+    assert.equal(check({ ...real, pid: 1 }), null, "pid 1 with every other field in place");
+});
+
 test("outerJob: a missing or malformed marker is ignored before any process listing is read", () => {
     const rows = { get byPid() { throw new Error("the process table was read"); } };
     for (const marker of [undefined, "", "slot-", "slot-0 ", "../slots/slot-0", "slot-0.json"]) {
@@ -38,6 +48,6 @@ test("outerJob: a missing or malformed marker is ignored before any process list
 });
 
 test("outerJob: with no rows given it reads the real process table, where this file's parent is an ancestor", () => {
-    const holders = [{ file: "/state/slots/slot-0.json", pid: process.ppid, label: "docs-site: test suite" }];
+    const holders = [{ file: "/state/slots/slot-0.json", pid: process.ppid, label: "docs-site: test suite", born: 0, pgid: 1 }];
     assert.equal(outerJob({ marker: "slot-0", pid: process.pid, holders })?.pid, process.ppid);
 });

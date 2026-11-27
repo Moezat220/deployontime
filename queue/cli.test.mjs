@@ -95,10 +95,12 @@ test("statusLines: one line per running job, per waiting job and for the gate", 
 test("statusLines: a nested run is shown under the job it runs in and is not counted as taking a slot", () => {
     const now = Date.UTC(2031, 5, 9, 10, 0);
     const holders = [
-        { file: "/state/slots/slot-0.json", label: "docs-site: test suite", pid: 3201, at: now - 5 * MINUTE },
-        { file: "/state/slots/slot-1.json", label: "shop-api: lint", pid: 3202, at: now - MINUTE },
+        { file: "/state/slots/slot-0.json", label: "docs-site: test suite", pid: 3201, born: now - 6 * MINUTE, at: now - 5 * MINUTE },
+        { file: "/state/slots/slot-1.json", label: "shop-api: lint", pid: 3202, born: now - 2 * MINUTE, at: now - MINUTE },
     ];
-    const nested = [{ label: "docs-site: unit tests", pid: 3205, outer: "slot-0", at: now - 3 * MINUTE }];
+    const nested = [{
+        label: "docs-site: unit tests", pid: 3205, outer: "slot-0", outerPid: 3201, outerBorn: now - 6 * MINUTE, at: now - 3 * MINUTE,
+    }];
     assert.deepEqual(statusLines({ holders, queue: [], nested, gate: "no free slot: 2 of 2 taken", max: 2, now }), [
         "slots: 2 of 2 taken, 0 waiting",
         'running "docs-site: test suite": pid 3201, 5 min so far, limit unknown',
@@ -106,6 +108,21 @@ test("statusLines: a nested run is shown under the job it runs in and is not cou
         'running "shop-api: lint": pid 3202, 1 min so far, limit unknown',
         "gate: shut; no free slot: 2 of 2 taken",
     ]);
+});
+
+test("statusLines: a nested run is not shown under a later job that took the same slot after its outer job ended", () => {
+    const now = Date.UTC(2031, 5, 9, 10, 0);
+    const holders = [{ file: "/state/slots/slot-0.json", label: "shop-api: e2e", pid: 3301, born: now - 2 * MINUTE, at: now - MINUTE }];
+    const older = { label: "docs-site: unit tests", pid: 3205, outer: "slot-0", at: now - 9 * MINUTE };
+    const nested = [
+        { ...older, outerPid: 3201, outerBorn: now - 12 * MINUTE },
+        { ...older, pid: 3206, outerPid: 3301, outerBorn: now - 30 * MINUTE },
+    ];
+    assert.deepEqual(statusLines({ holders, queue: [], nested, gate: "", max: 1, now }), [
+        "slots: 1 of 1 taken, 0 waiting",
+        'running "shop-api: e2e": pid 3301, 1 min so far, limit unknown',
+        "gate: open",
+    ], "another pid, or the same pid with another start time, is another job");
 });
 
 test("statusLines: an empty queue with an open gate", () => {

@@ -16,8 +16,14 @@ import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
+// A nested run belongs to a holder only when it names the holder's slot, pid and start time: a later job in the
+// same slot is another job.
+const insideOf = (entry, h) => !!h.file && entry.outer === markerOf(h.file) && entry.outerPid === h.pid
+    && entry.outerBorn === h.born;
+
 /** The lines `status` prints. gate: the reason the gate is shut, or "". nested: the nested runs, each shown under the
- *  job whose slot it names in outer; they hold no slot and are not counted. */
+ *  job whose slot, pid and start time it names in outer, outerPid and outerBorn; they hold no slot and are not
+ *  counted. */
 export function statusLines({ holders, queue, nested = [], gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
     for (const h of holders) {
@@ -34,8 +40,9 @@ export function statusLines({ holders, queue, nested = [], gate, max, now = Date
             if (h.longRunMin && ranMin > h.longRunMin) facts.push(`past the ${h.longRunMin} min long-run mark`);
         }
         lines.push(`running "${h.label}": ${facts.join(", ")}`);
-        for (const n of nested.filter((entry) => h.file && entry.outer === markerOf(h.file))) {
-            lines.push(`  nested "${n.label}": pid ${n.pid}, ${minutesSince(n.at, now)} min so far, no slot of its own`);
+        for (const n of nested.filter((entry) => insideOf(entry, h))) {
+            const ran = `${minutesSince(n.at, now)} min so far`;
+            lines.push(`  nested "${n.label}": pid ${n.pid}, ${ran}, no slot of its own`);
         }
     }
     queue.forEach((q, i) => {

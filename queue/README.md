@@ -145,11 +145,14 @@ the job holds, and a `run` that finds it is a nested run: it starts at once, tak
 not wait for the health gate, because the outer job was already let through. Everything else stays the same: the
 option checks, the refusal of a check that failed twice, a run limit of its own, the handling of INT, TERM and HUP,
 and a journal line, marked `nested: true` and with no waiting time booked, so pass stamps and `history` see it as
-usual. A nested run says so on a `nested:` line when it starts.
+usual. A nested run says so on a `nested:` line when it starts. Several nested runs started side by side inside one
+job all run at once: none of them waits for a slot or the health gate, so a job that fans out to many inner runs
+should keep its own parallelism in check.
 
-`DOTIME_JOB` is trusted only while the slot it names is held and the process holding that slot is an ancestor of the
-new run. A copy of the variable in another shell, or one left in a program that outlived its job, fails that check,
-and that run queues as usual. The variable therefore cannot be used to skip the line from outside a job.
+`DOTIME_JOB` is trusted only while the slot it names is held by a job that has started, whose slot file names its
+start time and process group, and the process holding that slot is an ancestor of the new run. A copy of the
+variable in another shell, or one left in a program that outlived its job, fails that check, and that run queues as
+usual. The variable therefore cannot be used to skip the line from outside a job.
 
 ### `status`
 
@@ -557,7 +560,7 @@ Environment variables:
 | File | Content |
 | --- | --- |
 | `config.json` | Settings. Optional. |
-| `nested/` | One small file per nested run while it runs, so `status` can show it under its outer job. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
+| `nested/` | One small file per nested run while it runs, so `status` can show it under its outer job; it names the slot, pid and start time of that job, so it never shows under a later job in the same slot. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
 | `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
 | `journal.jsonl` | One line per job. |
 | `notices/` | Long-run and idle-slot notices, one file each. |

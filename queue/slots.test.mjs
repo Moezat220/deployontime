@@ -154,12 +154,12 @@ test("updateSlot: merges fields for the holder and refuses anyone else", () => {
 test("addNested: notes a nested run, which a snapshot lists apart from the holders, and only while it lives", () => {
     const home = tempDir("slots-nested");
     const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };
-    const note = addNested(process.pid, "docs-site: unit tests", "slot-0", dirs, 7000);
-    addNested(2 ** 30 + 9, "docs-site: lint", "slot-0", dirs);
+    const outer = { marker: "slot-0", pid: 4100, born: 6000 };
+    const note = addNested(process.pid, "docs-site: unit tests", outer, dirs, 7000);
+    addNested(2 ** 30 + 9, "docs-site: lint", outer, dirs);
     const stored = read(note);
-    assert.deepEqual([stored.pid, stored.label, stored.outer, stored.at, Number.isFinite(stored.born)], [
-        process.pid, "docs-site: unit tests", "slot-0", 7000, true,
-    ]);
+    const fields = [stored.pid, stored.label, stored.outer, stored.outerPid, stored.outerBorn, stored.at, Number.isFinite(stored.born)];
+    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0", 4100, 6000, 7000, true]);
     const snap = snapshot({ dirs, prune: true });
     assert.deepEqual([snap.holders, snap.queue, snap.nested.map((n) => [n.file, n.label])], [[], [], [[note, "docs-site: unit tests"]]]);
     assert.deepEqual(readdirSync(dirs.nested), [`${process.pid}.json`], "the note of a dead run is pruned");

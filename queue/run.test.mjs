@@ -20,6 +20,8 @@ const { notify } = await import("./notify.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { gitState } = await import("./git.mjs");
 const { afterMs } = await import("./timer.mjs");
+const { probeGroupOf, probeProcessAges } = await import("./probes.mjs");
+const { parseElapsed } = await import("./ps.mjs");
 
 const NODE = process.execPath, MINUTE = 60_000;
 const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
@@ -261,10 +263,12 @@ test("runJob: the job finds the marker of its slot in DOTIME_JOB, for a run of t
 const nestedNotes = (box) => {
     try { return readdirSync(join(box.home, "nested")); } catch { return []; }
 };
-/** A sandbox whose only slot is held by an ancestor of this process, and deps whose environment names that slot. */
+/** A sandbox whose only slot is held by an ancestor of this process, and deps whose environment names that slot. The
+ *  slot file carries the start time and process group a real holder has. */
 function nestedBox() {
     const box = sandbox({ slots: 1 });
-    takeSlot(process.ppid, "docs-site: test suite", 1, {}, box.ctx.files);
+    const born = Date.now() - parseElapsed(probeProcessAges([process.ppid])).get(process.ppid) * 1000;
+    takeSlot(process.ppid, "docs-site: test suite", 1, { born, pgid: probeGroupOf(process.ppid) }, box.ctx.files);
     return box;
 }
 const nestedDeps = (box, overrides = {}) => makeDeps(box, { env: { DOTIME_JOB: "slot-0" }, readHealth: assert.fail, ...overrides });
@@ -539,4 +543,25 @@ test("run: a signal while the commit is read for a job that just got its slot st
     assert.equal(code, 1);
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal]), [["stopped", 1, "SIGINT"]]);
     assert.deepEqual([slots(box), readdirSync(join(box.home, "line")), signals.eventNames()], [[], [], []]);
+});
+
+test("run: a signal while the commit is read for a nested job stops the job and removes its note", async () => {
+    const box = nestedBox(), signals = signalStandIn();
+    let reads = 0, notesThen = null;
+    const slowGit = (cwd) => {
+        if (++reads === 2) {
+            notesThen = nestedNotes(box).length;
+            signals.arrive("SIGINT");
+        }
+        return gitState(cwd);
+    };
+    const d = nestedDeps(box, { gitState: slowGit, signals });
+    const args = ["run", "--label", "docs-site: unit tests", "--", NODE, "-e", "setTimeout(() => {}, 1500)"];
+    const code = await runCommand(args, box.ctx, d.deps);
+    assert.equal(notesThen, 1, "the signal came after the nested run was noted");
+    assert.equal(signals.endedBy, null, "the signal found no listener and would have ended the process");
+    assert.equal(code, 1);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal, line.nested]), [["stopped", 1, "SIGINT", true]]);
+    assert.deepEqual([nestedNotes(box), signals.eventNames()], [[], []]);
+    assert.deepEqual(slots(box).map((slot) => slot.pid), [process.ppid], "the outer job keeps its slot");
 });

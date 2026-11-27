@@ -421,19 +421,28 @@ export async function runCommand(args, ctx, deps) {
 
 /** Runs a nested job: at once, in no slot, noted in the nested folder while it runs so `status` can show it under
  *  its outer job. job is the one runJob takes, without waitFrom, and with outer, the slot holder it runs inside.
- *  Everything from the handlers runJob adds onwards is the same as for a job in a slot, and nothing waits on the way
- *  there, so no signal can arrive while there is no handler for it. */
+ *  Everything from the handlers runJob adds onwards is the same as for a job in a slot. Until then leave handlers
+ *  hold INT and TERM, as they do for a job in a slot, so a signal while the commit is read does not end the process
+ *  with no journal line and the note left behind: runJob takes them over before such a signal is delivered, and it
+ *  reaches the handlers of the job and is passed on to it. */
 async function runNested(job, deps) {
     const { pid, label, outer, files } = job;
+    const { signals } = deps;
     const marker = markerOf(outer.file);
-    deps.say(`nested: inside "${outer.label}", pid ${outer.pid}; starts at once: no slot, no place in line, no health gate`);
-    const note = addNested(pid, label, marker, files);
+    deps.say(`nested: inside "${outer.label}", pid ${outer.pid}; `
+        + "starts at once: no slot, no place in line, no health gate");
+    // They only keep the default action, ending the process, away: no signal reaches them, see above.
+    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {}]);
+    for (const [signal, handler] of leavers) signals.on(signal, handler);
+    const dropLeavers = () => { for (const [signal, handler] of leavers) signals.off(signal, handler); };
+    const note = addNested(pid, label, { marker, pid: outer.pid, born: outer.born }, files);
     const forget = () => rmSync(note, { force: true });
-    deps.signals.on("exit", forget);
+    signals.on("exit", forget);
     try {
-        return await runJob({ ...job, marker, waitFrom: deps.now() }, null, deps);
+        return await runJob({ ...job, marker, waitFrom: deps.now(), handOver: dropLeavers }, null, deps);
     } finally {
+        dropLeavers();
         forget();
-        deps.signals.off("exit", forget);
+        signals.off("exit", forget);
     }
 }

@@ -1,6 +1,6 @@
 // Slots, the waiting line and the nested runs, stored as small JSON files in the state folder so unrelated processes
-// can share them without a server. A slot is claimed with a hard link, which only one process can win. Every file is written under
-// a temporary name and then moved into place, so a reader never meets half a file.
+// can share them without a server. A slot is claimed with a hard link, which only one process can win. Every file is
+// written under a temporary name and then moved into place, so a reader never meets half a file.
 import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { probeProcessAges } from "./probes.mjs";
@@ -64,12 +64,15 @@ export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date
     return { holders, queue, ...(dirs.nested ? { nested: liveEntries(dirs.nested) } : {}) };
 }
 
-/** Notes a nested run, one that runs inside the job holding the slot named by outer and takes no slot itself.
- *  Returns its file; deleting the file removes the note. */
+/** Notes a nested run, one that runs inside the job holding a slot and takes no slot itself. outer: { marker, pid,
+ *  born }, the marker of that slot and the pid and start time of its holder, stored as outer, outerPid and outerBorn
+ *  so the note is never taken for one of a later job in the same slot. Returns its file; deleting the file removes
+ *  the note. */
 export function addNested(pid, label, outer, dirs, now = Date.now()) {
     mkdirSync(dirs.nested, { recursive: true });
     const file = join(dirs.nested, `${pid}.json`);
-    writeJsonAtomic(file, { pid, label, outer, at: now, ...bornOf(pid) });
+    const from = { outer: outer.marker, outerPid: outer.pid, outerBorn: outer.born };
+    writeJsonAtomic(file, { pid, label, ...from, at: now, ...bornOf(pid) });
     return file;
 }
 
