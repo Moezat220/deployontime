@@ -70,6 +70,10 @@ dotime-queue run --label "shop-api: unit tests" -- npm test
    what its kind has learned (which can be as short as 10 minutes) needs `--max-run <minutes>`.
 4. **Record.** Its wait, run time and result go into a journal that later runs and `history` use.
 
+For parallel edits, `run --isolate` runs a job in a git worktree of its own on a new branch, so agents side by side
+never edit the same files. `dotime-queue integrate <id> -- <check>` merges it back, and moves your branch only by a
+fast-forward once the check passed on the merged result.
+
 When a check fails that both passed and failed before on the same commit from a clean tree, `run` adds a `flaky:` line
 saying the failure may not come from the change; it is advice only and changes no exit code. Timeouts, stops and runs
 with uncommitted changes never count, and `dotime-queue flaky` lists the flaky checks.
@@ -181,7 +185,7 @@ folder the server starts in, and its jobs are handed that absolute path.
 | `queue_status` | none | The lines of `dotime-queue status`, with the slot and line counts as fields |
 | `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
 | `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
-| `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix` | Starts `dotime-queue run` in the background and returns a job id at once |
+| `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix`, `isolate` | Starts `dotime-queue run` in the background and returns a job id at once |
 | `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed or refused run of a flaky check), and the last lines of its output |
 
 `cwd` is an absolute path to an existing folder; without it, the folder the server was started in is used. The label
@@ -231,7 +235,8 @@ and only if you schedule them: the reaper (idle dev servers) and the scheduled-j
 <summary><strong>Does it change my code or my files?</strong></summary>
 
 No. In your repository it only reads: read-only git commands, and files to tell whether a check's code changed. Its
-own state (slots, journal, settings) lives in `~/.dotime`.
+own state (slots, journal, settings) lives in `~/.dotime`. Only `run --isolate` adds a worktree and a branch, and only
+`integrate` moves your branch, by a fast-forward after the check passed.
 </details>
 
 <details>

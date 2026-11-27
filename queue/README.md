@@ -25,9 +25,11 @@ by its process id. A container, a virtual machine or a second computer must ther
 it would take the host's jobs for finished, delete their slots and let too many jobs run. Each user account has its
 own `~/.dotime`, and two computers must not share one.
 
-**Your repository.** The queue never edits your repository. It runs read-only git commands and reads files to
-tell whether the code changed between runs. The commands you run through it do what they always do. The queue
-opens no network connection; only a `DOTIME_NOTIFY_CMD` that you set can send notices elsewhere.
+**Your repository.** The queue never edits your repository. It runs read-only git commands and reads files to tell
+whether the code changed between runs. The one exception is the [isolated run](#isolated-runs), which you ask for with
+`--isolate`: it adds a worktree and a branch, and only `integrate` moves your branch, by a fast-forward. The commands
+you run through it do what they always do. The queue opens no network connection; only a `DOTIME_NOTIFY_CMD` that you
+set can send notices elsewhere.
 
 ## Install
 
@@ -120,6 +122,7 @@ password, cannot do so.
 | `--after-fix "<note>"` | Runs a check that would be refused with exit 3. The note is stored in the journal. |
 | `--priority` | Joins the line at the front. Slots and the gate still apply. For a person's urgent run. |
 | `--no-skip` | Runs a `test` or `lint` job that already passed on this commit. See **Checks that already passed** below. |
+| `--isolate` | Runs the job in a git worktree of its own, on a new branch. Never skipped. See [Isolated runs](#isolated-runs). |
 
 Options go in front of the `--`. Everything behind it is the job's command. Keep `--priority` out of agent
 instructions: an agent that uses it every time puts itself in front of everyone else.
@@ -129,8 +132,8 @@ or any other word in front of the `--` is refused with exit 2, for example `doti
 A word that starts with `--` is not taken as the value of the option in front of it: `--label --priority` is refused
 because `--label` has no value. Give `--label` a value, or, when the value itself starts with `--`, join it to the
 option with `=`: `--label=--priority`. The refusal message says both, with the value in single quotes when a shell
-would split or change it. The job does not run. The same holds for `status`, `passed`, `history` and `flaky`:
-each accepts only the options shown for it.
+would split or change it. The job does not run. The same holds for `status`, `passed`, `history`, `flaky`,
+`integrate`, `discard` and `worktrees`: each accepts only the options shown for it.
 
 `run` started in a folder that was removed checks its options first, as above. When they are fine, it says
 `dotime-queue: the current folder was removed; start the job from a folder that exists` and exits 2; nothing is
@@ -514,21 +517,94 @@ may not come from your change
 `3 times` counts the commits, and `once` stands for one. `dotime-queue flaky` lists the flaky checks, and `history`
 counts them per project.
 
+## Isolated runs
+
+Agents that work side by side in one checkout edit the same files. An isolated run gives each job a checkout of its
+own, and brings its work back only after a check passed on the result:
+
+```
+dotime-queue run --isolate --label "shop-api: rename price field" -- <agent or edit command>
+dotime-queue worktrees
+dotime-queue integrate <id> -- npm test
+dotime-queue discard <id> [--force]
+```
+
+**`run --isolate`.** The folder must be in a git repository with at least one commit and a clean working tree, by
+the rule the journal uses: no tracked changes and no untracked files that are not ignored. Otherwise `run` exits 2,
+for example `dotime-queue: --isolate needs a clean working tree; /src/shop-api has 2 uncommitted changes or untracked
+files; commit or stash your changes first; nothing was started`. A detached HEAD is fine: the job starts from the
+commit. The job then waits in line like any other. Once it holds its slot it gets a new id of 8 hex digits, a branch
+`dotime/<label>-<id>` (the label in lowercase letters, digits and dashes, at most 40 characters; `job` without a
+label) and a folder `<repo>-<id>` in `worktrees/` of the state folder, made with `git worktree add` at the commit the
+job was queued on. A branch, folder or id that is already there is never reused: a new id is picked. A job that is
+refused (exit 3), gives up waiting (exit 75) or leaves the line (exit 130) never gets a worktree. The command runs in
+the worktree, in the same subfolder `run` was started in, under the same slot, gate, limit and repeated-failure rules
+as any job. It is never skipped, since it changes files, and a pass in a worktree is no pass stamp for the checkout.
+The check is still the one of the folder `run` was started in, so the repeated-failure stop and the flaky flag count
+isolated runs and plain runs of one check together.
+
+A fresh worktree holds only what git tracks: no installed packages, no `.env`, no build output. The setting
+`isolateLinks` names paths to link into it from your checkout, such as `["node_modules"]`; a path is linked only when it
+exists in the checkout and git ignores it there. The links are never committed, and removing a worktree removes only
+the links, never what they point to. A job that writes into a linked folder writes into your checkout's copy.
+
+After exit 0, changes the command left uncommitted are committed on the job's branch as `dotime: <label>` with the
+repository's own name and e-mail, and two lines follow:
+
+```
+dotime-queue: committed: 1 change on branch dotime/shop-api-rename-price-field-3fa9c2d1 as 9b1e0c4a "dotime: shop-api: rename price field"
+dotime-queue: isolated in ~/.dotime/worktrees/shop-api-3fa9c2d1 on branch dotime/shop-api-rename-price-field-3fa9c2d1; integrate with: dotime-queue integrate 3fa9c2d1 -- <check>
+```
+
+Without a configured `user.name` and `user.email` (or the `GIT_AUTHOR_` and `GIT_COMMITTER_` variables), or when a
+commit hook refuses, the changes stay uncommitted and a `not committed:` line says so; `integrate` refuses such a job
+until they are committed. After a failure, a timeout or a stop, the worktree is kept as it is, nothing is committed,
+and the line is `dotime-queue: kept <folder> on branch <branch> for a look; remove it with: dotime-queue discard
+<id>`. The journal line of an isolated run adds `isolate`: `{ id, branch, worktree, base, baseBranch }`, where
+`baseBranch` is null on a detached HEAD.
+
+**`integrate <id> -- <check command>`.** Run it in a folder of the same repository. It refuses with exit 2 and
+changes nothing when the check command is missing, the job did not end with exit 0, the job's worktree has
+uncommitted changes, your checkout has uncommitted changes, or your checkout is not on the branch the job started
+from (the message names the branch to switch to). Then it makes a temporary worktree at your HEAD, detached, and
+merges the job's branch there with `git merge --no-ff` as `dotime: integrate <label>`. A conflict aborts the merge,
+removes the temporary worktree, names the files and exits 1; the job is kept. The check then runs in the temporary
+worktree through the queue, labelled `<job label>: integrate`, with `isolateLinks` linked. When it fails, its exit
+code is passed on and nothing else changes. When it passes, your branch is fast-forwarded to the commit the check
+passed on. If your branch moved while the check ran, nothing is changed and it says to run `integrate` again. Only
+after the fast-forward are the temporary worktree, the job's worktree and its branch removed (`git branch -d`). A job
+whose branch is already in your HEAD, for example one that changed nothing, is just removed. Two jobs integrated one
+after the other both land: the second is merged onto the first.
+
+**`discard <id> [--force]`.** Removes the job's worktree and branch. Without `--force` it refuses with exit 2 while
+the branch has commits that are not in the branch the job started from, or the worktree has uncommitted changes,
+and says how many. A worktree folder that was deleted by hand is pruned (`git worktree prune`).
+
+**`worktrees`.** One line per kept job, oldest first: `worktree <id>: "<label>", branch <branch>, folder <folder>,
+<outcome>, <n> min old`, with the exit code after a failure and `folder missing` when the folder is gone; or
+`worktrees: none`. Exits 0.
+
+Nothing here ever stashes, resets or force-pushes, and no branch with unmerged commits is deleted without
+`--force`. The state of each kept job is a file `worktrees/<id>.json` in the state folder, so `integrate` and
+`discard` work after a restart.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
 | 0 | Also a `test` or `lint` job that was skipped because it already passed on this commit; see [`run`](#run). |
-| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` and `setup` without `--cwd`, from a folder that was removed. |
+| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` and `setup` without `--cwd`, from a folder that was removed. Also `run --isolate` outside git or in a dirty tree, and `integrate` or `discard` refused before changing anything. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |
 | 127 | The job's command could not be started. Journalled as `could-not-start`, not as a failure. |
 | 130 | Left the line because of a signal. |
 
-`passed` exits 0 with a stamp and 1 without. `setup` exits 1 when an agent file cannot be read or written; see
-[`setup`](#setup).
+`integrate` exits 0 once your branch holds the job, 1 for a merge conflict or a branch that moved during the check, and
+the check's own code when the check fails; see [Isolated runs](#isolated-runs). `discard` exits 1 when git could not
+remove the worktree or branch. `passed` exits 0 with a stamp and 1 without. `setup` exits 1 when an agent file cannot be
+read or written; see [`setup`](#setup).
 
 ## Message format
 
@@ -810,6 +886,7 @@ default. Only a missing file is silent.
 | `reaper.serverPattern` | see below | Regular expression for dev-server commands. |
 | `reaper.keepPattern` | `/Applications/\|LaunchAgents` | Commands the reaper never stops. See below. |
 | `outputDirs` | see below | Folder names whose untracked files are left out when failed runs are compared. |
+| `isolateLinks` | `[]` | Paths, relative to the top of the repository, linked into the worktree of an [isolated run](#isolated-runs) when git ignores them, such as `"node_modules"`. No `..`, no leading `/`. |
 
 Default `reaper.serverPattern`: `vite` (but not `vite build`), `vitest`, `next dev`, `wrangler dev`,
 `webpack serve`, `webpack-dev-server` and `nodemon`. A one-shot test run, such as `vitest run`, `vitest --run`,
@@ -850,19 +927,20 @@ Environment variables:
 | `reaper-state.json` | CPU samples between reaper runs. |
 | `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
+| `worktrees/` | The worktrees of [isolated runs](#isolated-runs), `<repo>-<id>`, with one state file `<id>.json` per kept job, and the temporary worktrees of `integrate` while it runs. |
 | `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`) and its output (`.log`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
 
 A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
 started later.
 
-Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`,
-`cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
-`waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
-`limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
-`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested` or `stamp` (on a line with
-outcome `skipped`: the passing run it relied on). Lines written by `run` also carry `pid`, the pid of the `run`
-process, so whoever started that process can find its own line. Copies of the queue that share
-a state folder all read the same fields, so a field keeps its name; a new field is only ever added.
+Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`, `cwd`,
+`priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`
+(minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`, `limitMin`,
+`limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`, `afterFix`,
+`signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested`, `isolate` (an isolated run) or `stamp` (on a
+line with outcome `skipped`: the passing run it relied on). Lines written by `run` also carry `pid`, the pid of the
+`run` process, so whoever started that process can find its own line. Copies of the queue that share a state folder all
+read the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
 the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no
@@ -881,8 +959,10 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
-| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup`, `run`, `integrate`, `discard` or `worktrees`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
+| `worktree.mjs` | Isolated runs: the checks before one, the worktree, branch, links and state file, and the commit after a pass. | library | Runs `git` that adds worktrees, branches and commits in them; writes `worktrees/`; makes links. |
+| `integrate.mjs` | The `integrate`, `discard` and `worktrees` commands. | library | Runs `git` that merges in a temporary worktree, fast-forwards your branch, removes worktrees and branches; removes `worktrees/` files. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |

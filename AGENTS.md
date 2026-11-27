@@ -33,7 +33,8 @@ dotime-queue run --label "<project>: <task>" -- <command>
 Exit 75 means the job gave up waiting for a slot, 124 that it hit its run limit, 3 that the same check already
 failed twice on unchanged code; none of them is a test failure of the code. A test or lint run that prints
 `skipped:` already passed on this commit and exits 0. A `flaky:` line means the same check both passed and failed on
-this commit before: look at the test before you change the code.
+this commit before: look at the test before you change the code. For parallel edits use `run --isolate`, then
+`integrate <id> -- <check>`.
 
 ## MCP instead of shell commands
 
