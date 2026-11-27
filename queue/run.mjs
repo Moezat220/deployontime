@@ -1,6 +1,7 @@
-// The `run` command, in three steps: planJob decides the limit and whether the job is refused, waitForSlot waits in
-// line until a slot is taken (for a nested run, waitForPlace waits until a place under its parent job is), and runJob
-// runs the job in its own process group under the limit. runCommand chains them and returns the exit code; it never
+// The `run` command, in three steps: planJob decides the limit and whether the job is refused, and skipFor whether a
+// check that already passed on this commit is skipped; waitForSlot waits in line until a slot is taken (for a nested
+// run, waitForPlace waits until a place under its parent job is), and runJob runs the job in its own process group
+// under the limit. runCommand chains them and returns the exit code; it never
 // ends the process itself. These come in through deps, so tests can drive each step: the clock, sleeping and timers,
 // the health reading, the commit read when the job is queued and again when it starts, the current folder, starting
 // the job, signals sent to it and signals received, messages, notifications and stored notices, and the environment
@@ -18,7 +19,7 @@ import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate
 import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
-import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } from "./journal.mjs";
+import { addWait, append, cmdString, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp } from "./journal.mjs";
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
@@ -71,6 +72,17 @@ export function planJob(request, settings, journalRows) {
         afterFixUsed: verdict.refuse && !!afterFix,
         details,
     };
+}
+
+/** The pass stamp on which a job is skipped, or null when it must run. Only a job of a kind in SKIPPABLE_KINDS is
+ *  ever skipped, and only on a stamp from skipStamp: a run of the same project, label and command that passed on this
+ *  commit with a clean tree, while the tree is still clean now, with no failure of it on the commit since.
+ *  job: { kind, label, command, project (the folder's project, as journal lines store it), commit ({ head, clean },
+ *  read when the job was queued), noSkip, at, tz }. rows: the journal rows. */
+export function skipFor(job, rows) {
+    if (job.noSkip || !SKIPPABLE_KINDS.includes(job.kind)) return null;
+    const folder = { project: job.project, ...job.commit };
+    return skipStamp(rows, folder, { label: job.label, cmd: job.command }, { tz: job.tz, at: job.at });
 }
 
 /** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
@@ -393,7 +405,9 @@ export function jobFolder(ctx, deps) {
  *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
  *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in, in
  *  PARENT_MARKER or JOB_MARKER, is nested: once past the refusal check it runs with no slot, no place in line and no
- *  health gate, as soon as a place under that job is free. */
+ *  health gate, as soon as a place under that job is free. A test or lint check that already passed on the same clean
+ *  commit is not run at all, nested or not, unless --no-skip is given: see skipFor. It takes no slot or place, is
+ *  journalled as skipped with the stamp it relied on, and resolves with 0. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -432,6 +446,18 @@ export async function runCommand(args, ctx, deps) {
         journal.finish("refused", EXIT.refused);
         say(`refused: exit ${EXIT.refused}; ${plan.refusal.reason}`);
         return EXIT.refused;
+    }
+    const stamp = skipFor({
+        kind: plan.kind, label, command, project: folder, commit: before, noSkip: parsed.noSkip, at: queuedAt, tz,
+    }, rows);
+    if (stamp) {
+        const ago = Math.max(0, Math.round((deps.now() - Date.parse(stamp.endedAt)) / MINUTE));
+        journal.note({ commit: before });
+        // The stamp is kept with the line, so history can tell how much run time the skip saved.
+        journal.finish("skipped", 0, { stamp: { head: stamp.head, endedAt: stamp.endedAt, runMin: stamp.runMin } });
+        say(`skipped: "${label}" already passed on commit ${String(stamp.head).slice(0, 8)} (${ago} min ago); `
+            + "--no-skip runs it anyway");
+        return 0;
     }
     if (plan.afterFixUsed) {
         say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);

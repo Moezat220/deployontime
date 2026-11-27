@@ -62,11 +62,13 @@ function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
     }
 }
 
-/** One line of `history` for a project's totals. */
+/** One line of `history` for a project's totals. Skipped jobs are named only when there are any, with the run time
+ *  of the passing runs they relied on as the time saved. */
 export function historyRow(name, t) {
     const gates = Object.entries(t.waitBy).map(([gate, min]) => `${gate} ${min} min`).join(", ") || "nothing";
+    const skipped = t.skipped ? `, skipped ${t.skipped} (saved ${t.savedMin} min)` : "";
     return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, `
-        + `refused ${t.refused}, gave up ${t.gaveUp}; `
+        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}; `
         + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, `
         + `clock with no job running ${t.blockedOnlyMin} min, `
         + `median ${t.waitMedian} min, p90 ${t.waitP90} min; held by: ${gates}`;

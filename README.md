@@ -47,7 +47,7 @@ was never broken. Each agent sees only its own run, so neither you nor the agent
 | **The computer is already busy** | New jobs pile on | Jobs wait while CPU, memory or disk is short, or the battery is low |
 | **A job hangs** | It can run until someone notices | It is stopped at its time limit, with everything it started (exit 124) |
 | **A check keeps failing on the same code** | An agent may keep re-running it | A third try is blocked for up to 6 hours (exit 3) until the code changes or `--after-fix` is given |
-| **This commit already has a green run** | It may run again | `dotime-queue passed` says so, and the agent can skip it |
+| **This commit already has a green run** | It may run again | A test or lint check that already passed on the same clean commit is skipped (exit 0); `--no-skip` runs it anyway |
 | **Where did the time go?** | No record | `dotime-queue history` totals waits and results per project |
 | **Dev servers left running** | They keep using memory | An optional reaper stops the idle ones |
 
@@ -115,8 +115,12 @@ Then tell your agents to use it. For example, add this to their instruction file
 ```
 Start every test run, build and other heavy command through the queue:
 dotime-queue run --label "<project>: <task>" -- <command>
-Before running a check, ask whether it already passed: dotime-queue passed --match "<check>"
+A test or lint run that prints "skipped:" already passed on this exact commit and exits 0; add --no-skip in front
+of the -- only to run it again on purpose.
 ```
+
+You do not need to tell agents to call `dotime-queue passed` first: `run` checks for a pass by itself. An agent may
+still call it, for example to see why a check was not skipped.
 
 The text before the colon in a label is the project name; limits and history are kept per project.
 

@@ -12,6 +12,7 @@ export const USAGE = [
     "      --kind <name>        job kind, in place of the guessed one",
     '      --after-fix "<note>" run a check that failed twice on unchanged code',
     "      --priority           join the line at the front",
+    "      --no-skip            run a test or lint check that already passed on this commit",
     "  dotime-queue status",
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
@@ -26,7 +27,7 @@ export function shellWord(text) {
 
 /** Per subcommand: flags that take a value, and flags that stand alone. */
 export const FLAGS = Object.freeze({
-    run: { values: ["--label", "--max-wait", "--max-run", "--kind", "--after-fix"], switches: ["--priority"] },
+    run: { values: ["--label", "--max-wait", "--max-run", "--kind", "--after-fix"], switches: ["--priority", "--no-skip"] },
     status: { values: [], switches: [] },
     passed: { values: ["--match", "--cwd"], switches: [] },
     history: { values: ["--days", "--day"], switches: [] },
@@ -106,8 +107,8 @@ export function parseMaxWait(args, fallback) {
     return raw !== "" && Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
 }
 
-/** Reads the words of `run`. Returns { label, cmd, priority, maxWait, maxRun, kind, afterFix }, or { error } with
- *  the text to print. settings.maxWaitMin is the wait limit without --max-wait. */
+/** Reads the words of `run`. Returns { label, cmd, priority, noSkip, maxWait, maxRun, kind, afterFix }, or { error }
+ *  with the text to print. settings.maxWaitMin is the wait limit without --max-wait. */
 export function parseRunArgs(args, settings) {
     const cut = args.indexOf("--");
     if (args[0] !== "run" || cut < 0 || cut === args.length - 1) return { error: USAGE };
@@ -121,6 +122,7 @@ export function parseRunArgs(args, settings) {
         label: opt(args, "--label")?.trim() || UNLABELLED,
         cmd: args.slice(cut + 1),
         priority: flagWords(args).includes("--priority"),
+        noSkip: flagWords(args).includes("--no-skip"),
         maxWait,
         maxRun,
         kind: opt(args, "--kind"),

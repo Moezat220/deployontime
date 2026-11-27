@@ -72,6 +72,8 @@ Worth knowing before the first run:
 - A question mark in the task part of the label makes a debug job, stopped after 15 minutes:
   `"shop-api: does login work?"` is one.
 - A job waits in line at most 60 minutes, then exits 75. That is not a test failure.
+- A test or lint check that already passed on the same clean commit is skipped and exits 0 at once. `--no-skip` runs
+  it anyway.
 - Times are printed in UTC unless `DOTIME_TZ` names another zone.
 
 ## Commands
@@ -97,6 +99,7 @@ password, cannot do so.
 | `--kind <name>` | Job kind, in place of the guessed one. See [Projects and kinds](#projects-and-kinds). |
 | `--after-fix "<note>"` | Runs a check that would be refused with exit 3. The note is stored in the journal. |
 | `--priority` | Joins the line at the front. Slots and the gate still apply. For a person's urgent run. |
+| `--no-skip` | Runs a `test` or `lint` job that already passed on this commit. See **Checks that already passed** below. |
 
 Options go in front of the `--`. Everything behind it is the job's command. Keep `--priority` out of agent
 instructions: an agent that uses it every time puts itself in front of everyone else.
@@ -137,6 +140,35 @@ Details:
   shell script that calls a missing program, is an ordinary failed run.
 - `run` ends when the job's main process ends. A process the job started in the background and left running does
   not keep `run` waiting.
+
+**Checks that already passed.** A `test` or `lint` job that already passed on exactly this code is not run again.
+`run` prints one line, exits 0, takes no slot and starts nothing:
+
+```
+dotime-queue: skipped: "shop-api: unit tests" already passed on commit 0a1b2c3d (12 min ago); --no-skip runs it anyway
+```
+
+It skips a job only when all of these hold:
+
+- The job's kind is `test` or `lint`, as guessed from the label and command or given with `--kind` (see
+  [Projects and kinds](#projects-and-kinds)). A `build`, `deploy`, `debug` or `other` job always runs, because its
+  output may be needed.
+- The folder is a git checkout at a commit, with no uncommitted or untracked changes now.
+- The journal holds a pass stamp for this check, found by the same rules as [`passed`](#passed): runs in a repository
+  of the same name, with the same label and the same command line, on this commit, that began with a clean tree, and
+  the newest of them exited 0. Stopped and timed-out runs are left out, as `passed` leaves them out.
+- No run of the same check on this commit failed or hit its run limit after that pass, not even one that began with
+  uncommitted changes.
+
+The stamp has no age limit: the same commit with a clean tree is the same code. What git does not track is not part
+of the check, such as installed packages in an ignored folder, tools or the environment. After changing those, or to
+run a flaky test again, give `--no-skip`: the job then runs, and its result counts like that of any run. A nested
+run follows the same rules. A check that is refused because it failed twice is refused before this is looked at.
+
+A skipped job is journalled with outcome `skipped`, exit 0, its commit, and the stamp it relied on in `stamp`
+(`head`, `endedAt` and `runMin` of the passing run). A skipped line is never a stamp itself, never a sample for the
+[run limits](#run-limits), and never a pass or an attempt for [Repeated failures](#repeated-failures). `history`
+counts the skipped jobs and the run time they saved.
 
 **Nested runs.** A job may run the queue itself, for example an `npm test` script that calls `dotime-queue run`, or
 an agent at work inside a queued job. Such an inner run would wait for a slot that its own outer job holds, and with
@@ -214,8 +246,9 @@ what it prints, but the file itself stays until a waiting `run` or the reaper re
 dotime-queue passed [--match <text>] [--cwd <dir>]
 ```
 
-Answers "did this check already pass on exactly this code?". `run` never asks this by itself and never skips a job.
-An agent that wants to skip a check that is already green must call `passed` first, and skip only on exit 0.
+Answers "did this check already pass on exactly this code?". `run` asks the same for every `test` or `lint` job
+and skips one that already passed (see **Checks that already passed** under [`run`](#run)), so an agent does not need
+to call `passed` first. It still may, for example to see why a check was not skipped, or for a build.
 
 It works only on a clean, committed tree: the folder must have no uncommitted or untracked changes now, and the run
 it finds must have started with none. With local changes it always prints `no stamp:` and exits 1.
@@ -239,9 +272,10 @@ dotime-queue history [--days <n> | --day <YYYY-MM-DD>]
 ```
 
 Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time and the gates
-that caused the waiting. The waiting columns answer three questions. `sum`: how much waiting all jobs did
-together. `clock`: how long the line was not empty. `clock with no job running`: how much of that time jobs were
-waiting while none of this row's jobs ran, for example because the health gate was shut.
+that caused the waiting. Once a row has skipped jobs, its outcome counts end with `skipped N (saved M min)`, where
+M is the run time of the passing runs those jobs relied on. The waiting columns answer three questions. `sum`: how
+much waiting all jobs did together. `clock`: how long the line was not empty. `clock with no job running`: how much
+of that time jobs were waiting while none of this row's jobs ran, for example because the health gate was shut.
 `--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
 the `DOTIME_TZ` zone, UTC by default. `--days` takes a whole number of 1 or more and `--day` a date as
 `YYYY-MM-DD`; anything else exits 2. The median and p90 are nearest-rank percentiles, the same ones the run limits
@@ -343,6 +377,7 @@ changes only such untracked files, the code counts as unchanged: pass `--after-f
 | Code | Meaning |
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
+| 0 | Also a `test` or `lint` job that was skipped because it already passed on this commit; see [`run`](#run). |
 | 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` without `--cwd`, from a folder that was removed. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
@@ -365,6 +400,7 @@ dotime-queue: in line: position 2, 3 min waited, wait limit 60 min; no free slot
 and "docs-site: build"
 dotime-queue: gave up: exit 75, position 1, 60 min waited; memory too low: 9% free, 20% needed; hint: --max-wait 0
 waits without limit
+dotime-queue: skipped: "shop-api: unit tests" already passed on commit 0a1b2c3d (12 min ago); --no-skip runs it anyway
 stamp: commit 0a1b2c3d, passed 4 min ago by "shop-api: unit tests", command npm test, run time 2.5 min, tree clean
 at start, finished <date and time> UTC
 ```
@@ -614,7 +650,8 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
 `waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
 `limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
-`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt` or `nested`. Copies of the queue that share
+`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested` or `stamp` (on a line with
+outcome `skipped`: the passing run it relied on). Copies of the queue that share
 a state folder all read the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:

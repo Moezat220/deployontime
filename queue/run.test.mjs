@@ -654,3 +654,157 @@ test("run: a signal while the commit is read for a nested job stops the job and 
     assert.deepEqual([nestedNotes(box), signals.eventNames()], [[], []]);
     assert.deepEqual(slots(box).map((slot) => slot.pid), [process.ppid], "the outer job keeps its slot");
 });
+
+// ---- skipping a check that already passed on the same clean commit ----
+
+const HEAD = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567", OTHER_HEAD = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+const skippedText = (label, minutes = 0, head = HEAD) =>
+    `skipped: "${label}" already passed on commit ${head.slice(0, 8)} (${minutes} min ago); --no-skip runs it anyway`;
+/** A job script that counts its runs in a folder of its own, outside the work folder, so the code fingerprint never
+ *  changes, and ends with the code set by failWith(), 0 until then. args(label, { flags, tail }) gives the words of
+ *  `run`; a tail is one more word for the script and makes another command line. */
+function countingJob() {
+    const dir = tempDir("run-skip"), runs = join(dir, "runs"), exit = join(dir, "exit"), script = join(dir, "job.js");
+    writeFileSync(script, `const fs = require("node:fs"); fs.appendFileSync(${JSON.stringify(runs)}, "x"); `
+        + `process.exit(fs.existsSync(${JSON.stringify(exit)}) ? Number(fs.readFileSync(${JSON.stringify(exit)}, "utf8")) : 0);\n`);
+    return {
+        args: (label, { flags = [], tail } = {}) => ["run", "--label", label, ...flags, "--", NODE, script, ...(tail ? [tail] : [])],
+        runs: () => (existsSync(runs) ? readFileSync(runs, "utf8").length : 0),
+        failWith: (n) => (n ? writeFileSync(exit, String(n)) : rmSync(exit, { force: true })),
+    };
+}
+/** Runs the words with git reporting the given commit and tree for the work folder. nested: with the deps of a run
+ *  inside the job that holds the slot. */
+async function runAt(box, args, { head = HEAD, clean = true, nested = false, now } = {}) {
+    const overrides = { gitState: () => ({ head, clean }), ...(now ? { now } : {}) };
+    const d = (nested ? nestedDeps : makeDeps)(box, overrides);
+    return { code: await runCommand(args, box.ctx, d.deps), said: d.said, signals: d.signals };
+}
+const outcomes = (box) => journal(box).map((line) => line.outcome);
+
+test("run: a test check that passed on this clean commit is skipped: exit 0 at once, no slot, no run, one skipped line", async () => {
+    const box = sandbox({ slots: 1 }), job = countingJob(), label = "shop-api: unit tests";
+    assert.equal((await runAt(box, job.args(label))).code, 0);
+    // With the only slot taken, a job that waited for one would give up with exit 75.
+    takeSlot(process.pid, "docs-site: build", 1, {}, box.ctx.files);
+    const again = await runAt(box, job.args(label, { flags: ["--max-wait", "0.01"] }), { now: () => Date.now() + 7 * MINUTE });
+    assert.equal(again.code, 0);
+    assert.deepEqual(again.said, [skippedText(label, 7)]);
+    assert.equal(job.runs(), 1, "the job ran once");
+    const [passed, skipped] = journal(box);
+    assert.deepEqual(
+        [skipped.outcome, skipped.exit, skipped.label, skipped.cmd, skipped.head, skipped.clean, skipped.kind, skipped.startedAt, skipped.runMin],
+        ["skipped", 0, label, passed.cmd, HEAD, true, "test", null, 0],
+    );
+    assert.deepEqual(skipped.stamp, { head: HEAD, endedAt: passed.endedAt, runMin: passed.runMin }, "the stamp it relied on");
+    assert.deepEqual(skipped.waitBy, {});
+    assert.deepEqual([slots(box).map((slot) => slot.pid), readdirSync(join(box.home, "line")), again.signals.eventNames()], [[process.pid], [], []]);
+});
+
+test("run: no skip with uncommitted changes, on another commit, without a git answer, or for another label or command", async () => {
+    for (const [what, label, options, tail] of [
+        ["uncommitted changes", "shop-api: unit tests", { clean: false }, null],
+        ["another commit", "shop-api: unit tests", { head: OTHER_HEAD }, null],
+        ["no git answer", "shop-api: unit tests", { head: null, clean: null }, null],
+        ["another label", "shop-api: api tests", {}, null],
+        ["another command", "shop-api: unit tests", {}, "--verbose"],
+    ]) {
+        const box = sandbox(), job = countingJob();
+        assert.equal((await runAt(box, job.args("shop-api: unit tests"))).code, 0, what);
+        const other = await runAt(box, job.args(label, { tail }), options);
+        assert.deepEqual([other.code, other.said, job.runs()], [0, [], 2], what);
+        // The first check itself, on its clean commit, is still skipped.
+        assert.deepEqual((await runAt(box, job.args("shop-api: unit tests"))).said, [skippedText("shop-api: unit tests")], what);
+        assert.deepEqual([outcomes(box), job.runs()], [["ran", "ran", "skipped"], 2], what);
+    }
+});
+
+test("run: only test and lint jobs are skipped, by the kind given with --kind when there is one", async () => {
+    for (const [label, flags, second] of [
+        ["shop-api: build", [], "ran"],
+        ["shop-api: deploy to staging", [], "ran"],
+        ["shop-api: refresh fixtures", [], "ran"],
+        ["shop-api: unit tests", ["--kind", "build"], "ran"],
+        ["shop-api: refresh fixtures", ["--kind", "lint"], "skipped"],
+        ["shop-api: lint", [], "skipped"],
+        ["shop-api: unit tests", [], "skipped"],
+    ]) {
+        const box = sandbox(), job = countingJob();
+        for (let i = 0; i < 2; i++) assert.equal((await runAt(box, job.args(label, { flags }))).code, 0, label);
+        assert.deepEqual(outcomes(box), ["ran", second], `${label} ${flags.join(" ")}`);
+        assert.equal(job.runs(), second === "ran" ? 2 : 1, label);
+    }
+});
+
+test("run: no skip after a failed run, while the newest failure on the commit comes after the pass", async () => {
+    const box = sandbox(), job = countingJob(), label = "shop-api: unit tests";
+    job.failWith(1);
+    assert.equal((await runAt(box, job.args(label))).code, 1);
+    job.failWith(0);
+    assert.equal((await runAt(box, job.args(label))).code, 0, "a run that failed before is no stamp");
+    assert.deepEqual((await runAt(box, job.args(label))).said, [skippedText(label)]);
+    // A failure on the same commit after the pass, here with uncommitted changes, takes the stamp away.
+    job.failWith(1);
+    assert.equal((await runAt(box, job.args(label), { clean: false })).code, 1);
+    job.failWith(0);
+    const after = await runAt(box, job.args(label));
+    assert.deepEqual([after.code, after.said], [0, []]);
+    assert.deepEqual([outcomes(box), job.runs()], [["ran", "ran", "skipped", "ran", "ran"], 4]);
+});
+
+test("run: --no-skip runs a check that already passed, and a failure it finds takes the stamp away", async () => {
+    const box = sandbox(), job = countingJob(), label = "shop-api: lint";
+    assert.equal((await runAt(box, job.args(label))).code, 0);
+    const forced = await runAt(box, job.args(label, { flags: ["--no-skip"] }));
+    assert.deepEqual([forced.code, forced.said, job.runs()], [0, [], 2]);
+    assert.deepEqual((await runAt(box, job.args(label))).said, [skippedText(label)]);
+    assert.equal(journal(box)[2].stamp.endedAt, journal(box)[1].endedAt, "the newest pass is the stamp");
+    job.failWith(2);
+    assert.equal((await runAt(box, job.args(label, { flags: ["--no-skip"] }))).code, 2);
+    job.failWith(0);
+    assert.deepEqual((await runAt(box, job.args(label))).said, []);
+    assert.deepEqual([outcomes(box), job.runs()], [["ran", "ran", "skipped", "ran", "ran"], 4]);
+});
+
+test("run: a skipped line is never a stamp, never a learned-limit sample and never a pass for the repeated-failure stop", async () => {
+    const { kindStats, stemStats } = await import("./limits.mjs");
+    const box = sandbox(), job = countingJob(), label = "shop-api: unit tests";
+    for (let i = 0; i < 6; i++) assert.equal((await runAt(box, job.args(label))).code, 0);
+    assert.deepEqual([outcomes(box), job.runs()], [["ran", "skipped", "skipped", "skipped", "skipped", "skipped"], 1]);
+    const rows = journal(box), window = { project: rows[0].projectKey, now: Date.now(), windowDays: 30 };
+    assert.deepEqual([kindStats(rows, { ...window, kind: "test" }).n, stemStats(rows, { ...window, stem: rows[0].stem }).n], [1, 1]);
+    // Without the passing run, the skipped lines alone vouch for nothing.
+    writeFileSync(box.ctx.files.journal, readFileSync(box.ctx.files.journal, "utf8").split("\n").slice(1).join("\n"));
+    assert.deepEqual((await runAt(box, job.args(label))).said, []);
+    assert.equal(job.runs(), 2);
+
+    // Two failures on another commit, with a skip on the passed commit between them, are still two in a row.
+    const stop = sandbox(), check = countingJob();
+    assert.equal((await runAt(stop, check.args(label))).code, 0);
+    check.failWith(4);
+    assert.equal((await runAt(stop, check.args(label), { head: OTHER_HEAD })).code, 4);
+    assert.deepEqual((await runAt(stop, check.args(label))).said, [skippedText(label)]);
+    assert.equal((await runAt(stop, check.args(label), { head: OTHER_HEAD })).code, 4);
+    assert.equal((await runAt(stop, check.args(label), { head: OTHER_HEAD })).code, EXIT.refused);
+    assert.deepEqual(outcomes(stop), ["ran", "ran", "skipped", "ran", "refused"]);
+});
+
+test("run: a nested run is skipped by the same rules, without waiting for a place, and journalled as nested", async () => {
+    const { box, blocker } = fullPlacesBox(), job = countingJob(), label = "docs-site: unit tests";
+    rmSync(blocker);
+    const first = await runAt(box, job.args(label), { nested: true });
+    assert.equal(first.code, 0);
+    assert.equal(first.said[0].startsWith('nested: inside "docs-site: test suite"'), true, first.said[0]);
+    // With the one place under the parent taken again, a nested run that did not skip would give up with exit 75.
+    const [slotName] = readdirSync(join(box.home, "slots")), slot = join(box.home, "slots", slotName);
+    const key = placeKey({ file: slot, born: JSON.parse(readFileSync(slot, "utf8")).born });
+    const held = takePlace(process.ppid, "docs-site: lint", key, 1, box.ctx.files);
+    assert.equal(typeof held, "string");
+    const again = await runAt(box, job.args(label, { flags: ["--max-wait", "0.01"] }), { nested: true });
+    assert.deepEqual([again.code, again.said, job.runs()], [0, [skippedText(label)], 1]);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.nested]), [["ran", true], ["skipped", true]]);
+    assert.deepEqual([nestedNotes(box), places(box), again.signals.eventNames()], [[], [held.split("/").at(-1)], []]);
+    rmSync(held);
+    const dirty = await runAt(box, job.args(label), { nested: true, clean: false });
+    assert.deepEqual([dirty.code, job.runs(), outcomes(box).at(-1)], [0, 2, "ran"], "a nested run with changes runs");
+});

@@ -131,12 +131,13 @@ test("parseMaxWait: takes the minutes from either spelling, and the fallback wit
 test("parseRunArgs: reads every flag in front of the -- and the command behind it", () => {
     const args = [
         "run", "--priority", "--label", "  mobile-app: store upload ", "--max-wait=7", "--max-run", "40", "--kind", "deploy",
-        "--after-fix", " rotated the signing key ", "--", "make", "upload", "--priority", "--label", "inner",
+        "--after-fix", " rotated the signing key ", "--no-skip", "--", "make", "upload", "--priority", "--label", "inner",
     ];
     assert.deepEqual(parseRunArgs(args, DEFAULTS), {
         label: "mobile-app: store upload",
         cmd: ["make", "upload", "--priority", "--label", "inner"],
         priority: true,
+        noSkip: true,
         maxWait: 7,
         maxRun: 40,
         kind: "deploy",
@@ -147,7 +148,7 @@ test("parseRunArgs: reads every flag in front of the -- and the command behind i
 test("parseRunArgs: fills in defaults for flags that are left out", () => {
     assert.deepEqual(
         parseRunArgs(["run", "--", "make"], { ...DEFAULTS, maxWaitMin: 25 }),
-        { label: "unnamed", cmd: ["make"], priority: false, maxWait: 25, maxRun: null, kind: undefined, afterFix: null },
+        { label: "unnamed", cmd: ["make"], priority: false, noSkip: false, maxWait: 25, maxRun: null, kind: undefined, afterFix: null },
     );
 });
 

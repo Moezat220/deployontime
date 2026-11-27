@@ -78,11 +78,13 @@ function runOnce(args, env, cwd) {
 }
 
 // Through the queue, a retry passes --after-fix: the code here never changes, so without it the queue's
-// repeated-failure stop would refuse a third try, and the result would show that refusal instead of the load.
+// repeated-failure stop would refuse a third try, and the result would show that refusal instead of the load. Every
+// run passes --no-skip: each round repeats a suite that passed in the round before on the same commit, and the queue
+// would otherwise skip it.
 async function agent(n, way, deadline, env, repo, repeat) {
     const random = seeded(repeat * 104729 + n * 7919);
     const suite = [SUITE, opts.threads, opts.tests, opts.work, deadline, opts.mem].map(String);
-    const queued = (run) => [CLI, "run", "--label", `bench: agent ${n}`, "--max-run", "30",
+    const queued = (run) => [CLI, "run", "--label", `bench: agent ${n}`, "--max-run", "30", "--no-skip",
         ...(run > 1 ? ["--after-fix", "benchmark retry on unchanged code"] : []), "--", process.execPath, ...suite];
     const start = Date.now();
     let firstFailed = null;

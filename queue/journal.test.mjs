@@ -221,3 +221,41 @@ test("summarize: totals per project, most waiting first, inside the time range",
     assert.deepEqual([app.jobs, app.waitMinTotal, app.waitWallMin, app.blockedOnlyMin, app.waitMedian, app.waitP90], [3, 14.5, 10, 6, 6, 8]);
     assert.deepEqual([docs.jobs, docs.waitWallMin, docs.blockedOnlyMin, docs.gaveUp, docs.timedOut, docs.stopped, docs.failed], [3, 2, 2, 1, 1, 1, 0]);
 });
+
+const skippedLine = (fields = {}) => run({
+    outcome: "skipped", startedAt: null, runMin: 0, waitMin: 0, stamp: { head: "1a2b3c4d5e6f", endedAt: iso(0), runMin: 6.5 }, ...fields,
+});
+
+test("summarize: skipped jobs are counted per project with the run time of the stamps they relied on, and nothing else", () => {
+    const lines = [
+        run({ queuedAt: iso(0), startedAt: iso(0), endedAt: iso(6.5), runMin: 6.5 }),
+        skippedLine({ queuedAt: iso(10), endedAt: iso(10) }),
+        skippedLine({ queuedAt: iso(20), endedAt: iso(20) }),
+        skippedLine({ project: "docs-site", label: "docs-site: lint", queuedAt: iso(30), endedAt: iso(30), stamp: { runMin: 1.2 } }),
+    ];
+    const { all, byProject } = summarize(lines, START, START + 60 * MINUTE);
+    assert.deepEqual([all.jobs, all.skipped, all.savedMin, all.failed, all.runMinTotal, all.waited], [4, 3, 14.2, 0, 6.5, 0]);
+    assert.deepEqual([byProject["mobile-app"].skipped, byProject["mobile-app"].savedMin], [2, 13]);
+    assert.deepEqual([byProject["docs-site"].skipped, byProject["docs-site"].savedMin], [1, 1.2]);
+});
+
+test("findStamp and skipStamp: a skipped line is never a stamp, and a failure after the pass on the commit voids it", async () => {
+    const { skipStamp } = await import("./journal.mjs");
+    const folder = { project: "mobile-app", head: "1a2b3c4d5e6f", clean: true };
+    const check = { label: "mobile-app: integration suite", cmd: "npm run test:integration" };
+    const opts = { tz: "UTC", at: START + 60 * MINUTE };
+    assert.equal(findStamp([skippedLine()], folder, "", opts).stamp, null);
+    assert.equal(skipStamp([skippedLine()], folder, check, opts), null);
+    const pass = run({ endedAt: iso(0) });
+    assert.equal(skipStamp([pass, skippedLine({ endedAt: iso(5) })], folder, check, opts).endedAt, iso(0));
+    assert.equal(skipStamp([pass], folder, { ...check, label: "mobile-app: unit tests" }, opts), null);
+    assert.equal(skipStamp([pass], folder, { ...check, cmd: "npm run test:unit" }, opts), null);
+    assert.equal(skipStamp([pass], { ...folder, clean: false }, check, opts), null);
+    for (const later of [run({ endedAt: iso(9), exit: 1, clean: false }), run({ endedAt: iso(9), outcome: "timed-out", exit: 124 })]) {
+        assert.equal(skipStamp([pass, later], folder, check, opts), null, JSON.parse(later).outcome);
+    }
+    const elsewhere = run({ endedAt: iso(9), exit: 1, head: "9e8d7c6b5a4f" });
+    assert.equal(skipStamp([pass, elsewhere], folder, check, opts).endedAt, iso(0), "a failure on another commit");
+    const stoppedLater = run({ endedAt: iso(9), outcome: "stopped", exit: 143 });
+    assert.equal(skipStamp([pass, stoppedLater], folder, check, opts).endedAt, iso(0), "a stopped run says nothing");
+});

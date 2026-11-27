@@ -180,6 +180,19 @@ test("historyRow: how jobs ended, then how long they waited, then what held them
     assert.equal(historyRow("docs-site", { ...totals, waitBy: {} }).endsWith("; held by: nothing"), true);
 });
 
+test("historyRow: skipped jobs and the run time they saved follow the outcomes, once there are any", () => {
+    const totals = {
+        jobs: 5, waited: 0, waitMinTotal: 0, waitWallMin: 0, blockedOnlyMin: 0, waitMedian: 0, waitP90: 0,
+        gaveUp: 0, failed: 1, stopped: 0, timedOut: 0, refused: 0, skipped: 3, savedMin: 13.5, waitBy: {},
+    };
+    assert.equal(
+        historyRow("shop-api", totals),
+        "shop-api: jobs 5, failed 1, stopped 0, timed out 0, refused 0, gave up 0, skipped 3 (saved 13.5 min); "
+            + "waited: jobs 0, sum 0 min, clock 0 min, clock with no job running 0 min, median 0 min, p90 0 min; held by: nothing",
+    );
+    assert.equal(historyRow("shop-api", { ...totals, skipped: 0, savedMin: 0 }).includes("skipped"), false);
+});
+
 // ---- end to end ----
 
 test("run: passes the job's output and exit code through and writes one journal line", async () => {
@@ -512,6 +525,29 @@ test("passed: finds a stamp for a clean commit that passed, and none once the tr
     writeFileSync(join(repo, "src", "cart.js"), "export const items = [1];\n");
     const dirty = await cli(box, ["passed", "--cwd", repo]);
     assert.deepEqual([dirty.code, dirty.stdout], [1, "no stamp: the working tree has uncommitted changes\n"]);
+});
+
+test("run: a check that passed on this clean commit is skipped, runs again once the tree changes, and history counts the skip", async () => {
+    const box = sandbox(), repo = makeRepo(join(box.work, "shop-api"), { "src/cart.js": "export const items = [];\n" });
+    const args = ["run", "--label", "shop-api: unit tests", "--", NODE, "-e", "console.log('tested')"];
+    const first = await cli(box, args, { cwd: repo });
+    assert.deepEqual([first.code, first.stdout, first.stderr], [0, "tested\n", ""]);
+    const head = testGit(repo, "rev-parse", "HEAD").trim();
+    const again = await cli(box, args, { cwd: repo });
+    assert.deepEqual([again.code, again.stdout, again.stderr], [
+        0, "", `dotime-queue: skipped: "shop-api: unit tests" already passed on commit ${head.slice(0, 8)} (0 min ago); --no-skip runs it anyway\n`,
+    ]);
+    const stamp = await cli(box, ["passed", "--match", "unit tests"], { cwd: repo });
+    assert.equal(stamp.code, 0, "passed still finds the run that ran");
+    writeFileSync(join(repo, "src", "cart.js"), "export const items = [1];\n");
+    const changed = await cli(box, args, { cwd: repo });
+    assert.deepEqual([changed.code, changed.stdout, changed.stderr], [0, "tested\n", ""]);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.clean]), [["ran", 0, true], ["skipped", 0, true], ["ran", 0, false]]);
+    const rows = (await cli(box, ["history", "--days", "1"])).stdout.trimEnd().split("\n");
+    assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]), [
+        "all projects: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min)",
+        "shop-api: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min)",
+    ]);
 });
 
 test("passed: a failing run on the commit gives no stamp", async () => {

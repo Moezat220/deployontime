@@ -43,9 +43,11 @@ export function jobEnd({ code = null, signal = null, received = null }) {
 }
 export const isStopped = (row) => row.outcome === "stopped" || (row.outcome === "ran" && row.exit in STOP_EXITS);
 export const isFailedRun = (row) => row.outcome === "ran" && row.exit !== 0 && !isStopped(row);
+/** A job that `run` did not start because the same check had already passed on the same commit. */
+export const isSkipped = (row) => row.outcome === "skipped";
 
 const isoOrNull = (ms) => (ms ? new Date(ms).toISOString() : null);
-/** Builds a journal line. outcome: ran, stopped, timed-out, refused, gave-up, left or could-not-start. */
+/** Builds a journal line. outcome: ran, stopped, timed-out, refused, skipped, gave-up, left or could-not-start. */
 export function record(job) {
     const { label, project, cwd, priority, queuedAt, startedAt, endedAt, outcome, exit, tally } = job;
     const { cmd, head, clean, extra } = job;
@@ -101,6 +103,25 @@ export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
         + `command ${run.cmd ?? "not recorded"}, run time ${run.runMin} min, tree clean at start, `
         + `finished ${ended(run)}`;
     return { stamp: run, text };
+}
+
+/** The kinds of job that `run` may skip on a pass stamp. A build, a deploy or any other job may leave output that is
+ *  needed, so those always run. */
+export const SKIPPABLE_KINDS = Object.freeze(["test", "lint"]);
+
+/** The pass stamp that lets `run` skip a job, or null. job = { label, cmd }: the stamp must come from a run with the
+ *  same label and the same command line, found by findStamp under its own conditions (a clean folder at a commit, and
+ *  a newest clean run of that check on the commit that passed). On top of that, no run of the same check on that
+ *  commit may have failed or hit its run limit after the stamp, even one that began with uncommitted changes. Lines
+ *  of skipped jobs never count: findStamp only takes runs that ran. */
+export function skipStamp(lines, folder, job, { tz, at = Date.now() }) {
+    const sameCheck = parseLines(lines).filter((row) => row.label === job.label && row.cmd === job.cmd);
+    const { stamp } = findStamp(sameCheck, folder, "", { tz, at });
+    if (!stamp) return null;
+    const passedAt = Date.parse(stamp.endedAt);
+    const failedLater = sameCheck.some((row) => row.project === folder.project && row.head === folder.head
+        && Date.parse(row.endedAt) > passedAt && (isFailedRun(row) || row.outcome === "timed-out"));
+    return failedLater ? null : stamp;
 }
 
 /** The time range `history` covers. Returns { from, to, title }. day picks one calendar day; otherwise the range is the
@@ -167,6 +188,9 @@ function totals(rows, until) {
         gaveUp: count((row) => row.outcome === "gave-up"), failed: count(isFailedRun), stopped: count(isStopped),
         timedOut: count((row) => row.outcome === "timed-out"),
         refused: count((row) => row.outcome === "refused"),
+        skipped: count(isSkipped),
+        // The run time of the passing run each skipped job relied on: about the time the skip saved.
+        savedMin: oneDecimal(rows.filter(isSkipped).reduce((sum, row) => sum + (row.stamp?.runMin ?? 0), 0)),
         waitBy,
     };
 }
