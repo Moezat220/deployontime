@@ -43,3 +43,41 @@ test("parseGroupId: the group id ps prints, or null for empty or unusable text",
     assert.equal(parseGroupId("  4100\n"), 4100);
     assert.deepEqual([parseGroupId(""), parseGroupId(null), parseGroupId("0"), parseGroupId("PGID\n4100")], [null, null, null, null]);
 });
+
+// Linux (procps) ps writes CPU time as [days-]hours:minutes:seconds without fractions, right-aligns the numbers,
+// and lists kernel threads in brackets with a process group of 0.
+const PROCPS_TABLE = [
+    "      1       0       1  3-04:05:06 00:00:09  0.0 13020 /sbin/init splash",
+    "      2       0       0  3-04:05:06 00:00:00  0.0     0 [kthreadd]",
+    "   2400       1    2400    01:35:00 00:00:41  0.2 262144 " + SERVER,
+    "   2401    2400    2400       58:10 1-02:03:04 12.5 4096 node child.js --flag",
+    "",
+].join("\n");
+
+test("parseProcessTable: reads Linux procps rows as well", () => {
+    assert.deepEqual(parseProcessTable(PROCPS_TABLE), [
+        { pid: 1, ppid: 0, pgid: 1, age: 273_906_000, cpu: 9, pcpu: 0, rss: 13020, cmd: "/sbin/init splash" },
+        { pid: 2, ppid: 0, pgid: 0, age: 273_906_000, cpu: 0, pcpu: 0, rss: 0, cmd: "[kthreadd]" },
+        { pid: 2400, ppid: 1, pgid: 2400, age: 95 * MINUTE, cpu: 41, pcpu: 0.2, rss: 262144, cmd: SERVER },
+        {
+            pid: 2401, ppid: 2400, pgid: 2400, age: 3_490_000, cpu: 93_784, pcpu: 12.5, rss: 4096,
+            cmd: "node child.js --flag",
+        },
+    ]);
+});
+
+test("psRows and parseElapsed: read Linux procps listings as well", () => {
+    const tree = [
+        "      1       0       1 00:00:09",
+        "   4100       1    4100 1-00:00:03",
+        "   4101    4100    4100 00:12:00",
+        "",
+    ].join("\n");
+    assert.deepEqual(psRows(tree), [
+        { pid: 1, ppid: 0, pgid: 1, cpu: 9 }, { pid: 4100, ppid: 1, pgid: 4100, cpu: 86_403 },
+        { pid: 4101, ppid: 4100, pgid: 4100, cpu: 720 },
+    ]);
+    const ages = parseElapsed("    701       01:05\n    702    02:00:09\n    703 12-04:05:06\n");
+    assert.deepEqual([...ages], [[701, 65], [702, 7209], [703, ((12 * 24 + 4) * 60 + 5) * 60 + 6]]);
+    assert.equal(parseGroupId("   4100\n"), 4100);
+});

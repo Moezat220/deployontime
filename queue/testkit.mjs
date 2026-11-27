@@ -156,6 +156,13 @@ export function settingEnv(defaults, value, prefix = "DOTIME") {
     return env;
 }
 
+/** Node options that make a started script see another process.platform, so a test can start the macOS or the
+ *  Linux branch of a script on any machine. */
+export function asPlatform(platform) {
+    const preload = `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });`;
+    return ["--import", `data:text/javascript,${encodeURIComponent(preload)}`];
+}
+
 export const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 /** Waits until check() is truthy; throws after the time limit. */
 export async function until(check, limitMs = 10_000) {

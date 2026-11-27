@@ -5,6 +5,7 @@
 import {
     cpuBusyPct, pause, probeCpuTimes, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText, validCpuTimes,
 } from "./probes.mjs";
+import { readPowerSupplies, supplyBattery } from "./linux.mjs";
 import { dropOldTemps, readJson, writeJsonAtomic } from "./files.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
@@ -54,9 +55,13 @@ export function powerState(power) {
     return { onBattery: power.charge === "discharging", plugged: true };
 }
 
-/** The battery reading for the gate, or null when it is unknown. */
-export function readBattery(probe = probePowerText) {
+/** The battery reading for the gate, or null when it is unknown or there is no battery. On Linux it comes from the
+ *  power supplies in /sys (supplies), elsewhere from the `pmset -g batt` text that probe returns. */
+export function readBattery(
+    probe = probePowerText, { platform = process.platform, supplies = readPowerSupplies } = {},
+) {
     try {
+        if (platform === "linux") return supplyBattery(supplies());
         const power = parsePower(probe());
         const state = powerState(power);
         if (state.onBattery == null || power.pct == null) return null;

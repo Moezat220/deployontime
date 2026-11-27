@@ -1,17 +1,21 @@
 // judge, checkAll and the other checks run on made-up jobs, readers and rules. readRules reads rules files made in
-// temp folders. The last two tests start the real script: once without --dry, to see that a broken rules file is
-// named on stderr, in the notice and in the log line; and once through a symlink with --dry, to see that it still
-// runs and writes nothing to the state folder.
+// temp folders. The tests at the end start the real script: once without --dry, to see that a broken rules file is
+// named on stderr, in the notice and in the log line; once through a symlink with --dry, to see that it still runs
+// and writes nothing to the state folder (both on macOS only, where launchctl exists); and as on Linux, where it
+// refuses to run.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, tempDir } from "./testkit.mjs";
+import { asPlatform, cleanEnv, isolateProcess, tempDir } from "./testkit.mjs";
 
 const HOME = isolateProcess("schedule");
-const { checkAll, globMatch, judge, LIST_ERROR, maxLogAgeMs, readRules, reportText, scriptsOf } = await import("./schedule-check.mjs");
+const {
+    checkAll, globMatch, judge, LIST_ERROR, maxLogAgeMs, platformError, readRules, reportText, scriptsOf,
+} = await import("./schedule-check.mjs");
+const macOnly = { skip: process.platform !== "darwin" && "launchctl and launchd job files exist on macOS only" };
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR, NOW = Date.UTC(2032, 4, 21, 6, 0);
 const LABEL = "com.example.cleanup";
@@ -196,7 +200,7 @@ test("reportText: warnings come first, and alone they still make a notice", () =
     assert.equal(reportText([], [warning]), warning);
 });
 
-test("main: a broken rules file is named in the notice and in the log, not only on stderr", () => {
+test("main: a broken rules file is named in the notice and in the log, not only on stderr", macOnly, () => {
     const home = tempDir("schedule-home"), user = tempDir("schedule-user");
     writeFileSync(join(home, "schedule-check.json"), "{");
     const ran = spawnSync(process.execPath, [fileURLToPath(new URL("./schedule-check.mjs", import.meta.url))], {
@@ -210,7 +214,7 @@ test("main: a broken rules file is named in the notice and in the log, not only 
     assert.deepEqual(JSON.parse(readFileSync(join(home, "schedule-check.jsonl"), "utf8")).warnings, [warning]);
 });
 
-test("main: runs when the script is started through a symlink", () => {
+test("main: runs when the script is started through a symlink", macOnly, () => {
     const link = join(tempDir("schedule-link"), "schedule-link.mjs");
     symlinkSync(fileURLToPath(new URL("./schedule-check.mjs", import.meta.url)), link);
     // a made-up user folder, so the developer's own LaunchAgents files are not read
@@ -230,5 +234,25 @@ test("main: an option it does not know, or one given twice, is refused with exit
     const twice = spawnSync(process.execPath, [script, "--dry", "--dry"], { env: cleanEnv(home, { HOME: user }), encoding: "utf8", timeout: 60_000 });
     const usage = "usage: schedule-check.mjs [--dry] [--json]";
     assert.deepEqual([twice.status, twice.stdout, twice.stderr], [2, "", `schedule-check: option --dry is given twice; ${usage}\n`]);
+    assert.deepEqual(readdirSync(home), []);
+});
+
+test("platformError: none on macOS, a clear reason elsewhere", () => {
+    assert.equal(platformError("darwin"), null);
+    assert.equal(platformError("linux"), "works on macOS only for now: it reads launchd jobs in ~/Library/LaunchAgents "
+        + "through launchctl, which Linux does not have; nothing was checked");
+    assert.equal(platformError("freebsd").includes("which this system does not have"), true);
+});
+
+test("main: on Linux it says it is macOS only, exits 1, sends no notice and writes nothing", () => {
+    const home = tempDir("schedule-home"), user = tempDir("schedule-user");
+    const script = fileURLToPath(new URL("./schedule-check.mjs", import.meta.url));
+    const options = { env: cleanEnv(home, { HOME: user, DOTIME_NOTIFY: "" }), encoding: "utf8", timeout: 60_000 };
+    for (const flags of [[], ["--json"], ["--dry"]]) {
+        const ran = spawnSync(process.execPath, [...asPlatform("linux"), script, ...flags], options);
+        assert.deepEqual([ran.status, ran.stdout, ran.stderr], [1, "", `schedule-check: ${platformError("linux")}\n`]);
+    }
+    const bad = spawnSync(process.execPath, [...asPlatform("linux"), script, "--dryrun"], options);
+    assert.equal(bad.status, 2, "a bad option is still a usage error");
     assert.deepEqual(readdirSync(home), []);
 });

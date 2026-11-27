@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
+import { asPlatform, cleanEnv, isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 const HOME = isolateProcess("reaper");
 const {
@@ -296,6 +296,17 @@ test("main: runs when the script is started through a symlink", () => {
     const home = tempDir("reaper-home");
     const ran = spawnSync(process.execPath, [link, "--dry"], { env: cleanEnv(home), encoding: "utf8", timeout: 60_000 });
     assert.equal(ran.status, 0, "the reaper did not exit cleanly");
+    assert.equal(/ reaper: /.test(ran.stdout), true, "the reaper printed no report line");
+    assert.deepEqual(readdirSync(home), []);
+});
+
+test("main: a dry run as on Linux reports and exits cleanly, also where /proc and /sys cannot be read", () => {
+    const home = tempDir("reaper-home");
+    const script = fileURLToPath(new URL("./reaper.mjs", import.meta.url));
+    const ran = spawnSync(process.execPath, [...asPlatform("linux"), script, "--dry"], {
+        env: cleanEnv(home), encoding: "utf8", timeout: 60_000,
+    });
+    assert.deepEqual([ran.status, ran.stderr], [0, ""]);
     assert.equal(/ reaper: /.test(ran.stdout), true, "the reaper printed no report line");
     assert.deepEqual(readdirSync(home), []);
 });

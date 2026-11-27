@@ -6,9 +6,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until } from "./testkit.mjs";
+import {
+    asPlatform, cleanEnv, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until,
+} from "./testkit.mjs";
 
 isolateProcess("cli");
 const { historyRow, main, statusLines } = await import("./cli.mjs");
@@ -771,4 +773,15 @@ test("run: from a folder that was removed, a usage error is reported as usual an
     assert.deepEqual([valid.code, valid.stdout, valid.stderr],
         [2, "", "dotime-queue: the current folder was removed; start the job from a folder that exists\n"]);
     assert.deepEqual([journal(box), slots(box)], [[], []]);
+});
+
+test("status: the same lines with the macOS and the Linux readings, also where /proc and /sys cannot be read", () => {
+    const box = sandbox();
+    for (const platform of ["darwin", "linux"]) {
+        const ran = spawnSync(NODE, [...asPlatform(platform), CLI, "status"], {
+            cwd: box.work, env: box.env, encoding: "utf8", timeout: 60_000,
+        });
+        const lines = "slots: 0 of 2 taken, 0 waiting\ngate: open\n";
+        assert.deepEqual([ran.status, ran.stdout, ran.stderr], [0, lines, ""], platform);
+    }
 });

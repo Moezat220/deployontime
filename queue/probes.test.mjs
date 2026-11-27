@@ -6,17 +6,23 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
 import {
-    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, pause, probeCpuTimes, probeDiskFreeGB,
+    cpuBusyPct, parseLaunchctlList, parseMemoryPressure, parseSwap, pause, probeCpuTimes, probeDiskFreeGB,
     probeGroupOf, probeLoad, probeMemoryFreePct,
     probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct, validCpuTimes,
-    runTool, showDesktopNotice, toolEnv,
+    runTool, showDesktopNotice, statfsFreeGB, toolEnv,
 } from "./probes.mjs";
 
 const onMac = process.platform === "darwin";
+const onLinux = process.platform === "linux";
 
 test("toolEnv: decimals with a dot and UTF-8 text, whatever the locale", () => {
-    const env = toolEnv({ LC_ALL: "de_DE.ISO8859-1", LANG: "de_DE.UTF-8", KEEP: "yes" });
+    const env = toolEnv({ LC_ALL: "de_DE.ISO8859-1", LANG: "de_DE.UTF-8", KEEP: "yes" }, "darwin");
     assert.deepEqual(env, { LANG: "de_DE.UTF-8", KEEP: "yes", LC_NUMERIC: "C", LC_CTYPE: "UTF-8" });
+});
+
+test("toolEnv: on Linux the UTF-8 locale has the name Linux knows", () => {
+    const env = toolEnv({ LC_ALL: "de_DE.ISO8859-1", KEEP: "yes" }, "linux");
+    assert.deepEqual(env, { KEEP: "yes", LC_NUMERIC: "C", LC_CTYPE: "C.UTF-8" });
 });
 
 test("runTool: returns the tool's output, and empty text when the tool is missing", () => {
@@ -31,13 +37,51 @@ test("parseMemoryPressure: reads the free percentage", () => {
     assert.equal(parseMemoryPressure("no such line"), null);
 });
 
-test("parseDf: free space in GB, where a full disk is 0 and missing output is null", () => {
-    const header = "Filesystem   1024-blocks      Used Available Capacity  Mounted on\n";
-    assert.equal(parseDf(`${header}/dev/disk3s2   100000000  94757120   5242880    95%    /\n`), 5);
-    assert.equal(parseDf(`${header}/dev/disk3s2   100000000 100000000         0   100%    /\n`), 0);
-    assert.equal(parseDf(header), null);
-    assert.equal(parseDf(""), null);
-    assert.equal(parseDf(undefined), null);
+const MEMINFO = "MemTotal: 8000000 kB\nMemAvailable: 2000000 kB\nSwapTotal: 1000 kB\nSwapFree: 400 kB\n";
+const noTool = () => { throw new Error("no tool may run on Linux"); };
+const noFile = () => { throw new Error("no file may be read on macOS"); };
+
+test("probeMemoryFreePct: /proc/meminfo on Linux, memory_pressure elsewhere", () => {
+    const files = [];
+    const read = (file) => { files.push(file); return MEMINFO; };
+    assert.equal(probeMemoryFreePct({ platform: "linux", read, run: noTool }), 25);
+    assert.deepEqual(files, ["/proc/meminfo"]);
+    const unreadable = probeMemoryFreePct({ platform: "linux", read: () => "", run: noTool });
+    assert.equal(unreadable, null, "unreadable file is unknown");
+    const tools = [];
+    const run = (tool, args) => { tools.push([tool, ...args]); return "System-wide memory free percentage: 64%\n"; };
+    assert.equal(probeMemoryFreePct({ platform: "darwin", run, read: noFile }), 64);
+    assert.deepEqual(tools, [["memory_pressure"]]);
+    const noReading = probeMemoryFreePct({ platform: "darwin", run: () => "", read: noFile });
+    assert.equal(noReading, null, "missing tool is unknown");
+});
+
+test("probeSwapPct: /proc/meminfo on Linux, sysctl elsewhere", () => {
+    assert.equal(probeSwapPct({ platform: "linux", read: () => MEMINFO, run: noTool }), 60);
+    assert.equal(probeSwapPct({ platform: "linux", read: () => "", run: noTool }), 0);
+    const tools = [];
+    const swapusage = "total = 2000.00M  used = 500.00M  free = 1500.00M";
+    const run = (tool, args) => { tools.push([tool, ...args]); return swapusage; };
+    assert.equal(probeSwapPct({ platform: "darwin", run, read: noFile }), 25);
+    assert.deepEqual(tools, [["sysctl", "-n", "vm.swapusage"]]);
+});
+
+test("statfsFreeGB: free space in GB, where a full disk is 0 and a missing reading is null", () => {
+    assert.equal(statfsFreeGB({ bavail: 1_310_720, bsize: 4096 }), 5);
+    assert.equal(statfsFreeGB({ bavail: 0, bsize: 4096 }), 0);
+    assert.equal(statfsFreeGB({ bavail: 10, bsize: 0 }), null);
+    assert.equal(statfsFreeGB({}), null);
+    assert.equal(statfsFreeGB(undefined), null);
+});
+
+test("probeDiskFreeGB: one reading for every platform, null when the folder cannot be read", () => {
+    const asked = [];
+    const statfs = (path) => { asked.push(path); return { bavail: 2_621_440, bsize: 4096 }; };
+    assert.equal(probeDiskFreeGB("/srv", { statfs }), 10);
+    assert.deepEqual(asked, ["/srv"]);
+    const gone = () => { throw Object.assign(new Error("gone"), { code: "ENOENT" }); };
+    assert.equal(probeDiskFreeGB("/srv", { statfs: gone }), null);
+    assert.equal(probeDiskFreeGB(join(tempDir("disk"), "absent")), null);
 });
 
 test("parseSwap: percent in use, and 0 without swap", () => {
@@ -132,7 +176,21 @@ test("probeLoad: a load figure and at least one core", () => {
     assert.equal(Number.isInteger(cores) && cores >= 1, true);
 });
 
-test("live probes: each returns a value of the expected shape", { skip: !onMac }, () => {
+test("ps probes: the same options on macOS and Linux, except the one that adds finished children", () => {
+    const calls = [];
+    const run = (tool, args) => { calls.push([tool, ...args]); return ""; };
+    probeProcessTable({ run });
+    probeProcessCpu({ platform: "darwin", run });
+    probeProcessCpu({ platform: "linux", run });
+    assert.deepEqual(calls, [
+        ["ps", "-ww", "-Ao", "pid=,ppid=,pgid=,etime=,time=,pcpu=,rss=,command="],
+        ["ps", "-S", "-Ao", "pid=,ppid=,pgid=,time="],
+        ["ps", "--cumulative", "-Ao", "pid=,ppid=,pgid=,time="],
+    ]);
+});
+
+const liveSkip = onMac || onLinux ? false : "the probes read macOS and Linux only";
+test("live probes: each returns a value of the expected shape", { skip: liveSkip }, () => {
     const memory = probeMemoryFreePct(), ownRow = new RegExp(`^\\s*${process.pid}\\s`, "m");
     assert.equal(memory === null || (memory >= 0 && memory <= 100), true, "memory reading out of range");
     const disk = probeDiskFreeGB("/"), swap = probeSwapPct();
@@ -145,9 +203,11 @@ test("live probes: each returns a value of the expected shape", { skip: !onMac }
     assert.equal(probeGroupOf(process.pid) > 0, true, "own process group missing");
     const jobs = probeScheduledJobs();
     assert.equal(jobs === null || jobs instanceof Map, true, "job list has the wrong type");
+    if (onLinux) assert.equal(memory !== null, true, "no memory reading from /proc/meminfo");
 });
 
-test("probeReadPlist: an object for a job file, null for anything else", { skip: !onMac }, () => {
+const plutilSkip = { skip: !onMac && "plutil is macOS only" };
+test("probeReadPlist: an object for a job file, null for anything else", plutilSkip, () => {
     const dir = tempDir("plist"), good = join(dir, "cleanup.plist"), broken = join(dir, "broken.plist");
     writeFileSync(
         good,
@@ -169,6 +229,19 @@ test("showDesktopNotice: hands the texts over as arguments, outside the script",
     assert.deepEqual(calls[0].args.slice(-2), [title, message]);
     assert.equal(calls[0].args.slice(0, -2).some((part) => part.includes("mobile-app") || part.includes("finished")), false);
     assert.equal(showDesktopNotice(title, message, { run: () => ({ status: 1 }), platform: "darwin" }), false);
-    assert.equal(showDesktopNotice(title, message, { run, platform: "linux" }), false);
+    assert.equal(showDesktopNotice(title, message, { run, platform: "win32" }), false);
     assert.equal(calls.length, 1);
+});
+
+test("showDesktopNotice: on Linux notify-send, with the texts after the end of its options", () => {
+    const calls = [];
+    const run = (tool, args) => { calls.push({ tool, args }); return { status: 0 }; };
+    assert.equal(showDesktopNotice("--urgency=critical", "-t 1", { run, platform: "linux" }), true);
+    assert.deepEqual(calls, [{ tool: "notify-send", args: ["--", "--urgency=critical", "-t 1"] }]);
+    assert.equal(showDesktopNotice("t", "m", { run: () => ({ status: 1 }), platform: "linux" }), false, "no session");
+    const enoent = Object.assign(new Error("spawn notify-send ENOENT"), { code: "ENOENT" });
+    const missing = () => ({ status: null, error: enoent });
+    assert.equal(showDesktopNotice("t", "m", { run: missing, platform: "linux" }), false, "not installed");
+    const broken = () => { throw new Error("spawn failed"); };
+    assert.equal(showDesktopNotice("t", "m", { run: broken, platform: "linux" }), false);
 });

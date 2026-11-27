@@ -2,7 +2,8 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { readNotices, tempDir } from "./testkit.mjs";
+import { spawnSync } from "node:child_process";
+import { asPlatform, readNotices, tempDir } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -24,4 +25,13 @@ test("readNotices: a broken notice file or a name that is no encoded key is name
         `notice ignored: ${join(dir, "idle-slot%3A5160%3A2.json")} is not valid JSON`,
     ]);
     assert.deepEqual(readNotices(join(dir, "absent")), {});
+});
+
+test("asPlatform: a started script sees the platform it is given, and nothing else changes", () => {
+    for (const platform of ["linux", "darwin"]) {
+        const ran = spawnSync(process.execPath, [...asPlatform(platform), "-p", "process.platform + ' ' + (6 * 7)"], {
+            encoding: "utf8", timeout: 30_000,
+        });
+        assert.deepEqual([ran.status, ran.stdout, ran.stderr], [0, `${platform} 42\n`, ""]);
+    }
 });

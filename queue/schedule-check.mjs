@@ -15,6 +15,14 @@ import { DAY, HOUR, MINUTE } from "./units.mjs";
 
 export const LIST_ERROR = "could not read the job list";
 
+/** Why the report cannot run on this platform, or null on macOS. It reads launchd job files and launchctl, which
+ *  only macOS has. */
+export function platformError(platform) {
+    if (platform === "darwin") return null;
+    return `works on macOS only for now: it reads launchd jobs in ~/Library/LaunchAgents through launchctl, `
+        + `which ${platform === "linux" ? "Linux does" : "this system does"} not have; nothing was checked`;
+}
+
 const warnOnStderr = (text) => process.stderr.write(`schedule-check: ${text}\n`);
 /** The rules file as an object:
  *  { skip: [label patterns], okExit: { label: [codes] }, maxLogAgeH: { label: hours | null } }.
@@ -132,6 +140,12 @@ async function main() {
     if (badFlag) {
         process.stderr.write(`schedule-check: ${badFlag}; usage: schedule-check.mjs [--dry] [--json]\n`);
         process.exitCode = USAGE_EXIT;
+        return;
+    }
+    const unsupported = platformError(process.platform);
+    if (unsupported) {
+        process.stderr.write(`schedule-check: ${unsupported}\n`);
+        process.exitCode = 1;
         return;
     }
     const dry = process.argv.includes("--dry");

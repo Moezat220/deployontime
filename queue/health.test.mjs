@@ -92,12 +92,29 @@ test("powerState: on battery when unplugged, or when plugged in and still losing
     assert.deepEqual(powerState(undefined), { onBattery: null, plugged: false });
 });
 
+const MAC = { platform: "darwin", supplies: () => { throw new Error("no power supply folder on macOS"); } };
+
 test("readBattery: null whenever the reading is incomplete or the probe fails", () => {
-    assert.deepEqual(readBattery(() => drainingOnMains), { onBattery: true, pct: 58, plugged: true });
-    assert.deepEqual(readBattery(() => charging), { onBattery: false, pct: 91, plugged: true });
-    assert.equal(readBattery(() => "Now drawing from 'AC Power'\n"), null);
-    assert.equal(readBattery(() => "desktop without a battery"), null);
-    assert.equal(readBattery(() => { throw new Error("tool missing"); }), null);
+    assert.deepEqual(readBattery(() => drainingOnMains, MAC), { onBattery: true, pct: 58, plugged: true });
+    assert.deepEqual(readBattery(() => charging, MAC), { onBattery: false, pct: 91, plugged: true });
+    assert.equal(readBattery(() => "Now drawing from 'AC Power'\n", MAC), null);
+    assert.equal(readBattery(() => "desktop without a battery", MAC), null);
+    assert.equal(readBattery(() => { throw new Error("tool missing"); }, MAC), null);
+});
+
+test("readBattery: on Linux the power supplies in /sys, and no pmset", () => {
+    const noPmset = () => { throw new Error("pmset must not run on Linux"); };
+    const laptop = [
+        { name: "AC", type: "Mains", scope: "", online: "0", capacity: "", status: "" },
+        { name: "BAT0", type: "Battery", scope: "", online: "", capacity: "12", status: "Discharging" },
+    ];
+    const linux = (supplies) => ({ platform: "linux", supplies: () => supplies });
+    assert.deepEqual(readBattery(noPmset, linux(laptop)), { onBattery: true, pct: 12, plugged: false });
+    assert.equal(readBattery(noPmset, linux([])), null, "a server without a battery has no battery gate");
+    assert.equal(readBattery(noPmset, { platform: "linux", supplies: () => { throw new Error("unreadable"); } }), null);
+    const verdict = healthVerdict({ ...roomy, battery: readBattery(noPmset, linux(laptop)) }, LIMITS);
+    const text = "battery too low: 12% left, more than 30% needed, not plugged in";
+    assert.deepEqual(verdict.blocks.map((b) => b.text), [text]);
 });
 
 test("readHealth: combines the probes it is given", () => {

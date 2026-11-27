@@ -1,6 +1,6 @@
 # Machine queue
 
-Machine queue is one waiting line for the heavy jobs on a Mac that several coding agents use at the same time:
+Machine queue is one waiting line for the heavy jobs on a computer that several coding agents use at the same time:
 full test suites, builds, end-to-end runs. Its command is `dotime-queue`. The messages of `run` and its
 warnings start with `dotime-queue:`, and the titles of its notices start with `dotime:`.
 
@@ -31,8 +31,8 @@ opens no network connection; only a `DOTIME_NOTIFY_CMD` that you set can send no
 
 ## Install
 
-Requirements: macOS only, because the queue reads `pmset`, `memory_pressure`, `launchctl` and `ps`. Node 22 or
-newer. git 2.31 or newer.
+Requirements: macOS or Linux (servers and desktops, x64 and arm64). Node 22 or newer. git 2.31 or newer. On Linux
+the `ps` of procps, which almost every distribution installs, and a readable `/proc`.
 
 ```
 git clone https://github.com/Moezat220/deployontime.git
@@ -44,6 +44,10 @@ dotime-queue status
 `npm link`, run in the repository's top folder, puts `dotime-queue` on your path. No npm packages are downloaded:
 the queue has no dependencies. The first line of `dotime-queue status` should read `slots: 0 of 2 taken, 0 waiting`.
 
+On Linux the steps are the same. When `npm link` stops with a permission error, your Node was installed for all
+users; run it with a Node from a version manager, or after `npm config set prefix ~/.local` with `~/.local/bin` on
+your path.
+
 Without `npm link`, call `node <path to the clone>/queue/cli.mjs` from any folder. The `queue/` folder needs nothing
 outside itself. The examples below use `dotime-queue`.
 
@@ -54,8 +58,16 @@ npm uninstall -g deployontime
 rm -rf ~/.dotime        # or the folder DOTIME_HOME names
 ```
 
-If you scheduled the [reaper](#reaper), also remove it from your scheduler (for cron, see
+If you scheduled the [reaper](#reaper), also remove it from your scheduler (for cron or a systemd timer, see
 [the end of that section](#scheduling-the-reaper-with-cron)).
+
+### What differs on Linux
+
+The queue, `run`, `status`, `passed`, `history` and the reaper work the same on Linux. The readings come from
+other places: free memory and swap from `/proc/meminfo`, the battery from `/sys/class/power_supply`, and desktop
+notices go through `notify-send` (see [Health gate](#health-gate) and [Notices](#notices)). A server or desktop
+without a battery has no battery limit. The [scheduled-job report](#scheduled-job-report) reads launchd jobs and
+works on macOS only for now.
 
 ## Quick start
 
@@ -442,11 +454,13 @@ The gate is checked only before a job starts. A running job is never stopped bec
 | Reading | Taken from | Holds a job when |
 | --- | --- | --- |
 | Load | 1-minute load average per core, and the share of CPU time in use since the last shared reading, when that was half a second to 5 seconds ago, or else over one second. While jobs wait, a new shared reading is taken about every `pollMs`, so the span is about `pollMs` when that is between half a second and about 5 seconds. With a shorter `pollMs` a reading waits until half a second has passed; from about 5 seconds up, the saved CPU times are always too old, and every reading that measures the CPU waits one second. | above `health.loadPerCore` while the CPU is at least `health.busyCpuPct` percent busy |
-| Free memory | the free percentage that `memory_pressure` reports | below `health.minFreeMemPct` |
-| Free disk | `df` for the disk that holds `/` | below `health.minFreeDiskGB` |
-| Battery | `pmset -g batt` | at or below `health.minBatteryPct` while on battery |
+| Free memory | on macOS the free percentage that `memory_pressure` reports; on Linux `MemAvailable` as a share of `MemTotal` in `/proc/meminfo` | below `health.minFreeMemPct` |
+| Free disk | the space free for users on the disk that holds `/`, as `df` counts it, read through Node's `statfs` | below `health.minFreeDiskGB` |
+| Battery | `pmset -g batt` on macOS; on Linux the batteries and chargers in `/sys/class/power_supply` (batteries of a mouse, keyboard or phone do not count) | at or below `health.minBatteryPct` while on battery |
 
 If the charger cannot keep up and the charge keeps falling, the battery limit applies as if unplugged.
+A computer without a battery of its own, such as a server or a desktop, has no battery limit, and neither has one
+whose battery state cannot be read. On Linux, several batteries count as one, with their mean charge.
 
 The 1-minute load average lags: after heavy work ends it stays high for up to a minute while the CPU is already
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
@@ -518,12 +532,21 @@ another program is reported and left running.
 
 ### Scheduling the reaper with cron
 
-Run `crontab -e` and add these two lines:
+Run `crontab -e` and add these two lines. On macOS:
 
 ```
 PATH=/usr/bin:/bin:/usr/sbin
 */5 * * * * /path/to/node /path/to/deployontime/queue/reaper.mjs >> "$HOME/Library/Logs/dotime-reaper.log" 2>&1
 ```
+
+On Linux:
+
+```
+PATH=/usr/bin:/bin
+*/5 * * * * /path/to/node /path/to/deployontime/queue/reaper.mjs >> "$HOME/.local/state/dotime-reaper.log" 2>&1
+```
+
+Create the log folder first if it does not exist (`mkdir -p ~/.local/state`).
 
 Replace `/path/to/node` with what `command -v node` prints, and the second path with the place of your clone. The
 `PATH` line lets the reaper find the system tools it reads (`sysctl` lives in `/usr/sbin`); it applies to every
@@ -533,6 +556,37 @@ home folder avoids that. Notices always reach `notify.log`, also when no desktop
 
 To stop it, run `crontab -e` again and delete the reaper line, plus the `PATH` and `DOTIME_HOME` lines if nothing
 else in your crontab needs them.
+
+On a Linux computer with systemd, a user timer does the same. Create `~/.config/systemd/user/dotime-reaper.service`:
+
+```
+[Unit]
+Description=dotime reaper
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/node /path/to/deployontime/queue/reaper.mjs
+```
+
+and `~/.config/systemd/user/dotime-reaper.timer`:
+
+```
+[Unit]
+Description=dotime reaper every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+Then run `systemctl --user daemon-reload` and `systemctl --user enable --now dotime-reaper.timer`. The reaper's
+lines go to the journal: `journalctl --user --unit dotime-reaper`. For `DOTIME_HOME`, add
+`Environment=DOTIME_HOME=...` under `[Service]`. A user timer runs only while you are logged in, unless
+`loginctl enable-linger` is on for your account. To stop it, run
+`systemctl --user disable --now dotime-reaper.timer` and delete the two files.
 
 ## Scheduled-job report
 
@@ -556,12 +610,18 @@ A rules file that cannot be read, is not valid JSON or is not one JSON object is
 without rules. The warning goes to stderr, to the front of the notice and into the `warnings` field of the line in
 `schedule-check.jsonl`. A missing file simply means no rules.
 
+The report works on macOS only for now, because it reads launchd job files and `launchctl`. On Linux it prints
+`schedule-check: works on macOS only for now: ...` to stderr and exits 1 without checking anything, sending a
+notice or writing to its log; an option it does not know is still refused with exit 2 first. Jobs that cron or
+systemd timers start on Linux are not checked.
+
 ## Notices
 
-A notice is always appended to `$DOTIME_HOME/notify.log`. It is also shown as a macOS desktop notice through
-`osascript`; if none appear, look at the notification settings in System Settings. When `DOTIME_NOTIFY_CMD` is set,
-the notice is also handed to that command through `/bin/sh`, with the texts in the environment variables
-`DOTIME_TITLE` and `DOTIME_MESSAGE`:
+A notice is always appended to `$DOTIME_HOME/notify.log`. It is also shown as a desktop notice: on macOS through
+`osascript` (if none appear, look at the notification settings in System Settings), on Linux through `notify-send`
+when it is installed and a desktop session is running. A Linux computer without `notify-send`, such as a server,
+keeps the log line and the notify command only. When `DOTIME_NOTIFY_CMD` is set, the notice is also handed to that
+command through `/bin/sh`, with the texts in the environment variables `DOTIME_TITLE` and `DOTIME_MESSAGE`:
 
 ```
 export DOTIME_NOTIFY_CMD='printf "%s: %s\n" "$DOTIME_TITLE" "$DOTIME_MESSAGE" >> "$HOME/queue-notices.txt"'
@@ -607,7 +667,7 @@ default. Only a missing file is silent.
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
 | `health.busyCpuPct` | 90 | A load above `health.loadPerCore` shuts the gate only while this percent of CPU time, or more, is in use since the last shared reading (half a second to 5 seconds) or over one second. Above 0, at most 100. |
-| `health.minFreeMemPct` | 20 | Gate shuts below this free memory, in percent, as `memory_pressure` reports it. |
+| `health.minFreeMemPct` | 20 | Gate shuts below this free memory, in percent, as `memory_pressure` reports it on macOS or `/proc/meminfo` gives it on Linux. |
 | `health.minFreeDiskGB` | 10 | Gate shuts below this free disk space. |
 | `health.minBatteryPct` | 15 | Gate shuts at or below this charge while running on battery. |
 | `limits.defaultMin` | 30 | Run limit with fewer than `limits.minSamples` passed runs. Above 0. |
@@ -641,7 +701,8 @@ Default `reaper.serverPattern`: `vite` (but not `vite build`), `vitest`, `next d
 
 Default `reaper.keepPattern`: the regular expression `/Applications/` or `LaunchAgents`, written as one pattern with
 a `|` between the two. Programs inside `/Applications/` and scripts kept in a `LaunchAgents` folder are never
-stopped. To protect your own server too, add a part of its command line, for example
+stopped. Both are macOS folders, so on Linux the default protects nothing beyond the other rules above; add the
+servers you want kept the same way. To protect your own server too, add a part of its command line, for example
 `{ "reaper": { "keepPattern": "/Applications/|LaunchAgents|docs-site" } }`.
 
 Default `outputDirs`: `node_modules`, `dist`, `build`, `out`, `coverage`, `.cache`, `.next`, `.turbo`, `.wrangler`,
@@ -706,7 +767,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
-| `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
+| `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
 | `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |
@@ -719,13 +780,14 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `fingerprint.mjs` | A short hash of the code under test. | library | Runs read-only git commands, reads files in the working tree. |
 | `journal.mjs` | Journal lines, pass stamps and `history` totals. | library | Reads and appends `journal.jsonl`. |
 | `notices.mjs` | Long-run and idle-slot notices and the notices store. | library | Writes `notices/`; runs `ps` for CPU samples. |
-| `notify.mjs` | Sends a notice: log line, desktop notice, `DOTIME_NOTIFY_CMD`. | library | Appends `notify.log`, runs `osascript` and the notify command. |
+| `notify.mjs` | Sends a notice: log line, desktop notice, `DOTIME_NOTIFY_CMD`. | library | Appends `notify.log`, runs `osascript` or `notify-send` and the notify command. |
 | `idle.mjs` | Idle verdicts from CPU samples; the dev-server test. | library | None. |
 | `stray.mjs` | Finds large test runs outside the queue. | library | None. |
 | `commands.mjs` | The test, shell and launcher command patterns, each with its reason. | library | None. |
 | `git.mjs` | The queue's git calls, read-only and with time limits. | library | Runs `git`. |
 | `project.mjs` | The project of a job: label prefix, repository name or folder name. | library | Runs `git` through `git.mjs`. |
-| `probes.mjs` | Readings from macOS tools, one function each. | library | Runs `ps`, `memory_pressure`, `df`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`. |
+| `probes.mjs` | Readings from the operating system, one function each, with a macOS and a Linux branch where they differ. | library | Runs `ps`, on macOS also `memory_pressure`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`, on Linux `notify-send`; reads `/proc/meminfo` and the disk through `statfs`. |
+| `linux.mjs` | Readings Linux keeps in `/proc` and `/sys`, with their parsers. | library | Reads `/proc/meminfo` and `/sys/class/power_supply`. |
 | `ps.mjs` | Parsers for `ps` output. | library | None. |
 | `proctree.mjs` | Process trees: descendants, ancestors, a job's pids and CPU; group signals and stops. | library | Sends signals; runs `ps` when no listing is given. |
 | `files.mjs` | JSON read with warnings, atomic JSON write, removal of abandoned temporary files, append with folder. | library | Reads, writes and removes the files it is handed. |
@@ -733,7 +795,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `clock.mjs` | Clock times, days and zone offsets. | library | None. |
 | `stats.mjs` | The percentile that limits and `history` share. | library | None. |
 | `units.mjs` | Time units and rounding. | library | None. |
-| `testkit.mjs` | Test helpers: temp folders, started processes, isolated git and state folder, stored notices. | test helper | Creates and removes temp folders, signals processes the tests started. |
+| `testkit.mjs` | Test helpers: temp folders, started processes, isolated git and state folder, stored notices, a script started as on another platform. | test helper | Creates and removes temp folders, signals processes the tests started. |
 
 ## Tests
 
@@ -747,3 +809,7 @@ node --test queue/slots.test.mjs # one file
 The code has no switch for the tests. A test that needs a made-up health reading, or a clock that jumps ahead, runs
 the steps of `run` inside the test process and hands them stand-ins for the clock, the health reading and the
 signals (see `queue/run.test.mjs`). Every test file gets a state folder of its own inside the temp folder.
+
+The tests run on macOS and on Linux, and CI runs them on both. The Linux readers are tested on sample text on any
+computer, and a few tests start a script as if on the other platform. The tests that need launchd and `plutil` are
+skipped on Linux, each with its reason.

@@ -25,7 +25,7 @@ It helps a lot if you include:
 
 - What the problem is and what someone could do with it
 - Steps to reproduce it, or a small proof of concept
-- Your macOS, Node and git versions, and the commit you tested
+- Your operating system (macOS or Linux, with its version), Node and git versions, and the commit you tested
 - Any idea you have for a fix
 
 ## What to expect
@@ -52,7 +52,7 @@ In scope: problems in DeployOnTime's own code, for example:
 Out of scope:
 
 - Problems in the commands you run through the queue
-- Problems in Node.js, git or macOS themselves (please report those to their own projects)
+- Problems in Node.js, git, macOS or Linux themselves (please report those to their own projects)
 - Attacks that need someone to already control your user account
 - The queue working as designed, such as jobs waiting, time limits or the retry block (open a normal issue if the behavior seems wrong)
 

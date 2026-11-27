@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime, an open-source software factory: you hand a task to the DeployOnTime orchestrator, which plans it, builds it with coding agents, validates it, runs security checks and delivers a finished feature for you to review. Available now: the machine queue for macOS. The orchestrator is planned; validate, secure and deliver come next.">
+  <img src="docs/assets/banner.svg" width="100%" alt="DeployOnTime, an open-source software factory: you hand a task to the DeployOnTime orchestrator, which plans it, builds it with coding agents, validates it, runs security checks and delivers a finished feature for you to review. Available now: the machine queue for macOS and Linux. The orchestrator is planned; validate, secure and deliver come next.">
 </p>
 
 <p align="center">
   <a href="https://github.com/Moezat220/deployontime/actions/workflows/test.yml"><img src="https://github.com/Moezat220/deployontime/actions/workflows/test.yml/badge.svg" alt="tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="license AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522-339933" alt="node 22 or newer">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="platform macOS">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="platform macOS and Linux">
   <img src="https://img.shields.io/badge/dependencies-none-brightgreen" alt="no dependencies">
 </p>
 
@@ -24,7 +24,7 @@
 several agents working side by side today; tests, reviews and security checks, safe live releases and AI orchestration
 next. It is published one part at a time, and the first part, the machine queue, works on its own.
 
-**Ready to use today: the machine queue** (macOS). It lets several coding agents share one computer without
+**Ready to use today: the machine queue** (macOS and Linux). It lets several coding agents share one computer without
 overloading it. The next parts are on the [roadmap](#roadmap).
 
 <p align="center">
@@ -101,7 +101,7 @@ not fit in half the RAM); the runner's cores and memory are recorded in the resu
 
 ## Install
 
-Requirements: macOS, Node 22 or newer, git 2.31 or newer. No npm packages are downloaded.
+Requirements: macOS or Linux, Node 22 or newer, git 2.31 or newer. No npm packages are downloaded.
 
 ```
 git clone https://github.com/Moezat220/deployontime.git
@@ -170,7 +170,10 @@ virtual machine sees a different process list, so it must not share the folder: 
 <details>
 <summary><strong>Does it run on Linux or Windows?</strong></summary>
 
-Not yet. It reads macOS tools such as `pmset` and `memory_pressure`. Linux is on the [roadmap](#roadmap).
+Linux, yes: the queue and the reaper work on Linux servers and desktops, x64 and arm64, and the tests run on macOS
+and Linux in CI. On Linux the readings come from `/proc` and `/sys`, desktop notices go through `notify-send`, and the
+optional scheduled-job report, which reads macOS launchd jobs, is not available yet. The
+[manual](queue/README.md#what-differs-on-linux) lists the differences. Windows: not yet.
 </details>
 
 <details>
@@ -188,7 +191,7 @@ The machine queue is complete and usable on its own. These parts come next, in t
 | --- | --- |
 | Release engine | Validate an agent's pull request with tests, reviews and security checks, then deploy it as a safe live release (stages 03 and 04 in the banner) |
 | Install and quickstart | Set everything up with one command, with a trial mode that changes nothing |
-| Linux and Docker | Run the queue outside macOS |
+| Docker | Run the queue in containers |
 | Orchestration | Plan the work and hand it out to several coding agents (stage 02 in the banner) |
 
 ## Tests
