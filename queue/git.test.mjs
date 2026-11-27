@@ -14,7 +14,8 @@ test("git: the output as text or bytes, and null when git fails", () => {
     assert.equal(Buffer.isBuffer(git(repo, ["status", "--porcelain"], { encoding: "buffer" })), true);
     assert.equal(git(repo, ["rev-parse", "no-such-revision"]), null);
     assert.equal(git(tempDir("git"), ["rev-parse", "HEAD"]), null);
-    assert.equal(git(repo, ["status", "--porcelain"], { timeout: 1 }), null, "a call that runs out of time");
+    // A git alias that sleeps outlasts the timeout on any machine, however fast git itself is.
+    assert.equal(git(repo, ["-c", "alias.slow=!sleep 2", "slow"], { timeout: 100 }), null, "a call that runs out of time");
 });
 
 test("git: output above 1 MB gives null unless a larger maxBuffer is given", () => {
