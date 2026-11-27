@@ -10,8 +10,10 @@
 // It is heavy on purpose: it loads every core. Run it on an otherwise quiet computer.
 //
 // usage: node bench/run.mjs [--repeat 3] [--agents 4] [--threads 5] [--tests 20] [--mem 400] [--tries 8]
+//                           [--work 250] [--slack 1.6]
+// --mem is megabytes per thread, --work the CPU work per test, --slack how much slower than alone a test may get.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +28,9 @@ const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i += 2) {
     const name = argv[i].replace(/^--/, "");
     const value = Number(argv[i + 1]);
-    if (!(name in defaults) || !Number.isFinite(value) || value <= 0) {
+    const whole = name !== "slack";
+    if (!argv[i].startsWith("--") || !Object.hasOwn(defaults, name) || !Number.isFinite(value) || value <= 0 ||
+        (whole && !Number.isInteger(value))) {
         console.error(`bench: unknown option or bad value: ${argv[i]} ${argv[i + 1] ?? ""}`);
         process.exit(2);
     }
@@ -55,28 +59,40 @@ function runOnce(args, env, cwd) {
     });
 }
 
+// Through the queue, a retry passes --after-fix: the code here never changes, so without it the queue's
+// repeated-failure stop would refuse a third try, and the result would show that refusal instead of the load.
 async function agent(n, way, deadline, env, repo, repeat) {
     const random = seeded(repeat * 104729 + n * 7919);
     const suite = [SUITE, opts.threads, opts.tests, opts.work, deadline, opts.mem].map(String);
-    const queued = [CLI, "run", "--label", `bench: agent ${n}`, "--max-run", "30", "--", process.execPath, ...suite];
-    const args = way === "queue" ? queued : suite;
+    const queued = (run) => [CLI, "run", "--label", `bench: agent ${n}`, "--max-run", "30",
+        ...(run > 1 ? ["--after-fix"] : []), "--", process.execPath, ...suite];
     const start = Date.now();
     let firstFailed = null;
     for (let run = 1; run <= opts.tries; run++) {
-        const { code, result } = await runOnce(args, env, repo);
-        if (firstFailed === null) firstFailed = result?.failed ?? null;
+        const { code, result } = await runOnce(way === "queue" ? queued(run) : suite, env, repo);
+        if (run === 1) firstFailed = result?.failed ?? null;
         if (code === 0) return { runs: run, seconds: (Date.now() - start) / 1000, green: true, firstFailed };
-        await sleep((5 + random() * 25) * 1000);
+        if (run < opts.tries) await sleep((5 + random() * 25) * 1000);
     }
     return { runs: opts.tries, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
 }
 
 async function quiet() {
     const limit = cpus().length * 0.5;
-    for (let waited = 0; waited < 300 && loadavg()[0] > limit; waited += 5) await sleep(5000);
+    for (let waited = 0; loadavg()[0] > limit; waited += 5) {
+        if (waited >= 300) {
+            console.log(`note: the load is still ${loadavg()[0].toFixed(1)} after 5 minutes; going on anyway`);
+            return;
+        }
+        await sleep(5000);
+    }
 }
 
-async function round(way, deadline, env, repo, repeat) {
+// Each round gets a state folder of its own, so no round sees the journal of another.
+async function round(way, deadline, repo, repeat) {
+    const state = join(home, `state-${repeat}-${way}`);
+    mkdirSync(state);
+    const env = { ...process.env, DOTIME_HOME: state, DOTIME_NOTIFY: "log" };
     await quiet();
     const start = Date.now();
     const starts = Array.from({ length: opts.agents }, (_, i) => agent(i + 1, way, deadline, env, repo, repeat));
@@ -93,7 +109,12 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 
 const home = mkdtempSync(join(tmpdir(), "dotime-bench-"));
 const repo = join(home, "repo");
-const env = { ...process.env, DOTIME_HOME: join(home, "state"), DOTIME_NOTIFY: "log" };
+for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+        rmSync(home, { recursive: true, force: true });
+        process.exit(130);
+    });
+}
 try {
     spawnSync("git", ["init", "-q", repo]);
     writeFileSync(join(repo, "readme.txt"), "bench\n");
@@ -102,9 +123,10 @@ try {
     spawnSync("git", ["-C", repo, ...author, "commit", "-qm", "bench"]);
 
     await quiet();
-    const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), env, repo);
+    const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), process.env, repo);
     const deadline = Math.round(alone.result.medianMs * opts.slack);
-    console.log(`computer: ${cpus().length} cores · one test alone: ${alone.result.medianMs} ms · ` +
+    console.log(`computer: ${cpus().length} cores · median test with one suite running alone: ` +
+        `${alone.result.medianMs} ms · ` +
         `a test fails above ${deadline} ms`);
     console.log(`${opts.agents} agents, each running ${opts.threads * opts.tests} tests ` +
         `(${opts.threads} threads × ${opts.tests}), up to ${opts.tries} tries\n`);
@@ -112,7 +134,7 @@ try {
     const rows = { direct: [], queue: [] };
     for (let r = 1; r <= opts.repeat; r++) {
         for (const way of ["direct", "queue"]) {
-            const result = await round(way, deadline, env, repo, r);
+            const result = await round(way, deadline, repo, r);
             rows[way].push(result);
             const end = result.neverGreen
                 ? `${result.neverGreen} of ${opts.agents} agents still not green after ${opts.tries} tries ` +
