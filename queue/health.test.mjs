@@ -48,8 +48,8 @@ test("healthVerdict: judges by the limits it is handed", () => {
 test("healthVerdict: a high load holds a job only while the CPU is busy now", () => {
     assert.deepEqual(healthVerdict({ ...roomy, load: 14.8, busyCpuPct: 12 }, LIMITS), { ok: true, blocks: [] }, "load high, CPU idle");
     assert.deepEqual(healthVerdict({ ...roomy, load: 14.8, busyCpuPct: 89.9 }, LIMITS).ok, true, "just below the CPU limit");
-    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 96.6 }), ["load too high: 14.8 now, 8.0 allowed; CPU 97 % busy now"]);
-    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 90 }), ["load too high: 14.8 now, 8.0 allowed; CPU 90 % busy now"]);
+    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 96.6 }), ["load too high: 14.8 now, 8.0 allowed; CPU 97% busy now"]);
+    assert.deepEqual(texts({ ...roomy, load: 14.8, busyCpuPct: 90 }), ["load too high: 14.8 now, 8.0 allowed; CPU 90% busy now"]);
     assert.deepEqual(healthVerdict({ ...roomy, load: 1.5, busyCpuPct: 100 }, LIMITS), { ok: true, blocks: [] }, "load low, CPU busy");
     assert.deepEqual(gates({ ...roomy, load: 14.8, busyCpuPct: 50 }, { ...LIMITS, busyCpuPct: 40 }), ["load"]);
 });

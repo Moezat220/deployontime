@@ -276,7 +276,7 @@ test("run and status: a high load with an idle CPU starts the job, with a busy C
     const busy = { ...calmed, busyCpuPct: 97 }, clock = fakeClock();
     const held = makeDeps(box, { now: clock.now, sleep: clock.sleep, readHealth: () => busy, spawn: assert.fail });
     const code = await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "process.exit(0)"], box.ctx, held.deps);
-    const why = "load too high: 14.8 now, 8.0 allowed; CPU 97 % busy now";
+    const why = "load too high: 14.8 now, 8.0 allowed; CPU 97% busy now";
     assert.deepEqual([code, held.said.at(-1)], [75, `gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit`]);
     assert.equal(status(busy), `gate: shut; ${why}`);
 });

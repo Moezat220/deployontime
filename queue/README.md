@@ -325,7 +325,7 @@ If the charger cannot keep up and the charge keeps falling, the battery limit ap
 The 1-minute load average lags: after heavy work ends it stays high for up to a minute while the CPU is already
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
 of the CPU times one second apart, and holds the job only when that share is at or above `health.busyCpuPct`. The
-message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96 % busy now`. When the
+message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the
 load is inside its limit, the CPU is not measured and the load never holds a job. When the CPU cannot be measured,
 a load above its limit holds the job as the load alone would.
 

@@ -13,7 +13,7 @@ export function healthVerdict({ load, cores, busyCpuPct = null, freePct, diskGB,
     const loadCap = cores * limits.loadPerCore;
     const cpuKnown = Number.isFinite(busyCpuPct);
     if (load > loadCap && (!cpuKnown || busyCpuPct >= limits.busyCpuPct)) {
-        const cpu = cpuKnown ? `; CPU ${Math.round(busyCpuPct)} % busy now` : "";
+        const cpu = cpuKnown ? `; CPU ${Math.round(busyCpuPct)}% busy now` : "";
         const text = `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed${cpu}`;
         blocks.push({ gate: "load", text });
     }
