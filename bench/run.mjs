@@ -57,12 +57,13 @@ function runOnce(args, env, cwd) {
         const child = spawn(process.execPath, args, { env, cwd, stdio: ["ignore", "pipe", "pipe"] });
         children.add(child);
         let out = "";
+        let err = "";
         child.stdout.on("data", (chunk) => (out += chunk));
-        child.stderr.on("data", () => {});
+        child.stderr.on("data", (chunk) => (err = (err + chunk).slice(-2000)));
         child.on("close", (code) => {
             children.delete(child);
             const line = out.split("\n").find((l) => l.startsWith("{"));
-            resolve({ code, result: line ? JSON.parse(line) : null });
+            resolve({ code, result: line ? JSON.parse(line) : null, err });
         });
     });
 }
@@ -84,8 +85,9 @@ async function agent(n, way, deadline, env, repo, repeat) {
         if (result) runs++;
         else errors++;
         if (run === 1) firstFailed = result?.failed ?? null;
-        const seconds = (Date.now() - start) / 1000;
-        if (code === 0 && result) return { runs, errors, seconds, green: true, firstFailed };
+        if (code === 0 && result) {
+            return { runs, errors, seconds: (Date.now() - start) / 1000, green: true, firstFailed };
+        }
         if (run < opts.tries) await sleep((5 + random() * 25) * 1000);
     }
     return { runs, errors, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
@@ -124,56 +126,75 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 
 const home = mkdtempSync(join(tmpdir(), "dotime-bench-"));
 const repo = join(home, "repo");
+// On a signal, stop the running suites and queue commands and wait for them to end (they may still write their
+// journal line), then remove the temporary folder and exit.
 const children = new Set();
-for (const [signal, exit] of [["SIGINT", 130], ["SIGTERM", 143]]) {
-    process.on(signal, () => {
-        for (const child of children) child.kill("SIGTERM");
-        rmSync(home, { recursive: true, force: true });
-        process.exit(exit);
-    });
-}
-try {
-    spawnSync("git", ["init", "-q", repo]);
-    writeFileSync(join(repo, "readme.txt"), "bench\n");
-    spawnSync("git", ["-C", repo, "add", "."]);
-    const author = ["-c", "user.name=bench", "-c", "user.email=bench@example.invalid"];
-    spawnSync("git", ["-C", repo, ...author, "commit", "-qm", "bench"]);
-
-    await quiet();
-    const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), process.env, repo);
-    if (!alone.result) throw new Error(`the suite did not run on its own (exit ${alone.code}); nothing to measure`);
-    const deadline = Math.round(alone.result.medianMs * opts.slack);
-    console.log(`computer: ${cpus().length} cores · median test with one suite running alone: ` +
-        `${alone.result.medianMs} ms · ` +
-        `a test fails above ${deadline} ms`);
-    console.log(`${opts.agents} agents, each running ${opts.threads * opts.tests} tests ` +
-        `(${opts.threads} threads × ${opts.tests}), up to ${opts.tries} tries\n`);
-
-    const rows = { direct: [], queue: [] };
-    for (let r = 1; r <= opts.repeat; r++) {
-        for (const way of ["direct", "queue"]) {
-            const result = await round(way, deadline, repo, r);
-            rows[way].push(result);
-            const end = result.neverGreen
-                ? `${result.neverGreen} of ${opts.agents} agents still not green after ${opts.tries} tries ` +
-                  `(${result.seconds} s)`
-                : `all green after ${result.seconds} s`;
-            console.log(`run ${r} ${way.padEnd(6)}: ${end}, ${result.runs} suite runs, ` +
-                `${result.firstFailed} of ${opts.agents * opts.threads * opts.tests} tests failed in the first runs` +
-                (result.errors ? `, ${result.errors} tries ended without a result` : ""));
-        }
-    }
-
-    console.log("\nmedian of", opts.repeat, "runs (lowest to highest):");
-    for (const way of ["direct", "queue"]) {
-        const pick = (key) => rows[way].map((row) => row[key]);
-        const range = (key) => `${Math.min(...pick(key))} to ${Math.max(...pick(key))}`;
-        const stuck = pick("neverGreen").filter((n) => n > 0).length;
-        console.log(`${way.padEnd(6)}: time to the end ${median(pick("seconds"))} s (${range("seconds")}), ` +
-            `not all green in ${stuck} of ${opts.repeat} runs, ` +
-            `suite runs ${median(pick("runs"))} (${range("runs")}), ` +
-            `first-run failures ${median(pick("firstFailed"))} (${range("firstFailed")})`);
-    }
-} finally {
+let stopping = false;
+async function stop(exit) {
+    if (stopping) return;
+    stopping = true;
+    const ended = [...children].map((child) => new Promise((resolve) => child.once("close", resolve)));
+    for (const child of children) child.kill("SIGTERM");
+    const late = setTimeout(() => children.forEach((child) => child.kill("SIGKILL")), 15_000);
+    await Promise.all(ended);
+    clearTimeout(late);
     rmSync(home, { recursive: true, force: true });
+    process.exit(exit);
 }
+process.on("SIGINT", () => stop(130));
+process.on("SIGTERM", () => stop(143));
+async function main() {
+    try {
+        spawnSync("git", ["init", "-q", repo]);
+        writeFileSync(join(repo, "readme.txt"), "bench\n");
+        spawnSync("git", ["-C", repo, "add", "."]);
+        const author = ["-c", "user.name=bench", "-c", "user.email=bench@example.invalid"];
+        spawnSync("git", ["-C", repo, ...author, "commit", "-qm", "bench"]);
+
+        await quiet();
+        const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), process.env, repo);
+        if (!alone.result) {
+            console.error(`bench: the suite did not run on its own (exit ${alone.code}); nothing to measure`);
+            if (alone.err.trim()) console.error(alone.err.trim());
+            process.exitCode = 1;
+            return;
+        }
+        const deadline = Math.round(alone.result.medianMs * opts.slack);
+        console.log(`computer: ${cpus().length} cores · median test with one suite running alone: ` +
+            `${alone.result.medianMs} ms · ` +
+            `a test fails above ${deadline} ms`);
+        console.log(`${opts.agents} agents, each running ${opts.threads * opts.tests} tests ` +
+            `(${opts.threads} threads × ${opts.tests}), up to ${opts.tries} tries\n`);
+
+        const rows = { direct: [], queue: [] };
+        for (let r = 1; r <= opts.repeat; r++) {
+            for (const way of ["direct", "queue"]) {
+                const result = await round(way, deadline, repo, r);
+                rows[way].push(result);
+                const end = result.neverGreen
+                    ? `${result.neverGreen} of ${opts.agents} agents still not green after ${opts.tries} tries ` +
+                      `(${result.seconds} s)`
+                    : `all green after ${result.seconds} s`;
+                console.log(`run ${r} ${way.padEnd(6)}: ${end}, ${result.runs} suite runs, ` +
+                    `${result.firstFailed} of ${opts.agents * opts.threads * opts.tests} tests failed ` +
+                    "in the first runs" +
+                    (result.errors ? `, ${result.errors} tries ended without a result` : ""));
+            }
+        }
+
+        console.log("\nmedian of", opts.repeat, "runs (lowest to highest):");
+        for (const way of ["direct", "queue"]) {
+            const pick = (key) => rows[way].map((row) => row[key]);
+            const range = (key) => `${Math.min(...pick(key))} to ${Math.max(...pick(key))}`;
+            const stuck = pick("neverGreen").filter((n) => n > 0).length;
+            console.log(`${way.padEnd(6)}: time to the end ${median(pick("seconds"))} s (${range("seconds")}), ` +
+                `not all green in ${stuck} of ${opts.repeat} runs, ` +
+                `suite runs ${median(pick("runs"))} (${range("runs")}), ` +
+                `first-run failures ${median(pick("firstFailed"))} (${range("firstFailed")})`);
+        }
+    } finally {
+        rmSync(home, { recursive: true, force: true });
+    }
+}
+
+await main();
