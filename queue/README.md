@@ -145,8 +145,10 @@ dotime-queue status
 
 Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. The gate is
-judged as `run` judges it, on a fresh reading, so a high load with an idle CPU shows as open. `dotime-queue`
-with nothing after it does the same.
+judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the reading it
+shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above its limit
+and `health.json` holds no CPU times between half a second and 5 seconds old, that reading takes about a second
+longer, while the CPU is measured. `dotime-queue` with nothing after it does the same.
 
 `status` only reads the state folder and never changes it. The file of a job that has ended is still left out of
 what it prints, but the file itself stays until a waiting `run` or the reaper removes it.
