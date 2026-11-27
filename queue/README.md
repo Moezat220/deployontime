@@ -146,9 +146,10 @@ dotime-queue status
 Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. The gate is
 judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the reading it
-shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above its limit
-and `health.json` holds no CPU times between half a second and 5 seconds old, that reading takes about a second
-longer, while the CPU is measured. `dotime-queue` with nothing after it does the same.
+shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above its limit,
+memory, disk and battery do not already hold a job, and `health.json` holds no usable CPU times up to 5 seconds
+old, that reading takes about a second longer, while the CPU is measured. CPU times younger than half a second make
+it wait only for the rest of the half second. `dotime-queue` with nothing after it does the same.
 
 `status` only reads the state folder and never changes it. The file of a job that has ended is still left out of
 what it prints, but the file itself stays until a waiting `run` or the reaper removes it.
@@ -317,7 +318,7 @@ The gate is checked only before a job starts. A running job is never stopped bec
 
 | Reading | Taken from | Holds a job when |
 | --- | --- | --- |
-| Load | 1-minute load average per core, and the share of CPU time in use over about one second | above `health.loadPerCore` while the CPU is at least `health.busyCpuPct` percent busy |
+| Load | 1-minute load average per core, and the share of CPU time in use since the last shared reading (half a second to 5 seconds; about `pollMs` while jobs wait) or over one second | above `health.loadPerCore` while the CPU is at least `health.busyCpuPct` percent busy |
 | Free memory | the free percentage that `memory_pressure` reports | below `health.minFreeMemPct` |
 | Free disk | `df` for the disk that holds `/` | below `health.minFreeDiskGB` |
 | Battery | `pmset -g batt` | at or below `health.minBatteryPct` while on battery |
@@ -328,7 +329,9 @@ The 1-minute load average lags: after heavy work ends it stays high for up to a 
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
 of the CPU times, and holds the job only when that share is at or above `health.busyCpuPct`. Each health reading
 keeps the CPU times it ended on in `health.json`. When those are between half a second and 5 seconds old, the next
-reading measures the CPU since then and does not wait; otherwise it takes two readings one second apart. The
+reading measures the CPU since then and does not wait; when they are younger, it waits for the rest of the half
+second and then measures since then; when there are none, they are older or they make no sense, it takes two
+readings one second apart. The
 message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the
 load is inside its limit, the CPU is not measured and the load never holds a job. The CPU is measured after memory,
 disk and battery, and not at all when one of those already holds the job. When the CPU is not measured or cannot be
@@ -478,7 +481,7 @@ default. Only a missing file is silent.
 | `maxWaitMin` | 60 | Default for `--max-wait`. `0`: no limit. |
 | `pollMs` | 3000 | How often a waiting job looks at the line and reads the health. Above 0. |
 | `health.loadPerCore` | 1.0 | Gate shuts above this 1-minute load per core, while the CPU is busy now. Above 0. |
-| `health.busyCpuPct` | 90 | A load above `health.loadPerCore` shuts the gate only while this percent of CPU time, or more, is in use over one second. Above 0, at most 100. |
+| `health.busyCpuPct` | 90 | A load above `health.loadPerCore` shuts the gate only while this percent of CPU time, or more, is in use since the last shared reading (half a second to 5 seconds) or over one second. Above 0, at most 100. |
 | `health.minFreeMemPct` | 20 | Gate shuts below this free memory, in percent, as `memory_pressure` reports it. |
 | `health.minFreeDiskGB` | 10 | Gate shuts below this free disk space. |
 | `health.minBatteryPct` | 15 | Gate shuts at or below this charge while running on battery. |
