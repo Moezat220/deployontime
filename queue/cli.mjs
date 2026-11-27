@@ -65,11 +65,11 @@ export function cmdStatus({ settings, files }, { readHealth: read = readHealth, 
 }
 
 /** Prints the pass stamp of the folder in --cwd, else of the current folder, and returns 0, or 1 when there is none.
- *  A current folder that was removed is a usage error, as for `run`. */
+ *  A current folder that was removed is a usage error, with a line that points to --cwd. */
 function cmdPassed(args, { files, tz }) {
     const read = jobFolder({ cwd: opt(args, "--cwd") || undefined }, { cwd: () => process.cwd() });
     if (read.error) {
-        say(read.error);
+        say("the current folder was removed; run passed from a folder that exists, or name one with --cwd <dir>");
         return EXIT.usage;
     }
     const { cwd } = read;

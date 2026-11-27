@@ -119,7 +119,7 @@ export async function waitForSlot(job, deps) {
         }
         const sleptFrom = deps.now();
         await deps.sleep(settings.pollMs);
-        // A poll cut short by a signal is not booked: the job leaves at the top of the loop.
+        // A poll that ends with a signal pending is not booked: the job leaves at the top of the loop.
         if (deps.leaving?.()) continue;
         addWait(tally, heldBy, deps.now() - sleptFrom);
     }

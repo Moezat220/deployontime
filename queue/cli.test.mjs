@@ -319,7 +319,7 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [
         2,
         "",
-        'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority, or give --label a value\n',
+        'dotime-queue: option --label needs a value; give --label a value, or for the value "--priority" write --label=--priority\n',
     ]);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);
@@ -415,7 +415,7 @@ test("status, history and passed --cwd: work from a folder that was removed", as
 test("passed: without --cwd, from a folder that was removed, one clear line and the usage exit code", async () => {
     const passed = await fromGone(sandbox(), ["passed"]);
     assert.deepEqual([passed.code, passed.stdout, passed.stderr],
-        [2, "", "dotime-queue: the current folder was removed; start the job from a folder that exists\n"]);
+        [2, "", "dotime-queue: the current folder was removed; run passed from a folder that exists, or name one with --cwd <dir>\n"]);
 });
 
 test("passed: a repository with no commits yet is named as such, exit 1", async () => {
@@ -424,7 +424,7 @@ test("passed: a repository with no commits yet is named as such, exit 1", async 
     mkdirSync(plain);
     testGit(empty, "init", "-q");
     const fresh = await cli(box, ["passed"], { cwd: empty });
-    assert.deepEqual([fresh.code, fresh.stdout], [1, "no stamp: this repository has no commits yet\n"]);
+    assert.deepEqual([fresh.code, fresh.stdout], [1, "no stamp: the current branch has no commits yet\n"]);
     const outside = await cli(box, ["passed", "--cwd", plain]);
     assert.deepEqual([outside.code, outside.stdout], [1, "no stamp: this folder is not a git checkout\n"]);
 });

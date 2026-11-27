@@ -74,7 +74,7 @@ const shortId = (commit) => String(commit).slice(0, 8);
 export function findStamp(lines, folder, match, { tz, at = Date.now() }) {
     const none = (why) => ({ stamp: null, text: `no stamp: ${why}` });
     const wanted = String(match).toLowerCase();
-    if (!folder.head && folder.repository) return none("this repository has no commits yet");
+    if (!folder.head && folder.repository) return none("the current branch has no commits yet");
     if (!folder.head) return none("this folder is not a git checkout");
     if (folder.clean == null) return none("git status could not be read");
     if (!folder.clean) return none("the working tree has uncommitted changes");

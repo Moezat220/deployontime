@@ -35,11 +35,11 @@ test("flagError: an empty value is refused like a missing one", () => {
 test("flagError: a word that looks like a flag is never taken as a value, and the message says how to give one", () => {
     assert.equal(
         flagError(["run", "--label", "--priority", "--", "make"]),
-        'option --label needs a value; for the value "--priority", write --label=--priority, or give --label a value',
+        'option --label needs a value; give --label a value, or for the value "--priority" write --label=--priority',
     );
     assert.equal(
         flagError(["passed", "--match", "--cwd", "/srv/shop-api"]),
-        'option --match needs a value; for the value "--cwd", write --match=--cwd, or give --match a value',
+        'option --match needs a value; give --match a value, or for the value "--cwd" write --match=--cwd',
     );
     assert.equal(flagError(["run", "--kind", "--", "make"]), "option --kind needs a value");
     assert.equal(flagError(["run", "--max-wait", "-1", "--", "make"]), null);
@@ -48,11 +48,11 @@ test("flagError: a word that looks like a flag is never taken as a value, and th
 test("flagError: the hint quotes a value that a shell would split or change", () => {
     assert.equal(
         flagError(["run", "--label", "--docs site: build", "--", "make"]),
-        `option --label needs a value; for the value "--docs site: build", write --label='--docs site: build', or give --label a value`,
+        `option --label needs a value; give --label a value, or for the value "--docs site: build" write --label='--docs site: build'`,
     );
     assert.equal(
         flagError(["run", "--after-fix", "--it's fixed", "--", "make"]),
-        `option --after-fix needs a value; for the value "--it's fixed", write --after-fix='--it'\\''s fixed', or give --after-fix a value`,
+        `option --after-fix needs a value; give --after-fix a value, or for the value "--it's fixed" write --after-fix='--it'\\''s fixed'`,
     );
 });
 

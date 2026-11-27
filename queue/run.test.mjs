@@ -178,7 +178,7 @@ test("waitForSlot: leaves the line when a signal asks for it", async () => {
     let leaving = null;
     const sleep = async (ms) => { await clock.sleep(ms); leaving = "SIGTERM"; };
     const got = await waitForSlot(waiter(box), { now: clock.now, sleep, readHealth: () => CALM, say: () => {}, leaving: () => leaving });
-    assert.deepEqual(got, { left: "SIGTERM", tally: {} }, "the poll the signal cut short is not booked");
+    assert.deepEqual(got, { left: "SIGTERM", tally: {} }, "a poll that ends with a signal pending is not booked");
 });
 
 // ---- realDeps ----

@@ -174,9 +174,9 @@ clean tree. Runs that were stopped or timed out are skipped, since they say noth
 of what is left exited 0, it prints a `stamp:` line and exits 0. In every other case it prints a `no stamp:` line
 that says why and exits 1. `--match` keeps only runs whose label or command contains the text, in any letter case;
 without it, the newest run of any check counts. `--cwd` asks about another folder. A folder outside git gives
-`no stamp: this folder is not a git checkout`, and a repository with no commits yet gives
-`no stamp: this repository has no commits yet`; both exit 1. Without `--cwd`, in a folder that was removed, `passed`
-prints the same line as `run` does there and exits 2.
+`no stamp: this folder is not a git checkout`, and a repository whose current branch has no commits yet
+(a new repository) gives `no stamp: the current branch has no commits yet`; both exit 1. Without `--cwd`, in a
+folder that was removed, `passed` says so, points to `--cwd <dir>` and exits 2.
 
 Note: an untracked entry named `node_modules` that is not a folder (in practice a link) does not count as a change.
 Git's usual `node_modules/` ignore rule matches folders only, so git lists such a link.
