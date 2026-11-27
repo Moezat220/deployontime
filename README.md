@@ -74,10 +74,10 @@ not. The queue never edits your repository; it keeps its state in `~/.dotime`.
 
 On a Mac, 4 agents start the same test suite at the same moment. Each suite runs 5 threads (100 timed tests) and holds 2
 GB, and the Mac has half as many cores as the 4 suites have busy threads, so started together they ask for twice the CPU
-there is; through the queue at most 2 suites run together (its default of 2 slots). A test fails when it runs more than
-1.6 times slower than when one suite runs by itself, so this setup shows what doubling the load does. After a failure an
-agent waits 5 to 30 s (the same random waits both ways) and runs the suite again, up to 8 runs in all. Three runs each
-way:
+there is; through the queue at most 2 suites run together (its default of 2 slots). A test fails when it takes more than
+1.6 times as long as when one suite runs by itself, so this setup shows what doubling the load does; a looser timeout or
+a lighter load would narrow the gap. After a failure an agent waits 5 to 30 s (the same random waits both ways) and runs
+the suite again, up to 8 runs in all. Three runs each way:
 
 | | Started directly | Through `dotime-queue` |
 | --- | --- | --- |

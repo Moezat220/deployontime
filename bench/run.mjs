@@ -25,8 +25,14 @@ const CLI = join(here, "..", "queue", "cli.mjs");
 const defaults = { repeat: 3, agents: 4, threads: 5, tests: 20, mem: 400, tries: 8, work: 250, slack: 1.6 };
 const opts = { ...defaults };
 const argv = process.argv.slice(2);
+const given = new Set();
 for (let i = 0; i < argv.length; i += 2) {
     const name = argv[i].replace(/^--/, "");
+    if (given.has(name)) {
+        console.error(`bench: option given twice: ${argv[i]}`);
+        process.exit(2);
+    }
+    given.add(name);
     const value = Number(argv[i + 1]);
     const whole = name !== "slack";
     if (!argv[i].startsWith("--") || !Object.hasOwn(defaults, name) || !Number.isFinite(value) || value <= 0 ||
@@ -49,10 +55,12 @@ function seeded(seed) {
 function runOnce(args, env, cwd) {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, args, { env, cwd, stdio: ["ignore", "pipe", "pipe"] });
+        children.add(child);
         let out = "";
         child.stdout.on("data", (chunk) => (out += chunk));
         child.stderr.on("data", () => {});
         child.on("close", (code) => {
+            children.delete(child);
             const line = out.split("\n").find((l) => l.startsWith("{"));
             resolve({ code, result: line ? JSON.parse(line) : null });
         });
@@ -65,16 +73,22 @@ async function agent(n, way, deadline, env, repo, repeat) {
     const random = seeded(repeat * 104729 + n * 7919);
     const suite = [SUITE, opts.threads, opts.tests, opts.work, deadline, opts.mem].map(String);
     const queued = (run) => [CLI, "run", "--label", `bench: agent ${n}`, "--max-run", "30",
-        ...(run > 1 ? ["--after-fix"] : []), "--", process.execPath, ...suite];
+        ...(run > 1 ? ["--after-fix", "benchmark retry on unchanged code"] : []), "--", process.execPath, ...suite];
     const start = Date.now();
     let firstFailed = null;
+    // A try that prints no result (a crash, a refusal, a usage error) is not a suite run: it is counted apart.
+    let runs = 0;
+    let errors = 0;
     for (let run = 1; run <= opts.tries; run++) {
         const { code, result } = await runOnce(way === "queue" ? queued(run) : suite, env, repo);
+        if (result) runs++;
+        else errors++;
         if (run === 1) firstFailed = result?.failed ?? null;
-        if (code === 0) return { runs: run, seconds: (Date.now() - start) / 1000, green: true, firstFailed };
+        const seconds = (Date.now() - start) / 1000;
+        if (code === 0 && result) return { runs, errors, seconds, green: true, firstFailed };
         if (run < opts.tries) await sleep((5 + random() * 25) * 1000);
     }
-    return { runs: opts.tries, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
+    return { runs, errors, seconds: (Date.now() - start) / 1000, green: false, firstFailed };
 }
 
 async function quiet() {
@@ -100,6 +114,7 @@ async function round(way, deadline, repo, repeat) {
     return {
         seconds: Math.round((Date.now() - start) / 1000),
         runs: agents.reduce((sum, a) => sum + a.runs, 0),
+        errors: agents.reduce((sum, a) => sum + a.errors, 0),
         firstFailed: agents.reduce((sum, a) => sum + (a.firstFailed ?? 0), 0),
         neverGreen: agents.filter((a) => !a.green).length,
     };
@@ -109,10 +124,12 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 
 const home = mkdtempSync(join(tmpdir(), "dotime-bench-"));
 const repo = join(home, "repo");
-for (const signal of ["SIGINT", "SIGTERM"]) {
+const children = new Set();
+for (const [signal, exit] of [["SIGINT", 130], ["SIGTERM", 143]]) {
     process.on(signal, () => {
+        for (const child of children) child.kill("SIGTERM");
         rmSync(home, { recursive: true, force: true });
-        process.exit(130);
+        process.exit(exit);
     });
 }
 try {
@@ -124,6 +141,7 @@ try {
 
     await quiet();
     const alone = await runOnce([SUITE, opts.threads, 6, opts.work, 1e9, opts.mem].map(String), process.env, repo);
+    if (!alone.result) throw new Error(`the suite did not run on its own (exit ${alone.code}); nothing to measure`);
     const deadline = Math.round(alone.result.medianMs * opts.slack);
     console.log(`computer: ${cpus().length} cores · median test with one suite running alone: ` +
         `${alone.result.medianMs} ms · ` +
@@ -141,7 +159,8 @@ try {
                   `(${result.seconds} s)`
                 : `all green after ${result.seconds} s`;
             console.log(`run ${r} ${way.padEnd(6)}: ${end}, ${result.runs} suite runs, ` +
-                `${result.firstFailed} of ${opts.agents * opts.threads * opts.tests} tests failed in the first runs`);
+                `${result.firstFailed} of ${opts.agents * opts.threads * opts.tests} tests failed in the first runs` +
+                (result.errors ? `, ${result.errors} tries ended without a result` : ""));
         }
     }
 
