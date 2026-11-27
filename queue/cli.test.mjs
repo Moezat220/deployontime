@@ -319,7 +319,7 @@ test("usage: exit 2 with a message for bad input, exit 0 for help", async () => 
     assert.deepEqual([labelAsValue.code, labelAsValue.stdout, labelAsValue.stderr], [
         2,
         "",
-        'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority\n',
+        'dotime-queue: option --label needs a value; for the value "--priority", write --label=--priority, or give --label a value\n',
     ]);
     const badDays = await cli(box, ["history", "--days", "abc"]);
     assert.deepEqual([badDays.code, badDays.stdout, badDays.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"]);

@@ -1,8 +1,8 @@
 // Helpers shared by the test files: temp folders and started processes that are cleaned up when the test file
 // ends (also after a failed assertion or a signal), a state folder of their own, and git commands cut off from the
-// configuration and hooks of whoever runs the tests. Every test file imports this module first. Importing it already
-// points DOTIME_HOME at a fresh temp folder and sends notices to the log file only, so a test that forgets
-// isolateProcess() still never touches the real state folder.
+// configuration and hooks of whoever runs the tests. Every test file imports this module before the modules under
+// test. Importing it already points DOTIME_HOME at a fresh temp folder and sends notices to the log file only, so a
+// test that forgets isolateProcess() still never touches the real state folder.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

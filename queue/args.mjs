@@ -63,7 +63,8 @@ export function flagError(args, table = FLAGS) {
             const value = joined ? word.slice(eq + 1) : words[++i];
             if (value === undefined || value === "") return `option ${name} needs a value`;
             if (!joined && value.startsWith("--")) {
-                return `option ${name} needs a value; for the value "${value}", write ${name}=${shellWord(value)}`;
+                const joined = `${name}=${shellWord(value)}`;
+                return `option ${name} needs a value; for the value "${value}", write ${joined}, or give ${name} a value`;
             }
             continue;
         }
