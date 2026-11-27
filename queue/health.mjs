@@ -4,15 +4,16 @@
 // after heavy work has ended. So a high load holds a job only while the CPU is also busy right now.
 import { probeBusyCpuPct, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
+import { DEFAULTS } from "./settings.mjs";
 
 /** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
  *  the health settings. A load above its limit holds a job unless the live CPU reading (busyCpuPct) is known and
- *  below limits.busyCpuPct. */
+ *  below limits.busyCpuPct; limits without busyCpuPct use the default. */
 export function healthVerdict({ load, cores, busyCpuPct = null, freePct, diskGB, battery = null }, limits) {
     const blocks = [];
     const loadCap = cores * limits.loadPerCore;
     const cpuKnown = Number.isFinite(busyCpuPct);
-    if (load > loadCap && (!cpuKnown || busyCpuPct >= limits.busyCpuPct)) {
+    if (load > loadCap && (!cpuKnown || busyCpuPct >= (limits.busyCpuPct ?? DEFAULTS.health.busyCpuPct))) {
         const cpu = cpuKnown ? `; CPU ${Math.round(busyCpuPct)}% busy now` : "";
         const text = `load too high: ${load.toFixed(1)} now, ${loadCap.toFixed(1)} allowed${cpu}`;
         blocks.push({ gate: "load", text });

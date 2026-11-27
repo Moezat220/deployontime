@@ -54,6 +54,12 @@ test("healthVerdict: a high load holds a job only while the CPU is busy now", ()
     assert.deepEqual(gates({ ...roomy, load: 14.8, busyCpuPct: 50 }, { ...LIMITS, busyCpuPct: 40 }), ["load"]);
 });
 
+test("healthVerdict: limits without busyCpuPct judge the CPU by the default", () => {
+    const { busyCpuPct, ...noCpuLimit } = LIMITS;
+    assert.deepEqual(gates({ ...roomy, load: 14.8, busyCpuPct: 95 }, noCpuLimit), ["load"]);
+    assert.deepEqual(gates({ ...roomy, load: 14.8, busyCpuPct: 89 }, noCpuLimit), []);
+});
+
 test("healthVerdict: without a live CPU reading a high load holds as before", () => {
     assert.deepEqual(texts({ ...roomy, load: 9, busyCpuPct: null }), ["load too high: 9.0 now, 8.0 allowed"]);
     assert.deepEqual(texts({ ...roomy, load: 9, busyCpuPct: Number.NaN }), ["load too high: 9.0 now, 8.0 allowed"]);
