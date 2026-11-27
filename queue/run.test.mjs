@@ -267,7 +267,7 @@ test("run and status: a high load with an idle CPU starts the job, with a busy C
     const status = (reading) => {
         const printed = [], asked = [];
         cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return reading; }, print: (text) => printed.push(text) });
-        assert.deepEqual(asked, [{ limits: box.ctx.settings.health }], "status takes the reading with the gate limits");
+        assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null }], "status takes the reading with the gate limits");
         return printed.at(-1);
     };
     const start = fakeClock(), d = makeDeps(box, { now: start.now, sleep: start.sleep, readHealth: () => calmed });
@@ -279,6 +279,18 @@ test("run and status: a high load with an idle CPU starts the job, with a busy C
     const why = "load too high: 14.8 now, 8.0 allowed; CPU 97% busy now";
     assert.deepEqual([code, held.said.at(-1)], [75, `gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit`]);
     assert.equal(status(busy), `gate: shut; ${why}`);
+});
+
+test("status: measures the CPU against the CPU times saved with the shared reading, and leaves the file as it was", () => {
+    const box = sandbox();
+    const cpuTimes = { at: 40_000, cpus: [{ times: { user: 100, nice: 0, sys: 50, idle: 850, irq: 0 } }] };
+    const saved = JSON.stringify({ at: 40_000, reading: { load: 1, cores: 4, freePct: 70, diskGB: 100, battery: null }, cpuTimes });
+    writeFileSync(box.ctx.files.healthCache, saved);
+    const asked = [];
+    const reading = { load: 1, cores: 4, busyCpuPct: null, freePct: 70, diskGB: 100, battery: null };
+    cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return reading; }, print: () => {} });
+    assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: cpuTimes }]);
+    assert.equal(readFileSync(box.ctx.files.healthCache, "utf8"), saved);
 });
 
 test("run: the journal line stores the fingerprint as fp, the name older copies of the queue read", async () => {

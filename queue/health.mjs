@@ -2,7 +2,9 @@
 // healthVerdict() judges a reading and names each failed limit; readHealth() takes the reading; cachedHealth()
 // shares one reading between jobs that wait at the same time. The 1-minute load lags behind: it stays high for a while
 // after heavy work has ended. So a high load holds a job only while the CPU is also busy right now.
-import { probeBusyCpuPct, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText } from "./probes.mjs";
+import {
+    cpuBusyPct, probeBusyCpuPct, probeCpuTimes, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText,
+} from "./probes.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
@@ -62,34 +64,63 @@ export function readBattery(probe = probePowerText) {
     } catch { return null; }
 }
 
-/** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
- *  The live CPU reading takes about a second, so it is taken only when limits (the health settings) are given, the
- *  load is above its limit and no other limit already holds a job; otherwise busyCpuPct is null. */
-export function readHealth({ probes = {}, limits = null } = {}) {
-    const read = {
-        load: probeLoad, cpu: probeBusyCpuPct, memory: probeMemoryFreePct, disk: probeDiskFreeGB,
-        battery: readBattery, ...probes,
-    };
-    const { load, cores } = read.load();
-    const rest = { freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
-    const loadHolds = limits && load > cores * limits.loadPerCore;
-    const othersHold = loadHolds && !healthVerdict({ load: 0, cores, ...rest }, limits).ok;
-    const busyCpuPct = loadHolds && !othersHold ? read.cpu() : null;
-    return { load, cores, busyCpuPct, ...rest };
-}
-
 /** The oldest shared reading a job may start on, whatever the poll time. */
 export const MAX_SHARED_READING_MS = 5000;
 
+/** The shortest span of saved CPU times a live CPU reading is measured over. */
+export const MIN_CPU_SPAN_MS = 500;
+
+/** CPU times now, or null when they cannot be read. */
+function cpuTimesNow(read) {
+    try { return read.cpuTimes(); } catch { return null; }
+}
+
+/** { busyCpuPct, cpuTimes }: the live CPU reading and the CPU times it ended on. Saved CPU times (since) that are
+ *  between MIN_CPU_SPAN_MS and MAX_SHARED_READING_MS old give the share at once; otherwise the cpu probe takes its
+ *  own reading, which waits about a second. */
+function busyCpuNow(since, read) {
+    const times = cpuTimesNow(read);
+    const age = times?.at - since?.at;
+    if (Array.isArray(since?.cpus) && age >= MIN_CPU_SPAN_MS && age <= MAX_SHARED_READING_MS) {
+        const busyCpuPct = cpuBusyPct(since.cpus, times.cpus);
+        if (busyCpuPct != null) return { busyCpuPct, cpuTimes: times };
+    }
+    const busyCpuPct = read.cpu();
+    return { busyCpuPct, cpuTimes: cpuTimesNow(read) };
+}
+
+/** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
+ *  The live CPU reading is taken only when limits (the health settings) are given, the load is above its limit and
+ *  no other limit already holds a job; otherwise busyCpuPct is null. With limits the reading also carries cpuTimes,
+ *  the CPU times it ended on; handed back as cpuSince to a later reading, they let that reading measure the CPU
+ *  without waiting. */
+export function readHealth({ probes = {}, limits = null, cpuSince = null } = {}) {
+    const read = {
+        load: probeLoad, cpu: probeBusyCpuPct, cpuTimes: probeCpuTimes, memory: probeMemoryFreePct,
+        disk: probeDiskFreeGB, battery: readBattery, ...probes,
+    };
+    const { load, cores } = read.load();
+    const rest = { freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
+    if (!limits) return { load, cores, busyCpuPct: null, ...rest };
+    const loadHolds = load > cores * limits.loadPerCore;
+    const othersHold = loadHolds && !healthVerdict({ load: 0, cores, ...rest }, limits).ok;
+    const { busyCpuPct, cpuTimes } = loadHolds && !othersHold
+        ? busyCpuNow(cpuSince, read)
+        : { busyCpuPct: null, cpuTimes: cpuTimesNow(read) };
+    return { load, cores, busyCpuPct, ...rest, cpuTimes };
+}
+
 /** A reading shared through a file in the state folder, so jobs that wait at the same time take one reading per
  *  poll between them instead of one each. A saved reading is used while it is younger than maxAgeMs (the poll
- *  time) and than MAX_SHARED_READING_MS; an older one is read fresh. A cache that cannot be read or written only
- *  means a fresh reading. */
-export function cachedHealth(file, maxAgeMs, read = readHealth, now = Date.now()) {
+ *  time) and than MAX_SHARED_READING_MS; an older one is read fresh. The file also keeps the CPU times of the last
+ *  reading, which the next reading measures the CPU against, and the time a reading finished, so a reading that
+ *  took a while is not already old when it is saved. A cache that cannot be read or written only means a fresh
+ *  reading. read is handed { cpuSince }. clock gives the time now. */
+export function cachedHealth(file, maxAgeMs, read = readHealth, clock = Date.now) {
     const saved = readJson(file, null);
-    const age = now - saved?.at;
+    const age = clock() - saved?.at;
     if (saved?.reading && age >= 0 && age < Math.min(maxAgeMs, MAX_SHARED_READING_MS)) return saved.reading;
-    const reading = read();
-    try { writeJsonAtomic(file, { at: now, reading }); } catch { /* the next poll reads again */ }
+    const { cpuTimes, ...reading } = read({ cpuSince: saved?.cpuTimes ?? null });
+    try { writeJsonAtomic(file, { at: clock(), reading, cpuTimes }); } catch { /* the next poll reads again */ }
     return reading;
 }

@@ -324,7 +324,9 @@ If the charger cannot keep up and the charge keeps falling, the battery limit ap
 
 The 1-minute load average lags: after heavy work ends it stays high for up to a minute while the CPU is already
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
-of the CPU times one second apart, and holds the job only when that share is at or above `health.busyCpuPct`. The
+of the CPU times, and holds the job only when that share is at or above `health.busyCpuPct`. Each health reading
+keeps the CPU times it ended on in `health.json`. When those are between half a second and 5 seconds old, the next
+reading measures the CPU since then and does not wait; otherwise it takes two readings one second apart. The
 message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the
 load is inside its limit, the CPU is not measured and the load never holds a job. The CPU is measured after memory,
 disk and battery, and not at all when one of those already holds the job. When the CPU is not measured or cannot be
@@ -534,7 +536,7 @@ Environment variables:
 | `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
-| `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken. Other waiting jobs reuse it for up to `pollMs`, and never once it is 5 seconds old. |
+| `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
 A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.

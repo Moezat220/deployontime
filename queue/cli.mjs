@@ -13,6 +13,7 @@ import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
 import { EXIT, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
+import { readJson } from "./files.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". */
@@ -53,10 +54,12 @@ export function historyRow(name, t) {
 
 const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
 
-/** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`. */
+/** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`, and
+ *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. */
 export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
     const { holders, queue } = snapshot({ dirs: files });
-    const health = healthVerdict(read({ limits: settings.health }), settings.health);
+    const cpuSince = readJson(files.healthCache, null)?.cpuTimes ?? null;
+    const health = healthVerdict(read({ limits: settings.health, cpuSince }), settings.health);
     const gate = gateReason({ holders, health }, settings.slots);
     for (const line of statusLines({ holders, queue, gate, max: settings.slots })) print(line);
     return 0;
@@ -110,7 +113,7 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
     if (command === "history") return cmdHistory(args, ctx);
     const { settings, files } = ctx;
-    const readGateHealth = () => readHealth({ limits: settings.health });
+    const readGateHealth = (options) => readHealth({ ...options, limits: settings.health });
     const deps = realDeps({
         // Jobs that wait at the same time share one health reading per poll.
         readHealth: () => cachedHealth(files.healthCache, settings.pollMs, readGateHealth),
