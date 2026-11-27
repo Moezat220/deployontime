@@ -326,8 +326,9 @@ The 1-minute load average lags: after heavy work ends it stays high for up to a 
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
 of the CPU times one second apart, and holds the job only when that share is at or above `health.busyCpuPct`. The
 message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the
-load is inside its limit, the CPU is not measured and the load never holds a job. When the CPU cannot be measured,
-a load above its limit holds the job as the load alone would.
+load is inside its limit, the CPU is not measured and the load never holds a job. The CPU is measured after memory,
+disk and battery, and not at all when one of those already holds the job. When the CPU is not measured or cannot be
+measured, a load above its limit holds the job as the load alone would.
 
 When a value cannot be read, such as on a computer with no battery or when a tool does not answer, that check is
 left out and never holds a job, so it protects nothing until it can be read again. A reading of 0, such as a full

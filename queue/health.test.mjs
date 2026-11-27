@@ -112,6 +112,22 @@ test("readHealth: takes the live CPU reading only when the load is above its lim
     assert.deepEqual([noLimits.busyCpuPct, cpuReads], [null, 1]);
 });
 
+test("readHealth: takes the live CPU reading last, and not at all when another limit already holds", () => {
+    const order = [];
+    const probe = (name, value) => () => { order.push(name); return value; };
+    const probes = {
+        load: probe("load", { load: 30, cores: 4 }), memory: probe("memory", 71), disk: probe("disk", 50),
+        battery: probe("battery", null), cpu: probe("cpu", 34),
+    };
+    assert.equal(readHealth({ probes, limits: LIMITS }).busyCpuPct, 34);
+    assert.deepEqual(order, ["load", "memory", "disk", "battery", "cpu"]);
+    for (const shut of [{ memory: () => 3 }, { disk: () => 1 }, { battery: () => ({ onBattery: true, pct: 5, plugged: false }) }]) {
+        const reading = readHealth({ probes: { ...probes, ...shut, cpu: assert.fail }, limits: LIMITS });
+        assert.equal(reading.busyCpuPct, null);
+        assert.deepEqual(gates(reading).includes("load"), true, "the load still holds as the load alone would");
+    }
+});
+
 test("cachedHealth: the shared reading carries the live CPU reading, so waiters do not each take one", () => {
     const file = join(tempDir("health"), "health.json");
     let cpuReads = 0;

@@ -63,16 +63,19 @@ export function readBattery(probe = probePowerText) {
 }
 
 /** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
- *  The live CPU reading takes about a second, so it is taken only when limits (the health settings) are given and
- *  the load is above its limit; otherwise busyCpuPct is null. */
+ *  The live CPU reading takes about a second, so it is taken only when limits (the health settings) are given, the
+ *  load is above its limit and no other limit already holds a job; otherwise busyCpuPct is null. */
 export function readHealth({ probes = {}, limits = null } = {}) {
     const read = {
         load: probeLoad, cpu: probeBusyCpuPct, memory: probeMemoryFreePct, disk: probeDiskFreeGB,
         battery: readBattery, ...probes,
     };
     const { load, cores } = read.load();
-    const busyCpuPct = limits && load > cores * limits.loadPerCore ? read.cpu() : null;
-    return { load, cores, busyCpuPct, freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
+    const rest = { freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
+    const loadHolds = limits && load > cores * limits.loadPerCore;
+    const othersHold = loadHolds && !healthVerdict({ load: 0, cores, ...rest }, limits).ok;
+    const busyCpuPct = loadHolds && !othersHold ? read.cpu() : null;
+    return { load, cores, busyCpuPct, ...rest };
 }
 
 /** The oldest shared reading a job may start on, whatever the poll time. */
