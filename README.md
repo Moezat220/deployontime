@@ -181,7 +181,7 @@ folder the server starts in, and its jobs are handed that absolute path.
 | `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
 | `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
 | `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix` | Starts `dotime-queue run` in the background and returns a job id at once |
-| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed run of a flaky check), and the last lines of its output |
+| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed or refused run of a flaky check), and the last lines of its output |
 
 `cwd` is an absolute path to an existing folder; without it, the folder the server was started in is used. The label
 is `"<project>: <task>"`. The command is a list of words and never goes through a shell. A job from `queue_run` waits

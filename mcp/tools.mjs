@@ -105,7 +105,7 @@ export const TOOLS = Object.freeze([
         description: "The state of a job started with queue_run: starting, waiting, running, finished or lost (its "
             + "runner ended without a result). For a finished job: the exit code and the outcome from the queue "
             + "journal (ran, skipped, refused, timed-out, gave-up, left, stopped, could-not-start). flaky is null, or "
-            + "for a failed run of a check that also passed on the same clean commit, the counts and a note. Also the "
+            + "for a failed or refused run of a check that also passed on the same clean commit, the counts and a note. Also the "
             + "last lines of its output.",
         inputSchema: {
             type: "object",
