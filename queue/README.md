@@ -48,6 +48,9 @@ On Linux the steps are the same. When `npm link` stops with a permission error, 
 users; run it with a Node from a version manager, or after `npm config set prefix ~/.local` with `~/.local/bin` on
 your path.
 
+To tell the agents of a project to use the queue, run [`dotime-queue setup`](#setup) in that project's folder:
+without `--write` it shows what it would add to `AGENTS.md` and `CLAUDE.md`, with `--write` it adds it.
+
 Without `npm link`, call `node <path to the clone>/queue/cli.mjs` from any folder. The `queue/` folder needs nothing
 outside itself. The examples below use `dotime-queue`.
 
@@ -327,6 +330,41 @@ the `DOTIME_TZ` zone, UTC by default. `--days` takes a whole number of 1 or more
 `YYYY-MM-DD`; anything else exits 2. The median and p90 are nearest-rank percentiles, the same ones the run limits
 use.
 
+### `setup`
+
+```
+dotime-queue setup [--write] [--cwd <dir>] [--mcp]
+```
+
+Puts the queue instruction into a project's agent instruction files, so the coding agents that work in it start
+their heavy commands through the queue. It looks in the project folder (the current folder, or the one `--cwd`
+names) for `AGENTS.md` and `CLAUDE.md`. Each one it finds gets the instruction block; when neither exists,
+`AGENTS.md` is created with the block alone. No other agent file is looked for.
+
+Without `--write`, setup is a dry run: it prints `would create`, `would add the block to` or `would update the block
+in` for each file, then the block, and changes nothing. With `--write` it makes those changes and prints `created`,
+`added the block to`, `updated the block in` or `unchanged:` for each file, then a `changed:` line that names every
+file it wrote, or `changed: nothing`.
+
+The block starts with the line `<!-- dotime-queue setup: begin; ... -->` and ends with
+`<!-- dotime-queue setup: end -->`. A file without the block gets it at the end, after a blank line; a file with it
+gets only the lines from the begin marker to the end marker replaced. Every other byte of the file stays as it was,
+so running setup again changes nothing until the block's text changes in a newer version. A file whose lines end in
+CRLF gets the block in CRLF too. A file with a begin marker and no end marker, with two blocks, or with the end
+before the begin, is not changed: fix the markers by hand.
+
+setup writes only inside the project folder, and only the files it names. A `CLAUDE.md` that is a link to
+`AGENTS.md` is written once; an agent file that is a link to a file outside the project folder is refused. Before
+anything is written, every file to change is checked: when one cannot be read or written (a read-only file, for
+example), setup names it, writes nothing and exits 1. It reads no settings and never touches the state folder.
+
+`--mcp` also prints the settings for the [MCP server](../README.md#use-with-an-mcp-client): the generic
+`mcpServers` entry with `"command": "dotime-mcp"`, the command that adds it to Claude Code, and the entry for a
+clone that was not linked, with the full path of its `mcp/server.mjs`. It writes no MCP settings file.
+
+setup exits 0 when it is done, also as a dry run, 1 when a file cannot be read or written, and 2 for an unknown
+option, a `--cwd` that is not an existing folder, or, without `--cwd`, a current folder that was removed.
+
 ## Projects and kinds
 
 The project of a job is the label text before the colon. That text may be at most 40 characters: a longer one is
@@ -424,14 +462,15 @@ changes only such untracked files, the code counts as unchanged: pass `--after-f
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
 | 0 | Also a `test` or `lint` job that was skipped because it already passed on this commit; see [`run`](#run). |
-| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` without `--cwd`, from a folder that was removed. |
+| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` and `setup` without `--cwd`, from a folder that was removed. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |
 | 127 | The job's command could not be started. Journalled as `could-not-start`, not as a failure. |
 | 130 | Left the line because of a signal. |
 
-`passed` exits 0 with a stamp and 1 without.
+`passed` exits 0 with a stamp and 1 without. `setup` exits 1 when an agent file cannot be read or written; see
+[`setup`](#setup).
 
 ## Message format
 
@@ -770,11 +809,12 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
-| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `setup` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
+| `setup.mjs` | The queue instruction block and where `setup` puts it in a project's agent files; the MCP settings it prints. | library | Reads and, with `--write`, writes `AGENTS.md` and `CLAUDE.md` in the project folder. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
 | `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |

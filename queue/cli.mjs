@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
-// and gate; `passed` looks up a pass stamp; `history` sums up the journal. queue/README.md describes each in full.
+// and gate; `passed` looks up a pass stamp; `history` sums up the journal; `setup` puts the queue instruction into a
+// project's agent files. queue/README.md describes each in full.
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
@@ -12,6 +13,7 @@ import { notify } from "./notify.mjs";
 import { markerOf } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
+import { applyPlan, blockText, mcpLines, planFolder } from "./setup.mjs";
 import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
@@ -122,6 +124,43 @@ function cmdHistory(args, { files, tz }) {
     return 0;
 }
 
+/** `setup`: shows, or with --write makes, the changes to the project's agent files, then with --mcp prints the MCP
+ *  settings. Exits 0 when done, 1 when a file cannot be read or written (nothing is written then, unless a write
+ *  itself fails part way, which it names), 2 when the folder in --cwd does not exist. */
+export function cmdSetup(args, { cwd = () => process.cwd(), print = console.log, warn = say, writeFile } = {}) {
+    const write = args.includes("--write");
+    const named = opt(args, "--cwd");
+    let dir = named;
+    if (dir === undefined) {
+        try {
+            dir = cwd();
+        } catch {
+            warn("the current folder was removed; run setup from a folder that exists, or name one with --cwd <dir>");
+            return EXIT.usage;
+        }
+    }
+    const plan = planFolder(dir);
+    if (plan.error) {
+        warn(`setup: ${plan.error}`);
+        return plan.folder ? EXIT.usage : 1;
+    }
+    print(`setup: project folder ${plan.root}`);
+    const done = applyPlan(plan, { write, ...(writeFile ? { writeFile } : {}) });
+    for (const line of done.lines) print(line);
+    if (done.error) {
+        print(`changed: ${done.changed.join(", ") || "nothing"}`);
+        warn(`setup: ${done.error}`);
+        return 1;
+    }
+    if (write) print(`changed: ${done.changed.join(", ") || "nothing"}`);
+    else {
+        print("dry run: nothing was changed; add --write to make these changes. The block:");
+        for (const line of blockText().split("\n")) print(line);
+    }
+    if (args.includes("--mcp")) for (const line of ["", ...mcpLines()]) print(line);
+    return 0;
+}
+
 /** Runs one subcommand and resolves with its exit code. Nothing in here or below ends the process: the one call of
  *  process.exit() is at the end of this file. */
 export async function main(args = process.argv.slice(2)) {
@@ -135,6 +174,8 @@ export async function main(args = process.argv.slice(2)) {
         say(badFlag);
         return EXIT.usage;
     }
+    // setup reads no settings and never touches the state folder.
+    if (command === "setup") return cmdSetup(args);
     // The settings, the state folder and the zone are read once here and handed to the command. The current folder
     // is read only by the commands that use it, so status and history still work in a folder that was removed, and
     // `run` reads it only after its arguments were found valid.

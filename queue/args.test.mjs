@@ -91,7 +91,16 @@ test("flagError: run ignores everything behind the --, which belongs to the job"
 });
 
 test("FLAGS: lists the subcommands the usage text names", () => {
-    assert.deepEqual(Object.keys(FLAGS), ["run", "status", "passed", "history"]);
+    assert.deepEqual(Object.keys(FLAGS), ["run", "status", "passed", "history", "setup"]);
+});
+
+test("flagError: setup takes --cwd with a value and --write and --mcp alone", () => {
+    assert.equal(flagError(["setup", "--write", "--mcp", "--cwd", "/srv/shop-api"]), null);
+    assert.equal(flagError(["setup", "--wirte"]), "unknown option --wirte");
+    assert.equal(flagError(["setup", "--cwd"]), "option --cwd needs a value");
+    assert.equal(flagError(["setup", "--write=yes"]), "option --write takes no value");
+    assert.equal(flagError(["setup", "--write", "--write"]), "option --write is given twice");
+    assert.equal(flagError(["setup", "now"]), 'unexpected word "now"');
 });
 
 test("opt: reads a flag in either spelling, in front of the -- only", () => {

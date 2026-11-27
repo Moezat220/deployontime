@@ -16,6 +16,10 @@ export const USAGE = [
     "  dotime-queue status",
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
+    "  dotime-queue setup [--write] [--cwd <dir>] [--mcp]",
+    "      --write              add the queue instruction to AGENTS.md and CLAUDE.md (without it: only show)",
+    "      --cwd <dir>          the project folder, in place of the current one",
+    "      --mcp                also print the MCP client settings for dotime-mcp",
     "  dotime-queue help",
 ].join("\n");
 
@@ -31,6 +35,7 @@ export const FLAGS = Object.freeze({
     status: { values: [], switches: [] },
     passed: { values: ["--match", "--cwd"], switches: [] },
     history: { values: ["--days", "--day"], switches: [] },
+    setup: { values: ["--cwd"], switches: ["--write", "--mcp"] },
 });
 
 /** The flags of the two scripts that run beside the queue, which take switches only. */
