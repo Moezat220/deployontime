@@ -8,6 +8,8 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-339933" alt="node 22 or newer">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="platform macOS and Linux">
   <img src="https://img.shields.io/badge/dependencies-none-brightgreen" alt="no dependencies">
+  <a href="https://www.npmjs.com/package/deployontime"><img src="https://img.shields.io/npm/v/deployontime" alt="npm version"></a>
+  <a href="https://glama.ai/mcp/servers/Moezat220/deployontime"><img src="https://glama.ai/mcp/servers/Moezat220/deployontime/badges/score.svg" alt="deployontime MCP server on Glama"></a>
 </p>
 
 <p align="center">
