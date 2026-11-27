@@ -340,8 +340,17 @@ const saveMarker = (file, next = null) => `const e = process.env; require("node:
 test("run: one job that starts 20 nested runs side by side never has more than nestedPerJob of them running", async () => {
     const box = sandbox({ config: { slots: 1, nestedPerJob: 2 } }), times = join(box.work, "times");
     mkdirSync(times);
-    const shard = (i) => `const fs = require("node:fs"), dir = ${J(times)}; fs.writeFileSync(dir + "/${i}.start", String(Date.now())); `
-        + `setTimeout(() => fs.writeFileSync(dir + "/${i}.end", String(Date.now())), 250);`;
+    // Each shard, once started, holds its place until all 20 runs have come in: each has a note in the nested folder
+    // from the moment it arrives, and a shard that ended has its end file. So a slow machine that brings the runs up
+    // one by one still has a second shard start beside the first and the rest wait, as many as the places allow.
+    // The hold is bounded, so a run that never comes in fails the counts below instead of hanging the test.
+    const shard = (i) => `const fs = require("node:fs"), dir = ${J(times)}, notes = ${J(join(box.home, "nested"))}; `
+        + `fs.writeFileSync(dir + "/${i}.start", String(Date.now())); `
+        + `const count = (folder, re) => fs.readdirSync(folder).filter((name) => re.test(name)).length; `
+        + `const arrived = () => count(notes, /^nested-\\d+\\.json$/) + count(dir, /\\.end$/); `
+        + `const holdUntil = Date.now() + 10000; `
+        + `const t = setInterval(() => { if (arrived() < 20 && Date.now() < holdUntil) return; clearInterval(t); `
+        + `setTimeout(() => fs.writeFileSync(dir + "/${i}.end", String(Date.now())), 250); }, 20);`;
     const words = Array.from({ length: 20 }, (_, i) => [CLI, "run", "--label", `docs-site: shard ${i}`, "--max-wait", "0", "--", NODE, "-e", shard(i)]);
     const fanOut = `const { spawn } = require("node:child_process"); const all = ${J(words)}; `
         + `Promise.all(all.map((words) => new Promise((done) => spawn(${J(NODE)}, words, { stdio: "ignore" }).on("exit", done))))`
