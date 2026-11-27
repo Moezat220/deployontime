@@ -1,3 +1,4 @@
+import { constants as osConstants } from "node:os";
 // The end-to-end tests start the real cli.mjs. Each one gets its own state folder inside the temp folder, short timers
 // and health limits so wide that no reading of this computer shuts the gate, both from that folder's config.json,
 // and notices that go to the log file only. Tests that need a made-up health reading or a clock that jumps ahead
@@ -213,10 +214,11 @@ test("run: passes the job's output and exit code through and writes one journal 
     assert.deepEqual([slots(box), readdirSync(join(box.home, "line"))], [[], []]);
 });
 
-test("run: a job that ends by SIGUSR1 exits 158 and opens no debugger on the way", async () => {
+test("run: a job that ends by SIGUSR1 exits 128 plus its number and opens no debugger on the way", async () => {
     const box = sandbox();
     const result = await cli(box, ["run", "--label", "shop-api: suite", "--", "/bin/sh", "-c", "kill -USR1 $$"]);
-    assert.equal(result.code, 158);
+    // The signal number differs by system (30 on macOS, 10 on Linux), so the exit code does too.
+    assert.equal(result.code, 128 + osConstants.signals.SIGUSR1);
     assert.equal(result.stderr.includes("Debugger"), false);
 });
 
