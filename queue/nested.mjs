@@ -1,17 +1,20 @@
-// Nested runs: a job started by the queue that itself calls `dotime-queue run`. The queue puts a marker in the job's
-// environment that names what the job runs in: its slot, or for a nested run its own note in the nested folder. A run
-// that finds the marker is nested in that job, its parent: it takes no slot, but waits for one of the parent's few
+// Nested runs: a job started by the queue that itself calls `dotime-queue run`. The queue puts two markers in the job's
+// environment: one that names the slot of the outermost job, as every copy of the queue reads it, and one that names
+// the job's direct parent: that same slot, or for a job of a nested run that run's own note in the nested folder. A
+// run that finds a marker is nested in that job, its parent: it takes no slot, but waits for one of the parent's few
 // places for nested runs. That holds only while the marker is genuine: the slot or note it names is held by a job that
 // has started, and the process holding it is one of the run's own ancestors. Anything else, such as a marker copied
-// into another shell or left over from a job that has ended, is ignored, so the marker cannot be used to skip the
+// into another shell or left over from a job that has ended, is ignored, so the markers cannot be used to skip the
 // line from outside.
 import { basename } from "node:path";
 import { probeProcessTree } from "./probes.mjs";
 import { ancestors } from "./proctree.mjs";
 import { psRows } from "./ps.mjs";
 
-/** The environment variable that carries the marker into a job. */
+/** The environment variable that carries the marker of the outermost job's slot into a job. */
 export const JOB_MARKER = "DOTIME_JOB";
+/** The environment variable that carries the marker of a job's direct parent: a slot, or a nested run's note. */
+export const PARENT_MARKER = "DOTIME_PARENT";
 
 const SLOT_FORM = /^slot-\d+$/;
 const NESTED_FORM = /^nested-\d+$/;
@@ -45,6 +48,27 @@ export function outerJob({ marker, pid, holders, nested = [], rows = null }) {
     const above = ancestors(rows ?? psRows(probeProcessTree()), pid).slice(1);
     return above.some((row) => row.pid === holder.pid) ? holder : null;
 }
+
+/** The job a run is nested in, from the markers in env, or null. The direct parent in PARENT_MARKER is tried first;
+ *  when it is missing or not genuine, the slot in JOB_MARKER is, as a job started by a copy of the queue that sets
+ *  only that one hands it on. JOB_MARKER is taken only in the form of a slot. pid, holders, nested and rows: as for
+ *  outerJob(); the process table is read at most once. */
+export function parentJob({ env, pid, holders, nested = [], rows = null }) {
+    const parentMarker = env?.[PARENT_MARKER], slotMarker = env?.[JOB_MARKER];
+    const asked = [parentMarker, typeof slotMarker === "string" && SLOT_FORM.test(slotMarker) ? slotMarker : undefined];
+    let listing = rows;
+    const table = () => (listing ??= psRows(probeProcessTree()));
+    for (const marker of asked) {
+        if (typeof marker !== "string" || !(SLOT_FORM.test(marker) || NESTED_FORM.test(marker))) continue;
+        const found = outerJob({ marker, pid, holders, nested, rows: table() });
+        if (found) return found;
+    }
+    return null;
+}
+
+/** The marker of the slot of the outermost job that parent, the job from outerJob(), runs in: its own slot, or the
+ *  one its note names. */
+export const slotMarkerOf = (parent) => (SLOT_FORM.test(markerOf(parent.file)) ? markerOf(parent.file) : parent.slot);
 
 /** Whether parent, the job from outerJob(), still runs: its slot or note is there with the same pid and start time,
  *  and is still that of a running job. holders and nested: from snapshot(). Once the job has ended its file is gone,

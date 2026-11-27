@@ -158,8 +158,11 @@ test("addNested: notes a nested run, which a snapshot lists apart from the holde
     const note = addNested(process.pid, "docs-site: unit tests", outer, dirs, { now: 7000 });
     addNested(2 ** 30 + 9, "docs-site: lint", outer, dirs);
     const stored = read(note);
-    const fields = [stored.pid, stored.label, stored.outer, stored.outerPid, stored.outerBorn, stored.at, Number.isFinite(stored.born), stored.waiting];
-    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0", 4100, 6000, 7000, true, undefined]);
+    const fields = [
+        stored.pid, stored.label, stored.outer, stored.outerPid, stored.outerBorn, stored.at, Number.isFinite(stored.born), stored.waiting,
+        "slot" in stored,
+    ];
+    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0", 4100, 6000, 7000, true, undefined, false]);
     const snap = snapshot({ dirs, prune: true });
     assert.deepEqual([snap.holders, snap.queue, snap.nested.map((n) => [n.file, n.label])], [[], [], [[note, "docs-site: unit tests"]]]);
     assert.deepEqual(readdirSync(dirs.nested), [`nested-${process.pid}.json`], "the note of a dead run is pruned");
@@ -168,8 +171,8 @@ test("addNested: notes a nested run, which a snapshot lists apart from the holde
 test("addNested: a run that waits for a place is noted as waiting until updateSlot ends the wait", () => {
     const home = tempDir("slots-nested");
     const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };
-    const note = addNested(process.pid, "docs-site: unit tests", { marker: "nested-4101", pid: 4101, born: 6000 }, dirs, { waiting: true });
-    assert.deepEqual([read(note).waiting, read(note).outer], [true, "nested-4101"]);
+    const note = addNested(process.pid, "docs-site: unit tests", { marker: "nested-4101", pid: 4101, born: 6000, slot: "slot-1" }, dirs, { waiting: true });
+    assert.deepEqual([read(note).waiting, read(note).outer, read(note).slot], [true, "nested-4101", "slot-1"], "the note names the outer slot");
     assert.equal(updateSlot(note, process.pid, { waiting: undefined, pgid: 4300 }), true);
     assert.deepEqual([read(note).waiting, read(note).pgid, "waiting" in read(note)], [undefined, 4300, false]);
 });

@@ -262,11 +262,12 @@ test("runJob: a command that cannot start ends with 127 and is journalled as cou
     assert.equal(job.said[0].startsWith("start failed: exit 127, "), true);
 });
 
-test("runJob: the job finds the marker of its slot in DOTIME_JOB, for a run of the queue inside it", async () => {
+test("runJob: the job finds the marker of its slot in DOTIME_JOB and DOTIME_PARENT, for a run of the queue inside it", async () => {
     const box = sandbox(), seen = join(box.work, "marker");
-    const job = startJob(box, [NODE, "-e", `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB)`]);
+    const script = `const e = process.env; require("node:fs").writeFileSync(${JSON.stringify(seen)}, e.DOTIME_JOB + " " + e.DOTIME_PARENT)`;
+    const job = startJob(box, [NODE, "-e", script]);
     assert.equal(await job.run.result, 0);
-    assert.equal(readFileSync(seen, "utf8"), "slot-0");
+    assert.equal(readFileSync(seen, "utf8"), "slot-0 slot-0");
 });
 
 // ---- nested runs: this file's parent stands in for the queue process of the outer job ----
@@ -287,12 +288,13 @@ function nestedBox() {
 }
 const nestedDeps = (box, overrides = {}) => makeDeps(box, { env: { DOTIME_JOB: "slot-0" }, readHealth: assert.fail, ...overrides });
 
-test("run: a nested run takes no slot, joins no line, skips the gate, passes the marker on and journals nested", async () => {
+test("run: a nested run takes no slot, joins no line, skips the gate, passes the markers on and journals nested", async () => {
     const box = nestedBox(), seen = join(box.work, "marker"), d = nestedDeps(box);
-    const script = `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB)`;
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB + " " + process.env.DOTIME_PARENT)`;
     const args = ["run", "--label", "docs-site: unit tests", "--max-wait", "0.01", "--", NODE, "-e", script];
     assert.equal(await runCommand(args, box.ctx, d.deps), 0);
-    assert.equal(readFileSync(seen, "utf8"), `nested-${process.pid}`, "a run nested one level deeper names this run as its parent");
+    assert.equal(readFileSync(seen, "utf8"), `slot-0 nested-${process.pid}`,
+        "the outer slot stays in DOTIME_JOB, and a run nested one level deeper finds this run as its parent");
     assert.deepEqual(d.said, [`nested: inside "docs-site: test suite", pid ${process.ppid}; starts at once: no slot, no place in line, no health gate`]);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.exit, line.nested, line.waitBy, line.waitMin, typeof line.startedAt], ["ran", 0, true, {}, 0, "string"]);
@@ -377,7 +379,8 @@ test("run: a nested run whose parent ends while it waits for a place stops waiti
     takeSlot(other.pid, "shop-api: e2e", 1, {}, box.ctx.files);
     rmSync(blocker);
     await until(() => d.said.some((line) => line.startsWith("in line: position 1")));
-    assert.equal(d.said[1], `parent gone: "docs-site: test suite", pid ${process.ppid}, ended while this run waited for a nested place; joins the line as a normal run`);
+    const gone = `parent gone: "docs-site: test suite", pid ${process.ppid}, ended while this run waited for a nested place`;
+    assert.equal(d.said[1], `${gone}; joins the line as a normal run`);
     assert.equal(d.said[2].endsWith('no free slot: 1 of 1 taken, by "shop-api: e2e"'), true, d.said[2]);
     assert.equal(run.done, false, "it waits for the slot and does not run beside the job in it");
     assert.deepEqual([nestedNotes(box), places(box), readdirSync(join(box.home, "line")).length], [[], [], 1]);

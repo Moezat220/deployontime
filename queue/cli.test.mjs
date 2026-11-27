@@ -295,9 +295,9 @@ const J = JSON.stringify;
 const places = (box) => {
     try { return readdirSync(join(box.home, "places")); } catch { return []; }
 };
-/** A job script that saves the marker it was given in file and then, when next is given, runs those words and exits
- *  the way they did. */
-const saveMarker = (file, next = null) => `require("node:fs").writeFileSync(${J(file)}, process.env.DOTIME_JOB ?? ""); `
+/** A job script that saves the markers it was given in file, as "<DOTIME_JOB> <DOTIME_PARENT>", and then, when next
+ *  is given, runs those words and exits the way they did. */
+const saveMarker = (file, next = null) => `const e = process.env; require("node:fs").writeFileSync(${J(file)}, e.DOTIME_JOB + " " + e.DOTIME_PARENT); `
     + (next ? `const r = require("node:child_process").spawnSync(${J(next[0])}, ${J(next.slice(1))}, { stdio: "inherit" }); process.exit(r.status ?? 1);` : "");
 
 test("run: one job that starts 20 nested runs side by side never has more than nestedPerJob of them running", async () => {
@@ -366,10 +366,11 @@ test("run: three levels of nesting finish with nestedPerJob 1 and one slot, each
     const outer = await cli(box, ["run", "--label", "docs-site: test suite", "--max-wait", "0.05", "--", NODE, "-e", saveMarker(seen[0], level1)]);
     assert.equal(outer.code, 0, outer.stderr);
     assert.equal(outer.stderr.includes("gave up"), false);
-    const markers = seen.map((file) => readFileSync(file, "utf8"));
-    assert.equal(markers[0], "slot-0");
-    for (const n of [1, 2, 3]) assert.match(markers[n], /^nested-\d+$/, `level ${n} is handed its own parent's marker`);
-    assert.equal(new Set(markers).size, 4, "each level names a different parent");
+    const markers = seen.map((file) => readFileSync(file, "utf8").split(" "));
+    assert.deepEqual(markers.map(([slot]) => slot), ["slot-0", "slot-0", "slot-0", "slot-0"], "every level names the outer slot, as older copies read it");
+    assert.equal(markers[0][1], "slot-0");
+    for (const n of [1, 2, 3]) assert.match(markers[n][1], /^nested-\d+$/, `level ${n} is handed its own parent's marker`);
+    assert.equal(new Set(markers.map(([, parent]) => parent)).size, 4, "each level names a different parent");
     const lines = journal(box).map((line) => [line.label, line.outcome, line.exit, line.nested ?? false]);
     assert.deepEqual(lines, [
         ["docs-site: level 3", "ran", 0, true], ["docs-site: level 2", "ran", 0, true], ["docs-site: level 1", "ran", 0, true],
@@ -380,12 +381,12 @@ test("run: three levels of nesting finish with nestedPerJob 1 and one slot, each
 
 test("run: a nested run's marker copied out of its job, or left over after it, is ignored and the run queues as usual", async () => {
     const box = sandbox({ config: { slots: 1 } }), seen = join(box.work, "marker"), release = join(box.work, "release");
-    const waitThenEnd = `require("node:fs").writeFileSync(${J(seen)}, process.env.DOTIME_JOB); ${untilFile(release)}`;
+    const waitThenEnd = `require("node:fs").writeFileSync(${J(seen)}, process.env.DOTIME_PARENT); ${untilFile(release)}`;
     const outer = start(box, ["run", "--label", "docs-site: test suite", "--", ...innerRun("docs-site: unit tests", NODE, "-e", waitThenEnd)]);
     await until(() => existsSync(seen));
     const marker = readFileSync(seen, "utf8");
     assert.match(marker, /^nested-\d+$/);
-    const env = { ...box.env, DOTIME_JOB: marker };
+    const env = { ...box.env, DOTIME_JOB: "slot-0", DOTIME_PARENT: marker };
     const tryWith = (label) => cli(box, ["run", "--label", label, "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"], { env });
     const copied = await tryWith("docs-site: lint");
     assert.deepEqual([copied.code, copied.stdout], [75, ""]);

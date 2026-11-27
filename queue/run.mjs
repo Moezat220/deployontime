@@ -22,7 +22,7 @@ import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } fro
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
-import { JOB_MARKER, markerOf, outerJob, placeKey, stillRunning } from "./nested.mjs";
+import { JOB_MARKER, markerOf, PARENT_MARKER, parentJob, placeKey, slotMarkerOf, stillRunning } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
@@ -190,11 +190,12 @@ export async function waitForPlace(job, deps) {
 }
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
- *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver }, where journal is the
- *  writer from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in
- *  place, so the caller can remove the ones it had until then without a moment in which a signal finds none. The job
- *  finds the marker of its slot in JOB_MARKER. A nested run passes its note in place of a slot, so its job finds the
- *  marker of that note, and the note gets the job's process group and is removed at the end the same way.
+ *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver, slotMarker }, where journal
+ *  is the writer from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers
+ *  are in place, so the caller can remove the ones it had until then without a moment in which a signal finds none.
+ *  The job finds the marker of its slot in JOB_MARKER and in PARENT_MARKER. A nested run passes its note in place of
+ *  a slot and the marker of the outermost job's slot as slotMarker, so its job finds that slot in JOB_MARKER and the
+ *  note in PARENT_MARKER, and the note gets the job's process group and is removed at the end the same way.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
@@ -212,7 +213,7 @@ export function runJob(job, slot, deps) {
     // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const stdio = ["inherit", "inherit", "inherit", "pipe"];
-    const env = { ...process.env, [JOB_MARKER]: markerOf(slot) };
+    const env = { ...process.env, [JOB_MARKER]: job.slotMarker ?? markerOf(slot), [PARENT_MARKER]: markerOf(slot) };
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
@@ -390,9 +391,9 @@ export function jobFolder(ctx, deps) {
 /** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd }; without cwd
  *  the current folder is read, and only after the arguments were found valid, so a usage error is reported the same
  *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
- *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in is nested: once
- *  past the refusal check it runs with no slot, no place in line and no health gate, as soon as a place under that
- *  job is free. */
+ *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in, in
+ *  PARENT_MARKER or JOB_MARKER, is nested: once past the refusal check it runs with no slot, no place in line and no
+ *  health gate, as soon as a place under that job is free. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -420,8 +421,8 @@ export async function runCommand(args, ctx, deps) {
     const rows = parseLines(readLines(files.journal));
     const plan = planJob({ ...request, head: before.head, fingerprint: print }, settings, rows);
     const pid = process.pid;
-    const marker = deps.env?.[JOB_MARKER];
-    const outer = marker ? outerJob({ marker, pid, ...snapshot({ dirs: files }) }) : null;
+    const markers = deps.env?.[PARENT_MARKER] || deps.env?.[JOB_MARKER];
+    const outer = markers ? parentJob({ env: deps.env, pid, ...snapshot({ dirs: files }) }) : null;
     const details = outer ? { ...plan.details, nested: true } : plan.details;
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now,
@@ -534,7 +535,7 @@ async function runNested(job, waitDeps, deps) {
     const { pid, label, outer, files, journal, maxWait, settings } = job;
     const { signals, say } = deps;
     const intro = `nested: inside "${outer.label}", pid ${outer.pid}`;
-    const parent = { marker: markerOf(outer.file), pid: outer.pid, born: outer.born };
+    const parent = { marker: markerOf(outer.file), pid: outer.pid, born: outer.born, slot: slotMarkerOf(outer) };
     const note = addNested(pid, label, parent, files, { waiting: true });
     let place = null;
     const leave = () => {
@@ -551,7 +552,7 @@ async function runNested(job, waitDeps, deps) {
         say(waited.atOnce ? `${intro}; starts at once: no slot, no place in line, no health gate`
             : `${intro}; starts now that a nested place is free: no slot, no place in line, no health gate`);
         updateSlot(note, pid, { waiting: undefined });
-        return { exit: await runJob({ ...job, waitFrom: waited.waitFrom }, note, deps) };
+        return { exit: await runJob({ ...job, waitFrom: waited.waitFrom, slotMarker: parent.slot }, note, deps) };
     } finally {
         leave();
         signals.off("exit", leave);

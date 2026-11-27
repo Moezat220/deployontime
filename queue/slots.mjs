@@ -70,16 +70,17 @@ export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date
     };
 }
 
-/** Notes a nested run, one that runs inside another job and takes no slot itself. outer: { marker, pid, born }, the
- *  marker of the job it runs in, its direct parent (a slot holder or another nested run), and that job's pid and
+/** Notes a nested run, one that runs inside another job and takes no slot itself. outer: { marker, pid, born, slot },
+ *  the marker of the job it runs in, its direct parent (a slot holder or another nested run), and that job's pid and
  *  start time, stored as outer, outerPid and outerBorn so the note is never taken for one of a later job with the same
- *  marker. waiting: the run waits for a place under that job, which updateSlot(file, pid, { waiting: undefined })
- *  ends. The file is named nested-<pid>.json, and its name without the ending is the marker the run hands its own
+ *  marker; slot, when given, is the marker of the outermost job's slot, which the run hands its own job. waiting:
+ *  the run waits for a place under that job, which updateSlot(file, pid, { waiting: undefined }) ends. The file is
+ *  named nested-<pid>.json, and its name without the ending is the marker of the direct parent the run hands its own
  *  job. Returns the file; deleting it removes the note. */
 export function addNested(pid, label, outer, dirs, { waiting = false, now = Date.now() } = {}) {
     mkdirSync(dirs.nested, { recursive: true });
     const file = join(dirs.nested, `nested-${pid}.json`);
-    const from = { outer: outer.marker, outerPid: outer.pid, outerBorn: outer.born };
+    const from = { outer: outer.marker, outerPid: outer.pid, outerBorn: outer.born, ...(outer.slot ? { slot: outer.slot } : {}) };
     writeJsonAtomic(file, { pid, label, ...from, at: now, ...(waiting ? { waiting: true } : {}), ...bornOf(pid) });
     return file;
 }

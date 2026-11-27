@@ -141,7 +141,8 @@ Details:
 **Nested runs.** A job may run the queue itself, for example an `npm test` script that calls `dotime-queue run`, or
 an agent at work inside a queued job. Such an inner run would wait for a slot that its own outer job holds, and with
 one slot it would never get one. So `run` hands every job it starts the variable `DOTIME_JOB`, which names the slot
-the job holds, and a `run` that finds it is a nested run: it takes no slot, joins no line and does not wait for the
+of the outermost job, and the variable `DOTIME_PARENT`, which names the job's direct parent (see below). A `run`
+that finds either is a nested run: it takes no slot, joins no line and does not wait for the
 health gate, because the outer job was already let through. Everything else stays the same: the option checks, the
 refusal of a check that failed twice, a run limit of its own, the handling of INT, TERM and HUP, and a journal line,
 marked `nested: true`, so pass stamps and `history` see it as usual. A nested run says so on a `nested:` line when
@@ -157,14 +158,17 @@ A waiting nested run checks on every poll that its parent still runs. If the par
 inside a job: it prints a `parent gone:` line and joins the line as a normal run, waits for a slot and the health
 gate, and is journalled without `nested`. Its `--max-wait` limit still counts from when it began to wait.
 A nested run inside a nested run counts against its own parent, not against the outermost job: each nested run hands
-its job a `DOTIME_JOB` that names the nested run itself. So with `nestedPerJob` at 1 several levels of nesting still
-run, each level in the one place of the level above.
+its job a `DOTIME_PARENT` that names the nested run itself, while `DOTIME_JOB` keeps naming the outer slot at every
+level. So with `nestedPerJob` at 1 several levels of nesting still run, each level in the one place of the level
+above. A run looks at `DOTIME_PARENT` first, and at `DOTIME_JOB` when the first is missing or fails the check below;
+`DOTIME_JOB` is only taken when it names a slot. An older copy of the queue that shares the state folder and reads
+only `DOTIME_JOB` therefore still finds the outer slot at any depth, and runs nested as it did before.
 
-`DOTIME_JOB` is trusted only while the slot or nested run it names belongs to a job that has started, whose file
-names its start time and process group, and the process holding that slot or running that nested run is an ancestor
-of the new run. A nested run that still waits for a place is not trusted as a parent yet. A copy of the variable in
-another shell, or one left in a program that outlived its job, fails that check, and that run queues as usual. The
-variable therefore cannot be used to skip the line from outside a job.
+Each of the two variables is trusted only while the slot or nested run it names belongs to a job that has started,
+whose file names its start time and process group, and the process holding that slot or running that nested run is
+an ancestor of the new run. A nested run that still waits for a place is not trusted as a parent yet. A copy of the
+variables in another shell, or one left in a program that outlived its job, fails that check, and that run queues as
+usual. The variables therefore cannot be used to skip the line from outside a job.
 
 ### `status`
 
@@ -568,14 +572,15 @@ Environment variables:
 | `DOTIME_TZ` | `UTC` | Time zone (an IANA zone name) for printed times and for calendar days. |
 | `DOTIME_NOTIFY` | not set | `log`: notices go to the log file only. |
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
-| `DOTIME_JOB` | set by `run` | Given to each job; names the slot it holds, or for a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
+| `DOTIME_JOB` | set by `run` | Given to each job; names the slot of the outermost job, also inside nested runs. Not a setting: see nested runs under [`run`](#run). |
+| `DOTIME_PARENT` | set by `run` | Given to each job; names its direct parent: the slot it holds, or for the job of a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
 
 ## Files in the state folder
 
 | File | Content |
 | --- | --- |
 | `config.json` | Settings. Optional. |
-| `nested/` | One small file per nested run while it waits for a place and while it runs, so `status` can show it under its parent job; it names the slot or nested run, pid and start time of that job, so it never shows under a later job in the same slot. Its name without `.json` is the `DOTIME_JOB` the run hands its own job. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
+| `nested/` | One small file per nested run while it waits for a place and while it runs, so `status` can show it under its parent job; it names the slot or nested run, pid and start time of that job, so it never shows under a later job in the same slot. Its name without `.json` is the `DOTIME_PARENT` the run hands its own job, and it names the outer slot the run hands on in `DOTIME_JOB`. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
 | `places/` | One small file per place a running nested run holds under its parent job, named after that job's marker and start time and the place number. Claimed and freed the same way as a slot, and the file of a run that died goes the same way as one in `slots/`. |
 | `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
 | `journal.jsonl` | One line per job. |

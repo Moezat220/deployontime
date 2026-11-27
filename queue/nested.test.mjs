@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isolateProcess } from "./testkit.mjs";
 
 isolateProcess("nested");
-const { JOB_MARKER, markerOf, outerJob, placeKey, stillRunning } = await import("./nested.mjs");
+const { JOB_MARKER, markerOf, outerJob, PARENT_MARKER, parentJob, placeKey, slotMarkerOf, stillRunning } = await import("./nested.mjs");
 
 // A run (pid 5104) started by a shell (5103) inside a job (5102) under its wrapper (5101), whose queue process is
 // 5100; 5200 is an unrelated process that holds the other slot.
@@ -19,7 +19,7 @@ const find = (marker, pid = 5104) => outerJob({ marker, pid, holders: HOLDERS, r
 
 test("markerOf: the slot file's name without its folder and ending", () => {
     assert.equal(markerOf("/state/slots/slot-3.json"), "slot-3");
-    assert.equal(JOB_MARKER, "DOTIME_JOB");
+    assert.deepEqual([JOB_MARKER, PARENT_MARKER], ["DOTIME_JOB", "DOTIME_PARENT"]);
 });
 
 test("outerJob: a marker is genuine only for a held slot whose holder is an ancestor of the run", () => {
@@ -67,6 +67,28 @@ test("outerJob: a nested run's marker names its own note and is checked as stric
     assert.equal(findDeep("nested-5104", 5108, []), null, "notes are only looked up among the nested runs");
     assert.equal(outerJob({ marker: "slot-0", pid: 5108, holders: [], nested: [{ ...NOTE, file: "/state/nested/slot-0.json" }], rows: DEEP_ROWS }), null,
         "a slot marker is never looked up among the notes");
+});
+
+test("parentJob: the direct parent in DOTIME_PARENT first, else the slot in DOTIME_JOB, each checked as strictly", () => {
+    const find = (env, pid = 5108) => parentJob({ env, pid, holders: HOLDERS, nested: [NOTE, OTHER_NOTE], rows: DEEP_ROWS })?.label ?? null;
+    assert.equal(find({ DOTIME_JOB: "slot-0", DOTIME_PARENT: "nested-5104" }), "docs-site: unit tests");
+    assert.equal(find({ DOTIME_JOB: "slot-0" }), "docs-site: test suite", "a job started by a copy that sets only DOTIME_JOB");
+    assert.equal(find({ DOTIME_JOB: "slot-0", DOTIME_PARENT: "slot-0" }), "docs-site: test suite", "the job of a slot");
+    assert.equal(find({ DOTIME_JOB: "slot-0", DOTIME_PARENT: "nested-5300" }), "docs-site: test suite",
+        "a parent marker copied from another nested run falls back to the slot");
+    assert.equal(find({ DOTIME_JOB: "slot-1", DOTIME_PARENT: "nested-5300" }), null, "neither is an ancestor");
+    assert.equal(find({ DOTIME_JOB: "nested-5104" }), null, "DOTIME_JOB names only a slot");
+    assert.equal(find({ DOTIME_JOB: "slot-0", DOTIME_PARENT: "nested-5104" }, 5200), null, "asked from outside the job");
+    assert.equal(find({}), null);
+    let reads = 0;
+    const rows = { get byPid() { reads++; return new Map(); } };
+    parentJob({ env: { DOTIME_JOB: "../slot-0", DOTIME_PARENT: "nested-x" }, pid: 5108, holders: HOLDERS, rows });
+    assert.equal(reads, 0, "malformed markers are dropped before any process listing is read");
+});
+
+test("slotMarkerOf: a slot holder's own slot, or the slot a nested run's note names", () => {
+    assert.equal(slotMarkerOf(HOLDERS[1]), "slot-1");
+    assert.equal(slotMarkerOf({ ...NOTE, slot: "slot-0" }), "slot-0");
 });
 
 test("stillRunning: the parent's slot or note is still there with the same pid and start time, and still running", () => {
