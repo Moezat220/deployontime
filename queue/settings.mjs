@@ -60,6 +60,7 @@ export function paths(env = process.env) {
         config: join(home, "config.json"),
         slots: join(home, "slots"),
         waitingLine: join(home, "line"),
+        nested: join(home, "nested"),
         journal: join(home, "journal.jsonl"),
         notices: join(home, "notices"),
         notifyLog: join(home, "notify.log"),

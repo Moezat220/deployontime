@@ -579,11 +579,12 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history` or `run`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot, run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
-| `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/` and `line/`. |
+| `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/` and `nested/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
-| `slots.mjs` | Slot and waiting-line files: snapshot, join, take, release, update. | library | Reads and writes `slots/` and `line/`; runs `ps` for process ages. |
+| `slots.mjs` | Slot, waiting-line and nested-run files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/` and `nested/`; runs `ps` for process ages. |
+| `nested.mjs` | Nested runs: the marker a job is given, and the check that a marker is genuine. | library | Runs `ps` when no listing is given. |
 | `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
 | `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json` and removes its abandoned temporary files. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |

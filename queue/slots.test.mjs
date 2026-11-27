@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
+const { addNested, enqueue, releaseSlot, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), waitingLine: join(home, "line") }; };
@@ -149,4 +149,18 @@ test("updateSlot: merges fields for the holder and refuses anyone else", () => {
     const stored = read(slot);
     assert.deepEqual([stored.pid, stored.kind, stored.pgid, stored.startedAt], [821, "build", 8210, 77]);
     assert.deepEqual(readdirSync(dirs.slots), ["slot-0.json"]);
+});
+
+test("addNested: notes a nested run, which a snapshot lists apart from the holders, and only while it lives", () => {
+    const home = tempDir("slots-nested");
+    const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };
+    const note = addNested(process.pid, "docs-site: unit tests", "slot-0", dirs, 7000);
+    addNested(2 ** 30 + 9, "docs-site: lint", "slot-0", dirs);
+    const stored = read(note);
+    assert.deepEqual([stored.pid, stored.label, stored.outer, stored.at, Number.isFinite(stored.born)], [
+        process.pid, "docs-site: unit tests", "slot-0", 7000, true,
+    ]);
+    const snap = snapshot({ dirs, prune: true });
+    assert.deepEqual([snap.holders, snap.queue, snap.nested.map((n) => [n.file, n.label])], [[], [], [[note, "docs-site: unit tests"]]]);
+    assert.deepEqual(readdirSync(dirs.nested), [`${process.pid}.json`], "the note of a dead run is pruned");
 });

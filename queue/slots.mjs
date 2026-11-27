@@ -1,5 +1,5 @@
-// Slots and the waiting line, stored as small JSON files in the state folder so unrelated processes can share them
-// without a server. A slot is claimed with a hard link, which only one process can win. Every file is written under
+// Slots, the waiting line and the nested runs, stored as small JSON files in the state folder so unrelated processes
+// can share them without a server. A slot is claimed with a hard link, which only one process can win. Every file is written under
 // a temporary name and then moved into place, so a reader never meets half a file.
 import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,9 +29,10 @@ function pidReused(data, seconds, now) {
 const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at - b.at || a.pid - b.pid;
 
 /** Returns { holders, queue }: the jobs holding a slot, and the line in start order; each entry carries the path of
- *  its file. Entries of dead processes, and entries whose pid now belongs to a process that started later, are left
- *  out. Only with prune are their files, and abandoned temporary files, deleted and the folders created: a job that
- *  waits for a slot prunes, so the slot of a dead job comes free; `status` and other readers change nothing. */
+ *  its file. When dirs names a nested folder, nested lists the nested runs too. Entries of dead processes, and
+ *  entries whose pid now belongs to a process that started later, are left out. Only with prune are their files, and
+ *  abandoned temporary files, deleted and the slot and line folders created: a job that waits for a slot prunes, so
+ *  the slot of a dead job comes free; `status` and other readers change nothing. */
 export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false }) {
     if (prune) makeDirs(dirs);
     const liveEntries = (dir) => {
@@ -60,7 +61,16 @@ export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date
     };
     const holders = liveEntries(dirs.slots);
     const queue = liveEntries(dirs.waitingLine).sort(lineOrder);
-    return { holders, queue };
+    return { holders, queue, ...(dirs.nested ? { nested: liveEntries(dirs.nested) } : {}) };
+}
+
+/** Notes a nested run, one that runs inside the job holding the slot named by outer and takes no slot itself.
+ *  Returns its file; deleting the file removes the note. */
+export function addNested(pid, label, outer, dirs, now = Date.now()) {
+    mkdirSync(dirs.nested, { recursive: true });
+    const file = join(dirs.nested, `${pid}.json`);
+    writeJsonAtomic(file, { pid, label, outer, at: now, ...bornOf(pid) });
+    return file;
 }
 
 /** Joins the line. Returns the ticket file; deleting it leaves the line. */
