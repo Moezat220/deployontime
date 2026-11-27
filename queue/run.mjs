@@ -427,10 +427,63 @@ export async function runCommand(args, ctx, deps) {
         say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
     }
     const { limit, kind } = plan;
-    const job = { pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal };
-    if (outer) return runNested({ ...job, outer, maxWait }, deps);
+    // INT and TERM wake the wait, which then returns, so the one exit path in main() ends the process. The leave
+    // handlers stay until runJob has added its own: with no listener at all, a signal would end the process at once,
+    // with no journal line and the slot, place or note left behind. A signal that arrives while the job is being
+    // started reaches the handlers of the job and is passed on to it.
+    const watch = watchLeave(signals, deps.sleep);
+    const job = {
+        pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal, maxWait, handOver: watch.drop,
+    };
+    const waitDeps = { ...deps, sleep: watch.sleep, leaving: watch.leaving };
+    try {
+        if (outer) return await runNested({ ...job, outer }, waitDeps, deps);
+        return await runInLine(job, waitDeps, deps);
+    } finally {
+        watch.drop();
+    }
+}
 
-    // Wait in line. INT and TERM wake the wait, which then returns, so the one exit path in main() ends the process.
+/** Watches INT and TERM while a run waits: the first one is kept, and each wakes the wait. Returns { leaving, sleep,
+ *  drop }: leaving() names that signal or gives null, sleep is deps.sleep made wakeable, and drop() removes the
+ *  handlers; calling it again does nothing. */
+function watchLeave(signals, sleep) {
+    let leaving = null;
+    let dropped = false;
+    const sleeps = wakeableSleep(sleep);
+    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {
+        leaving ??= signal;
+        sleeps.wake();
+    }]);
+    for (const [signal, handler] of leavers) signals.on(signal, handler);
+    const drop = () => {
+        if (dropped) return;
+        dropped = true;
+        for (const [signal, handler] of leavers) signals.off(signal, handler);
+    };
+    return { leaving: () => leaving, sleep: sleeps.sleep, drop };
+}
+
+/** Journals a wait that ended without a slot or place, and gives its exit code: 130 for a signal, 75 for the wait
+ *  limit. Gives null when the wait ended with a slot or place and no signal is pending. */
+function endOfWait(waited, journal, leaving) {
+    journal.note({ tally: waited.tally });
+    if (waited.left || leaving) {
+        journal.finish("left", EXIT.left, { signal: waited.left ?? leaving });
+        return EXIT.left;
+    }
+    if (waited.gaveUp) {
+        journal.finish("gave-up", EXIT.gaveUp);
+        return EXIT.gaveUp;
+    }
+    return null;
+}
+
+/** Runs a job that waits in line for a slot. job is the one runJob takes, without waitFrom, and with maxWait.
+ *  waitDeps are deps with the wakeable sleep and leaving() of runCommand. */
+async function runInLine(job, waitDeps, deps) {
+    const { pid, label, priority, kind, limit, project, cwd, settings, files, journal, maxWait } = job;
+    const { signals } = deps;
     const ticket = enqueue(pid, label, priority, files);
     let slot = null;
     const leaveLine = () => {
@@ -438,38 +491,18 @@ export async function runCommand(args, ctx, deps) {
         releaseSlot(slot, pid);
     };
     signals.on("exit", leaveLine);
-    let leaving = null;
-    const sleeps = wakeableSleep(deps.sleep);
-    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {
-        leaving ??= signal;
-        sleeps.wake();
-    }]);
-    for (const [signal, handler] of leavers) signals.on(signal, handler);
     const slotMeta = {
         kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd,
         ...(priority ? { priority: true } : {}),
     };
-    const waitDeps = { ...deps, sleep: sleeps.sleep, leaving: () => leaving };
-    // The leave handlers stay until runJob has added its own: with no listener at all, a signal would end the
-    // process at once, with no journal line and the slot left behind. A signal that arrives while the job is being
-    // started reaches the handlers of the job and is passed on to it.
-    const dropLeavers = () => { for (const [signal, handler] of leavers) signals.off(signal, handler); };
     try {
         const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files }, waitDeps);
-        journal.note({ tally: waited.tally });
         slot = waited.slot ?? null;
-        if (waited.left || leaving) {
-            journal.finish("left", EXIT.left, { signal: waited.left ?? leaving });
-            return EXIT.left;
-        }
-        if (waited.gaveUp) {
-            journal.finish("gave-up", EXIT.gaveUp);
-            return EXIT.gaveUp;
-        }
+        const ended = endOfWait(waited, journal, waitDeps.leaving());
+        if (ended !== null) return ended;
         rmSync(ticket, { force: true });
-        return await runJob({ ...job, waitFrom: waited.waitFrom, handOver: dropLeavers }, slot, deps);
+        return await runJob({ ...job, waitFrom: waited.waitFrom }, slot, deps);
     } finally {
-        dropLeavers();
         leaveLine();
         signals.off("exit", leaveLine);
     }
@@ -478,11 +511,9 @@ export async function runCommand(args, ctx, deps) {
 /** Runs a nested job: in no slot, but in one of the places under its parent job, the one in outer, waiting for one
  *  when all are taken. It is noted in the nested folder from the start, so `status` can show it under its parent, and
  *  the note is the marker its own job is handed. job is the one runJob takes, without waitFrom, and with outer and
- *  maxWait. While it waits, INT and TERM take it out as they take a job out of the line; from the handlers runJob adds
- *  onwards everything is the same as for a job in a slot. The leave handlers stay until runJob has added its own, so
- *  a signal while the commit is read does not end the process with no journal line and the note and place left
- *  behind: it reaches the handlers of the job and is passed on to it. */
-async function runNested(job, deps) {
+ *  maxWait; waitDeps are as for runInLine. While it waits, INT and TERM take it out as they take a job out of the
+ *  line; from the handlers runJob adds onwards everything is the same as for a job in a slot. */
+async function runNested(job, waitDeps, deps) {
     const { pid, label, outer, files, journal, maxWait, settings } = job;
     const { signals, say } = deps;
     const intro = `nested: inside "${outer.label}", pid ${outer.pid}`;
@@ -494,33 +525,16 @@ async function runNested(job, deps) {
         releaseSlot(place, pid);
     };
     signals.on("exit", leave);
-    let leaving = null;
-    const sleeps = wakeableSleep(deps.sleep);
-    const leavers = LEAVE_SIGNALS.map((signal) => [signal, () => {
-        leaving ??= signal;
-        sleeps.wake();
-    }]);
-    for (const [signal, handler] of leavers) signals.on(signal, handler);
-    const dropLeavers = () => { for (const [signal, handler] of leavers) signals.off(signal, handler); };
     try {
-        const waitDeps = { ...deps, sleep: sleeps.sleep, leaving: () => leaving };
         const waited = await waitForPlace({ pid, label, parent: outer, maxWait, settings, files }, waitDeps);
-        journal.note({ tally: waited.tally });
         place = waited.place ?? null;
-        if (waited.left || leaving) {
-            journal.finish("left", EXIT.left, { signal: waited.left ?? leaving });
-            return EXIT.left;
-        }
-        if (waited.gaveUp) {
-            journal.finish("gave-up", EXIT.gaveUp);
-            return EXIT.gaveUp;
-        }
+        const ended = endOfWait(waited, journal, waitDeps.leaving());
+        if (ended !== null) return ended;
         say(waited.atOnce ? `${intro}; starts at once: no slot, no place in line, no health gate`
             : `${intro}; starts now that a nested place is free: no slot, no place in line, no health gate`);
         updateSlot(note, pid, { waiting: undefined });
-        return await runJob({ ...job, waitFrom: waited.waitFrom, handOver: dropLeavers }, note, deps);
+        return await runJob({ ...job, waitFrom: waited.waitFrom }, note, deps);
     } finally {
-        dropLeavers();
         leave();
         signals.off("exit", leave);
     }
