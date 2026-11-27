@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { tempDir } from "./testkit.mjs";
 import {
     cachedHealth, healthVerdict, MAX_SHARED_READING_MS, MIN_CPU_SPAN_MS, OWN_CPU_SPAN_MS, parsePower, powerState, readBattery, readHealth,
+    savedCpuTimes,
 } from "./health.mjs";
 
 const LIMITS = { loadPerCore: 2, busyCpuPct: 90, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
@@ -339,4 +340,25 @@ test("cachedHealth: a shared reading older than 5 seconds is read fresh, also wi
     assert.equal(cachedHealth(file, pollMs, read, () => 50_000).load, 1);
     assert.equal(cachedHealth(file, pollMs, read, () => 54_999).load, 1, "still young enough to share");
     assert.equal(cachedHealth(file, pollMs, read, () => 55_000).load, 2, "5 seconds old: read fresh");
+});
+
+test("cachedHealth: a saved reading removes the temporary files of the cache that a dead process left behind", () => {
+    const dir = tempDir("health-temp"), file = join(dir, "health.json");
+    const abandoned = join(dir, "health.json.tmp-40001"), inProgress = join(dir, "health.json.tmp-40002");
+    const other = join(dir, "notes.json.tmp-40003");
+    for (const temp of [abandoned, inProgress, other]) writeFileSync(temp, "{");
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60_000);
+    for (const temp of [abandoned, other]) utimesSync(temp, twoMinutesAgo, twoMinutesAgo);
+    cachedHealth(file, 3000, () => ({ load: 1, cores: 4, freePct: 50, diskGB: 80, battery: null }));
+    assert.deepEqual(readdirSync(dir).sort(), ["health.json", "health.json.tmp-40002", "notes.json.tmp-40003"]);
+    assert.equal(existsSync(abandoned), false);
+});
+
+test("savedCpuTimes: the CPU times kept with the shared reading, or null without a usable file", () => {
+    const dir = tempDir("health-saved"), file = join(dir, "health.json");
+    assert.equal(savedCpuTimes(file), null, "no file yet");
+    writeFileSync(file, "{");
+    assert.equal(savedCpuTimes(file), null, "a broken file");
+    cachedHealth(file, 3000, () => ({ load: 1, cores: 4, freePct: 50, diskGB: 80, battery: null, cpuTimes: timesAt(7000) }), () => 7000);
+    assert.deepEqual(savedCpuTimes(file), timesAt(7000));
 });

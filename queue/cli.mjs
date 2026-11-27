@@ -5,7 +5,7 @@ import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { snapshot } from "./slots.mjs";
 import { gateReason } from "./gate.mjs";
-import { cachedHealth, healthVerdict, readHealth } from "./health.mjs";
+import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
 import { gitState } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
@@ -13,7 +13,6 @@ import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
 import { EXIT, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
-import { readJson } from "./files.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". */
@@ -58,7 +57,7 @@ const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
  *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. */
 export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
     const { holders, queue } = snapshot({ dirs: files });
-    const cpuSince = readJson(files.healthCache, null)?.cpuTimes ?? null;
+    const cpuSince = savedCpuTimes(files.healthCache);
     const health = healthVerdict(read({ limits: settings.health, cpuSince }), settings.health);
     const gate = gateReason({ holders, health }, settings.slots);
     for (const line of statusLines({ holders, queue, gate, max: settings.slots })) print(line);

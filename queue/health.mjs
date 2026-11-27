@@ -5,7 +5,7 @@
 import {
     cpuBusyPct, pause, probeCpuTimes, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText, validCpuTimes,
 } from "./probes.mjs";
-import { readJson, writeJsonAtomic } from "./files.mjs";
+import { dropOldTemps, readJson, writeJsonAtomic } from "./files.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 /** Returns { ok, blocks: [{ gate, text }] }. A reading of null is unknown and passes; 0 is a real value. limits:
@@ -99,6 +99,11 @@ function busyCpuNow(since, read) {
     return { busyCpuPct: cpuBusyPct(times.cpus, after?.cpus), cpuTimes: after };
 }
 
+/** Does a limit other than the load hold a job? The reading is judged with a load of 0, so only the others count. */
+function otherLimitsHold(cores, rest, limits) {
+    return !healthVerdict({ load: 0, cores, ...rest }, limits).ok;
+}
+
 /** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
  *  The live CPU reading is taken only when limits (the health settings) are given, the load is above its limit and
  *  no other limit already holds a job; otherwise busyCpuPct is null. With limits the reading also carries cpuTimes,
@@ -113,24 +118,32 @@ export function readHealth({ probes = {}, limits = null, cpuSince = null } = {})
     const rest = { freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
     if (!limits) return { load, cores, busyCpuPct: null, ...rest };
     const loadHolds = load > cores * limits.loadPerCore;
-    const othersHold = loadHolds && !healthVerdict({ load: 0, cores, ...rest }, limits).ok;
-    const { busyCpuPct, cpuTimes } = loadHolds && !othersHold
+    const { busyCpuPct, cpuTimes } = loadHolds && !otherLimitsHold(cores, rest, limits)
         ? busyCpuNow(cpuSince, read)
         : { busyCpuPct: null, cpuTimes: cpuTimesNow(read) };
     return { load, cores, busyCpuPct, ...rest, cpuTimes };
 }
+
+/** The CPU times kept in the file of the shared reading (see cachedHealth), or null when there are none. */
+export function savedCpuTimes(file) {
+    return cpuTimesOf(readJson(file, null));
+}
+
+const cpuTimesOf = (saved) => saved?.cpuTimes ?? null;
 
 /** A reading shared through a file in the state folder, so jobs that wait at the same time take one reading per
  *  poll between them instead of one each. A saved reading is used while it is younger than maxAgeMs (the poll
  *  time) and than MAX_SHARED_READING_MS; an older one is read fresh. The file also keeps the CPU times of the last
  *  reading, which the next reading measures the CPU against, and the time a reading finished, so a reading that
  *  took a while is not already old when it is saved. A cache that cannot be read or written only means a fresh
- *  reading. read is handed { cpuSince }. clock gives the time now. */
+ *  reading. Temporary files of the cache that a process left behind when it died while writing are removed when a
+ *  reading is saved. read is handed { cpuSince }. clock gives the time now. */
 export function cachedHealth(file, maxAgeMs, read = readHealth, clock = Date.now) {
     const saved = readJson(file, null);
     const age = clock() - saved?.at;
     if (saved?.reading && age >= 0 && age < Math.min(maxAgeMs, MAX_SHARED_READING_MS)) return saved.reading;
-    const { cpuTimes, ...reading } = read({ cpuSince: saved?.cpuTimes ?? null });
+    const { cpuTimes, ...reading } = read({ cpuSince: cpuTimesOf(saved) });
     try { writeJsonAtomic(file, { at: clock(), reading, cpuTimes }); } catch { /* the next poll reads again */ }
+    dropOldTemps(file);
     return reading;
 }

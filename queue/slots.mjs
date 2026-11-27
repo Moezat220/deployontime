@@ -1,15 +1,13 @@
 // Slots and the waiting line, stored as small JSON files in the state folder so unrelated processes can share them
 // without a server. A slot is claimed with a hard link, which only one process can win. Every file is written under
 // a temporary name and then moved into place, so a reader never meets half a file.
-import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { probeProcessAges } from "./probes.mjs";
 import { parseElapsed } from "./ps.mjs";
 import { alive } from "./proctree.mjs";
-import { readJson, tempName, writeJsonAtomic } from "./files.mjs";
-import { MINUTE } from "./units.mjs";
+import { dropOldTemp, readJson, tempName, writeJsonAtomic } from "./files.mjs";
 
-const STALE_TEMP_MS = MINUTE;
 // When this process started (wall clock, ms). Its own entries carry it, so a reader can tell this process from a newer
 // one that was given the same pid after it ended without cleaning up.
 const BORN = Math.round(Date.now() - process.uptime() * 1000);
@@ -23,11 +21,6 @@ const isEntryName = (name) => name.endsWith(".json");
 function makeDirs(dirs) {
     mkdirSync(dirs.slots, { recursive: true });
     mkdirSync(dirs.waitingLine, { recursive: true });
-}
-function dropOldTemp(file, now) {
-    try {
-        if (now - statSync(file).mtimeMs > STALE_TEMP_MS) rmSync(file, { force: true });
-    } catch { /* already gone */ }
 }
 // An entry whose pid now belongs to a process that started later than the entry says.
 function pidReused(data, seconds, now) {

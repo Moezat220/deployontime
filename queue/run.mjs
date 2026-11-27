@@ -132,8 +132,8 @@ export async function waitForSlot(job, deps) {
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
- *  TERM, HUP and exit events are watched. Every handler and timer it adds is removed at the end. A run limit whose last KILL is refused is reported, and journalled with
- *  stopFailed, as a stop that failed. */
+ *  TERM, HUP and exit events are watched. Every handler and timer it adds is removed at the end. A run limit whose last
+ *  KILL is refused is reported, and journalled with stopFailed, as a stop that failed. */
 export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
     const killGraceMs = settings.limits.killGraceMs;

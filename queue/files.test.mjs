@@ -1,10 +1,10 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
-import { appendLine, readJson, tempName, writeJsonAtomic } from "./files.mjs";
+import { appendLine, dropOldTemps, readJson, STALE_TEMP_MS, tempName, writeJsonAtomic } from "./files.mjs";
 
 test("readJson: the content, or the fallback; only a file that exists but is unusable is reported", () => {
     const dir = tempDir("files"), seen = [], problem = (...args) => seen.push(args);
@@ -49,4 +49,16 @@ test("appendLine: adds to the end, creating the folder, and is false instead of 
     const blocker = join(dir, "plain-file");
     writeFileSync(blocker, "");
     assert.equal(appendLine(join(blocker, "notify.log"), "three\n"), false);
+});
+
+test("dropOldTemps: removes only the temporary files of that file that are older than STALE_TEMP_MS", () => {
+    const dir = tempDir("files-temp"), file = join(dir, "settings.json");
+    const now = Date.now(), old = new Date(now - STALE_TEMP_MS - 1000);
+    for (const name of ["settings.json", "settings.json.tmp-501", "settings.json.tmp-502", "journal.json.tmp-503"]) {
+        writeFileSync(join(dir, name), "{}");
+    }
+    for (const name of ["settings.json", "settings.json.tmp-501", "journal.json.tmp-503"]) utimesSync(join(dir, name), old, old);
+    dropOldTemps(file, now);
+    assert.deepEqual(readdirSync(dir).sort(), ["journal.json.tmp-503", "settings.json", "settings.json.tmp-502"]);
+    dropOldTemps(join(dir, "absent", "settings.json"), now);
 });
