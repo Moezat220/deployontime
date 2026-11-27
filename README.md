@@ -101,14 +101,15 @@ not fit in half the RAM); the runner's cores and memory are recorded in the resu
 
 ## Install
 
-Requirements: macOS or Linux, Node 22 or newer, git 2.31 or newer. No npm packages are downloaded.
+Requirements: macOS or Linux, Node 22 or newer, git 2.31 or newer. The package has no dependencies.
 
 ```
-git clone https://github.com/Moezat220/deployontime.git
-cd deployontime
-npm link                 # puts the dotime-queue command on your path
+npm install -g deployontime    # puts dotime-queue and dotime-mcp on your path
 dotime-queue status
 ```
+
+To work from the source instead: `git clone https://github.com/Moezat220/deployontime.git`, then `npm link` in its
+top folder.
 
 Then tell your agents to use it. In the folder of each project they work in, run:
 
@@ -146,7 +147,7 @@ Every command, flag, exit code and setting is in the [queue manual](queue/README
 ## Use with an MCP client
 
 `dotime-mcp` is an MCP server on standard input and output that offers the queue to agents as tools. It has no
-dependencies either, and `npm link` puts it on your path next to `dotime-queue`. Add one entry to your client's MCP
+dependencies either, and the install puts it on your path next to `dotime-queue`. Add one entry to your client's MCP
 server settings:
 
 ```json
@@ -158,7 +159,9 @@ server settings:
 ```
 
 Clients differ in where that file lives and in how its top level is named; see your client's documentation. Without
-`npm link`, use `"command": "node", "args": ["<path to the clone>/mcp/server.mjs"]`. To use another state folder, add
+installing it first, `"command": "npx", "args": ["-y", "-p", "deployontime", "dotime-mcp"]` fetches the package and
+starts the server. From a clone that was not linked, use
+`"command": "node", "args": ["<path to the clone>/mcp/server.mjs"]`. To use another state folder, add
 `"env": { "DOTIME_HOME": "<absolute path of the folder>" }`, as for the command. A relative path is taken from the
 folder the server starts in, and its jobs are handed that absolute path.
 

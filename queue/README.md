@@ -35,24 +35,25 @@ Requirements: macOS or Linux (servers and desktops, x64 and arm64). Node 22 or n
 the `ps` of procps, which almost every distribution installs, and a readable `/proc`.
 
 ```
-git clone https://github.com/Moezat220/deployontime.git
-cd deployontime
-npm link
+npm install -g deployontime
 dotime-queue status
 ```
 
-`npm link`, run in the repository's top folder, puts `dotime-queue` on your path. No npm packages are downloaded:
-the queue has no dependencies. The first line of `dotime-queue status` should read `slots: 0 of 2 taken, 0 waiting`.
+This puts `dotime-queue` and `dotime-mcp` on your path. The package has no dependencies. The first line of
+`dotime-queue status` should read `slots: 0 of 2 taken, 0 waiting`.
 
-On Linux the steps are the same. When `npm link` stops with a permission error, your Node was installed for all
+On Linux the steps are the same. When the install stops with a permission error, your Node was installed for all
 users; run it with a Node from a version manager, or after `npm config set prefix ~/.local` with `~/.local/bin` on
 your path.
+
+To work from the source instead, clone `https://github.com/Moezat220/deployontime.git` and run `npm link` in its top
+folder.
 
 To tell the agents of a project to use the queue, run [`dotime-queue setup`](#setup) in that project's folder:
 without `--write` it shows what it would add to `AGENTS.md` and `CLAUDE.md`, with `--write` it adds it.
 
-Without `npm link`, call `node <path to the clone>/queue/cli.mjs` from any folder. The `queue/` folder needs nothing
-outside itself. The examples below use `dotime-queue`.
+From a clone that was not linked, call `node <path to the clone>/queue/cli.mjs` from any folder. The `queue/` folder
+needs nothing outside itself. The examples below use `dotime-queue`.
 
 To uninstall:
 
@@ -609,7 +610,8 @@ PATH=/usr/bin:/bin
 
 Create the log folder first if it does not exist (`mkdir -p ~/.local/state`).
 
-Replace `/path/to/node` with what `command -v node` prints, and the second path with the place of your clone. The
+Replace `/path/to/node` with what `command -v node` prints, and `/path/to/deployontime` with the folder of the
+package: `$(npm root -g)/deployontime` after `npm install -g`, or your clone. The
 `PATH` line lets the reaper find the system tools it reads (`sysctl` lives in `/usr/sbin`); it applies to every
 line below it in your crontab. If you use `DOTIME_HOME`, add a `DOTIME_HOME=...` line the same way. If the clone
 sits in a folder that macOS protects, such as Documents, cron may be refused access to it; a clone elsewhere in your

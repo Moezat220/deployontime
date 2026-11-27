@@ -10,17 +10,16 @@ computer without running too many heavy jobs at once. An MCP server, `dotime-mcp
 
 ## Install
 
-macOS or Linux, Node 22 or newer, git 2.31 or newer. There are no npm dependencies and none are downloaded.
+macOS or Linux, Node 22 or newer, git 2.31 or newer. The package has no dependencies.
 
 ```
-git clone https://github.com/Moezat220/deployontime.git
-cd deployontime
-npm link                          # puts dotime-queue and dotime-mcp on the path
+npm install -g deployontime       # puts dotime-queue and dotime-mcp on the path
 cd <a project folder>
 dotime-queue setup --write        # adds the queue instruction to its agent files, at the git top folder
 ```
 
-Without `--write`, `setup` only shows what it would change. Without `npm link`, use `node <clone>/queue/cli.mjs`.
+Without `--write`, `setup` only shows what it would change. From a clone that was not linked, use
+`node <clone>/queue/cli.mjs`.
 
 ## The one instruction for a project's agent file
 
@@ -38,7 +37,8 @@ failed twice on unchanged code; none of them is a test failure of the code. A te
 ## MCP instead of shell commands
 
 `dotime-queue setup --mcp` prints the client settings. The generic entry is
-`{ "mcpServers": { "dotime-queue": { "command": "dotime-mcp" } } }`. The tools are `queue_status`, `queue_passed`,
+`{ "mcpServers": { "dotime-queue": { "command": "dotime-mcp" } } }`; without installing first,
+`"command": "npx", "args": ["-y", "-p", "deployontime", "dotime-mcp"]`. The tools are `queue_status`, `queue_passed`,
 `queue_history`, `queue_run` and `queue_job`; see "Use with an MCP client" in README.md.
 
 ## Working on this repository
