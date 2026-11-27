@@ -98,9 +98,10 @@ const noticeFile = (dir, key) => join(dir, `${encodeURIComponent(key)}.json`);
 /** Stores a notice in the notices folder of the state folder under its key. Returns true when it was added, false
  *  when the key exists or the file cannot be written. */
 export function addNotice(key, entry, dir) {
-    const file = noticeFile(dir, key);
-    const temp = tempName(file);
+    let temp = null;
     try {
+        const file = noticeFile(dir, key);
+        temp = tempName(file);
         mkdirSync(dir, { recursive: true });
         writeFileSync(temp, JSON.stringify(entry, null, 1));
         linkSync(temp, file);
@@ -108,6 +109,6 @@ export function addNotice(key, entry, dir) {
     } catch {
         return false;
     } finally {
-        try { rmSync(temp, { force: true }); } catch { /* the folder itself could not be made */ }
+        try { if (temp) rmSync(temp, { force: true }); } catch { /* the folder itself could not be made */ }
     }
 }

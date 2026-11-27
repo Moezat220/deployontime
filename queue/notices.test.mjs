@@ -134,6 +134,10 @@ test("addNotice: false, without throwing, when the file cannot be written", () =
     assert.equal(addNotice("long-run:1:2", {}, join(blocker, "notices")), false);
 });
 
+test("addNotice: false, without throwing, when no notices folder is named", () => {
+    assert.deepEqual([addNotice("long-run:1:2", {}, undefined), addNotice("long-run:1:2", {}, null)], [false, false]);
+});
+
 test("addNotice: a second process that stores a notice in the middle of a write loses neither one", () => {
     const dir = join(tempDir("notices"), "notices"), realWrite = fs.writeFileSync;
     let interrupted = 0;
