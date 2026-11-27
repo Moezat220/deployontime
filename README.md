@@ -97,7 +97,7 @@ Anyone can also run it on GitHub's macOS runner: in Actions, pick "Benchmark (ma
 not one of the required checks and only starts by hand. The runner is smaller than the Mac above, so the settings are
 scaled to it by the same rule (about twice as many busy threads as cores; less memory per thread only if 400 MB would
 not fit in half the RAM); the runner's cores and memory are recorded in the results. Every run uploads all its results
-(the raw JSON, the full output and the queue journals) as artifacts, whatever they show.
+(the raw JSON, the full output and the queue journals) as one artifact named benchmark-results, whatever they show.
 
 ## Install
 

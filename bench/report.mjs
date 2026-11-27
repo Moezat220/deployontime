@@ -21,6 +21,9 @@ export function scaledSettings({ cores, ramMB, agents }) {
     return { threads, mem };
 }
 
+// How many busy threads the agents ask for when they all start at once, for each core (the published run: 2).
+export const loadRatio = ({ agents, threads, cores }) => Math.round(((agents * threads) / cores) * 100) / 100;
+
 export const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
 export function summarize(rounds, ways = ["direct", "queue"]) {
@@ -59,16 +62,21 @@ export function machine(repoDir) {
         cores: cpus().length,
         ramMB: Math.round(totalmem() / 2 ** 20),
         os: [name, version, build && `(${build})`].filter(Boolean).join(" ") || null,
+        // set on GitHub-hosted runners
+        runnerImage: process.env.ImageOS ? [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(" ")
+            : null,
         node: process.version,
         commit: read("git", ["rev-parse", "HEAD"], repoDir),
     };
 }
 
-export function results({ options, deadlineMs, aloneMedianMs, machine, rounds, complete, error }) {
+export function results({ options, deadlineMs, aloneMedianMs, queueSlots, machine, rounds, complete, error }) {
+    const busyThreads = options.agents * options.threads;
     return {
         complete,
         ...(error ? { error } : {}),
-        configuration: { ...options, deadlineMs, aloneMedianMs },
+        configuration: { ...options, deadlineMs, aloneMedianMs, queueSlots, busyThreads,
+            loadRatio: loadRatio({ ...options, cores: machine.cores }) },
         machine,
         rounds,
         summary: summarize(rounds),
@@ -90,11 +98,16 @@ export function markdown(data) {
     if (!data.complete) lines.push(`**Not complete:** ${data.error ?? "the run stopped before the end"}.`, "");
     lines.push(
         `Machine: ${m.chip ?? m.model ?? "unknown"}${m.model && m.chip ? ` (${m.model})` : ""}, ${m.cores} cores, ` +
-            `${m.ramMB} MB RAM, ${m.os ?? "unknown system"}, Node ${m.node}, commit ${m.commit ?? "unknown"}`,
+            `${m.ramMB} MB RAM, ${m.os ?? "unknown system"}, Node ${m.node}, commit ${m.commit ?? "unknown"}` +
+            (m.runnerImage ? `, runner image ${m.runnerImage}` : ""),
         "",
         `Settings: ${c.agents} agents, ${c.threads} threads × ${c.tests} tests per suite, ${c.mem} MB per thread, ` +
             `${c.tries} tries, ${c.repeat} rounds each way, timeout ${c.slack} × the median test alone ` +
-            (c.deadlineMs ? `(${c.aloneMedianMs} ms alone, a test fails above ${c.deadlineMs} ms)` : "(not measured)"),
+            (c.deadlineMs ? `(${c.aloneMedianMs} ms alone, a test fails above ${c.deadlineMs} ms)` : "(not measured)") +
+            `, ${c.queueSlots ?? "the default"} queue slots`,
+        "",
+        `Load: ${c.agents * c.threads} busy threads on ${m.cores} cores when all agents start at once, ` +
+            `${loadRatio({ ...c, cores: m.cores })} per core (the published run: 2)`,
         "",
     );
     const scaled = scaledSettings({ cores: m.cores, ramMB: m.ramMB, agents: c.agents });
@@ -137,6 +150,7 @@ function settingsCommand(args) {
     const ramMB = Math.round(totalmem() / 2 ** 20);
     const { threads, mem } = scaledSettings({ cores, ramMB, agents });
     console.log([`cores=${cores}`, `ram_mb=${ramMB}`, `agents=${agents}`, `threads=${threads}`, `mem=${mem}`,
+        `busy_threads=${agents * threads}`, `load_ratio=${loadRatio({ agents, threads, cores })}`,
         `rule=${SETTINGS_RULE}`].join("\n"));
 }
 

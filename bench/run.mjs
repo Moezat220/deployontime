@@ -15,10 +15,11 @@
 // --json writes the raw results (settings, machine, every round and agent) to a file after each round, and copies
 // each queued round's journal into a journals folder beside it.
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadSettings } from "../queue/settings.mjs";
 import { machine, median, results } from "./report.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -120,13 +121,13 @@ async function round(way, deadline, repo, repeat) {
     await quiet();
     const start = Date.now();
     const starts = Array.from({ length: opts.agents }, (_, i) => agent(i + 1, way, deadline, env, repo, repeat));
+    current = { state, name: `round-${repeat}-${way}-stopped` };
     const agents = await Promise.all(starts);
-    if (jsonFile && existsSync(join(state, "journal.jsonl"))) {
-        mkdirSync(join(dirname(jsonFile), "journals"), { recursive: true });
-        copyFileSync(join(state, "journal.jsonl"), join(dirname(jsonFile), "journals", `round-${repeat}-${way}.jsonl`));
-    }
+    const seconds = Math.round((Date.now() - start) / 1000);
+    current = null;
+    keepJournal(state, `round-${repeat}-${way}`);
     return {
-        seconds: Math.round((Date.now() - start) / 1000),
+        seconds,
         runs: agents.reduce((sum, a) => sum + a.runs, 0),
         errors: agents.reduce((sum, a) => sum + a.errors, 0),
         firstFailed: agents.reduce((sum, a) => sum + (a.firstFailed ?? 0), 0),
@@ -135,13 +136,25 @@ async function round(way, deadline, repo, repeat) {
     };
 }
 
-// With --json, the results so far are written after each round, so a run that is stopped still leaves them.
+// With --json, the results so far are written after each round, so a run that is stopped still leaves them. The
+// file is written beside its place and then renamed, so a stop in the middle never leaves half a file.
 const measured = { deadlineMs: null, aloneMedianMs: null, rounds: [] };
+let current = null;
 function writeResults(complete, error) {
     if (!jsonFile) return;
     mkdirSync(dirname(jsonFile), { recursive: true });
-    const data = results({ options: opts, ...measured, machine: machine(join(here, "..")), complete, error });
-    writeFileSync(jsonFile, JSON.stringify(data, null, 2) + "\n");
+    const queueSlots = loadSettings({ DOTIME_HOME: home }).slots;
+    const data = results({ options: opts, ...measured, queueSlots, machine: machine(join(here, "..")), complete,
+        error });
+    writeFileSync(`${jsonFile}.tmp`, JSON.stringify(data, null, 2) + "\n");
+    renameSync(`${jsonFile}.tmp`, jsonFile);
+}
+
+// With --json, each queued round's journal is copied out before the temporary folder is removed.
+function keepJournal(state, name) {
+    if (!jsonFile || !existsSync(join(state, "journal.jsonl"))) return;
+    mkdirSync(join(dirname(jsonFile), "journals"), { recursive: true });
+    copyFileSync(join(state, "journal.jsonl"), join(dirname(jsonFile), "journals", `${name}.jsonl`));
 }
 
 const home = mkdtempSync(join(tmpdir(), "dotime-bench-"));
@@ -158,6 +171,8 @@ async function stop(exit) {
     const late = setTimeout(() => children.forEach((child) => child.kill("SIGKILL")), 15_000);
     await Promise.all(ended);
     clearTimeout(late);
+    if (current) keepJournal(current.state, current.name);
+    if (measured.deadlineMs) writeResults(false, `stopped by a signal (exit ${exit})`);
     rmSync(home, { recursive: true, force: true });
     process.exit(exit);
 }
@@ -217,6 +232,9 @@ async function main() {
                 `first-run failures ${median(pick("firstFailed"))} (${range("firstFailed")})`);
         }
         writeResults(true);
+    } catch (error) {
+        writeResults(false, `the benchmark failed: ${error?.message ?? error}`);
+        throw error;
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
