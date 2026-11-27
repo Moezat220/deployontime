@@ -367,10 +367,12 @@ test("run: a nested run whose parent ends while it waits for a place waits for a
     const stamp = (name) => `require("node:fs").writeFileSync(${J(f(name))}, String(Date.now()));`;
     const shardA = [CLI, "run", "--label", "docs-site: shard a", "--max-wait", "0.5", "--", NODE, "-e", `${stamp("a.start")} ${untilFile(f("a.release"))}`];
     const shardB = [CLI, "run", "--label", "docs-site: shard b", "--max-wait", "0.5", "--", NODE, "-e", stamp("b.start")];
-    // The outer job starts shard a, then shard b once a runs, and ends once b waits and the test says so.
+    // The outer job starts shard a, then shard b once a runs, and ends once b waits and the test says so. What shard b
+    // says goes to a file, so the test can see when it has looked at the slots.
     const fanOut = `const { spawn } = require("node:child_process"), fs = require("node:fs"); let b = false; `
-        + `const go = (words) => spawn(${J(NODE)}, words, { stdio: "ignore" }); go(${J(shardA)}); `
-        + `const t = setInterval(() => { if (!fs.existsSync(${J(f("a.start"))})) return; if (!b) { b = true; go(${J(shardB)}); } `
+        + `const go = (words, err = "ignore") => spawn(${J(NODE)}, words, { stdio: ["ignore", "ignore", err] }); go(${J(shardA)}); `
+        + `const t = setInterval(() => { if (!fs.existsSync(${J(f("a.start"))})) return; `
+        + `if (!b) { b = true; go(${J(shardB)}, fs.openSync(${J(f("b.err"))}, "a")); } `
         + `if (fs.readdirSync(${J(join(box.home, "nested"))}).length >= 2 && fs.existsSync(${J(f("outer.release"))})) process.exit(0); }, 20);`;
     const outer = start(box, ["run", "--label", "docs-site: test suite", "--", NODE, "-e", fanOut]);
     await until(() => slots(box).length === 1);
@@ -385,6 +387,10 @@ test("run: a nested run whose parent ends while it waits for a place waits for a
     await until(() => journal(box).some((line) => line.label === "docs-site: shard a"));
     const waitingB = 'waiting 1 "docs-site: shard b": pid ';
     await until(async () => (await cli(box, ["status"])).stdout.includes(waitingB));
+    // Its ticket is in the line before it first looks at the slots. Only once it has seen the slot taken by the next
+    // job is that wait booked to the slots, so the next job is not let go before then.
+    const sawSlotTaken = /^dotime-queue: in line: position 1, .*; no free slot: 1 of 1 taken, by "shop-api: e2e"$/m;
+    await until(() => existsSync(f("b.err")) && sawSlotTaken.test(readFileSync(f("b.err"), "utf8")));
     assert.equal(existsSync(f("b.start")), false, "shard b does not run beside the job that holds the slot");
     writeFileSync(f("next.release"), "");
     assert.equal((await next.done).code, 0);

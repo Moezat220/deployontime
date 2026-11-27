@@ -164,10 +164,11 @@ export function asPlatform(platform) {
 }
 
 export const pause = (ms) => new Promise((done) => setTimeout(done, ms));
-/** Waits until check() is truthy; throws after the time limit. */
+/** Waits until check() is truthy; throws after the time limit. check may be async: its promise is awaited, since a
+ *  promise itself is always truthy. */
 export async function until(check, limitMs = 10_000) {
     for (const end = Date.now() + limitMs; Date.now() < end;) {
-        if (check()) return;
+        if (await check()) return;
         await pause(25);
     }
     throw new Error("the expected state was not reached in time");
