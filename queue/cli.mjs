@@ -112,15 +112,18 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "status") return cmdStatus(ctx);
     if (command === "passed") return cmdPassed(args, { ...ctx, cwd: opt(args, "--cwd") || process.cwd() });
     if (command === "history") return cmdHistory(args, ctx);
-    const { settings, files } = ctx;
-    const readGateHealth = (options) => readHealth({ ...options, limits: settings.health });
-    const deps = realDeps({
-        // Jobs that wait at the same time share one health reading per poll.
+    return runCommand(args, ctx, runDeps(ctx));
+}
+
+/** The deps `run` uses. Its health reading is shared between jobs that wait at the same time, one per poll, and is
+ *  taken with the gate limits, as for `status`. read: the reading behind the shared one. */
+export function runDeps({ settings, files }, read = readHealth) {
+    const readGateHealth = (options) => read({ ...options, limits: settings.health });
+    return realDeps({
         readHealth: () => cachedHealth(files.healthCache, settings.pollMs, readGateHealth),
         notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
         after: afterMinutes,
     });
-    return runCommand(args, ctx, deps);
 }
 
 if (isMainModule(import.meta.url)) process.exit(await main());

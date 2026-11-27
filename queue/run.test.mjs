@@ -11,7 +11,8 @@ import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mj
 
 isolateProcess("run");
 const { EXIT, journalWriter, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
-const { cmdStatus } = await import("./cli.mjs");
+const { cmdStatus, runDeps } = await import("./cli.mjs");
+const { readHealth } = await import("./health.mjs");
 const { DEFAULTS, paths } = await import("./settings.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takeSlot } = await import("./slots.mjs");
@@ -279,6 +280,21 @@ test("run and status: a high load with an idle CPU starts the job, with a busy C
     const why = "load too high: 14.8 now, 8.0 allowed; CPU 97% busy now";
     assert.deepEqual([code, held.said.at(-1)], [75, `gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit`]);
     assert.equal(status(busy), `gate: shut; ${why}`);
+});
+
+test("run: the shared reading the cli hands to run is taken with the gate limits, so an idle CPU lets a job start", async () => {
+    const box = sandbox({ health: { loadPerCore: 2 } }), clock = fakeClock(), asked = [];
+    const probes = {
+        load: () => ({ load: 14.8, cores: 4 }), memory: () => 70, disk: () => 100, battery: () => null,
+        cpuTimes: () => ({ at: clock.now(), cpus: [{ times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }] }), cpu: () => 12,
+    };
+    const read = (options) => { asked.push(options); return readHealth({ ...options, probes }); };
+    const { readHealth: shared } = runDeps(box.ctx, read);
+    const d = makeDeps(box, { now: clock.now, sleep: clock.sleep, readHealth: shared });
+    const code = await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps);
+    assert.deepEqual(asked.map((options) => options.limits), [box.ctx.settings.health], "run reads the health with the gate limits");
+    assert.deepEqual([code, d.said.filter((text) => text.startsWith("gave up"))], [0, []]);
+    assert.equal(JSON.parse(readFileSync(box.ctx.files.healthCache, "utf8")).reading.busyCpuPct, 12);
 });
 
 test("status: measures the CPU against the CPU times saved with the shared reading, and leaves the file as it was", () => {
