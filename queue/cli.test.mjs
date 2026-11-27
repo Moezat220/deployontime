@@ -279,7 +279,13 @@ test("status: a nested run shows under its outer job while it runs, and the slot
     const box = sandbox({ config: { slots: 1 } }), release = join(box.work, "release");
     const outer = start(box, ["run", "--label", "docs-site: test suite", "--", ...innerRun("docs-site: unit tests", NODE, "-e", untilFile(release))]);
     await until(() => nestedNotes(box).length === 1);
-    const shown = (await cli(box, ["status"])).stdout.split("\n");
+    // The note is written before the nested run takes its place, so wait until status shows it running.
+    let shown = [];
+    for (const end = Date.now() + 10_000; Date.now() < end;) {
+        shown = (await cli(box, ["status"])).stdout.split("\n");
+        if (!shown[2]?.includes("waiting for a nested place")) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assert.equal(shown[0], "slots: 1 of 1 taken, 0 waiting");
     assert.equal(shown[1].startsWith('running "docs-site: test suite": pid '), true, shown[1]);
     assert.match(shown[2], /^ {2}nested "docs-site: unit tests": pid \d+, 0 min so far, no slot of its own$/);
