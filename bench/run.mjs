@@ -14,6 +14,7 @@
 // --mem is megabytes per thread, --work the CPU work per test, --slack how much slower than alone a test may get.
 // --json writes the raw results (settings, machine, every round and agent) to a file after each round, and copies
 // each queued round's journal into a journals folder beside it.
+// To see how the number of queue slots changes the time and the failures, run bench/slots.mjs.
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, tmpdir } from "node:os";
