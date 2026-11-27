@@ -70,6 +70,16 @@ test("layout: no line of code or tests is longer than 160 characters", () => {
     assert.deepEqual(long, []);
 });
 
+test("layout: no line of prose in the README is longer than 120 characters; table rows and code blocks may be", () => {
+    const long = [];
+    let inCode = false;
+    source("README.md").split("\n").forEach((line, i) => {
+        if (line.startsWith("```")) inCode = !inCode;
+        else if (!inCode && !line.startsWith("|") && line.length > 120) long.push(`README.md:${i + 1} (${line.length})`);
+    });
+    assert.deepEqual(long, []);
+});
+
 test("layout: no file has two blank lines in a row", () => {
     const doubled = ALL_CODE.filter((name) => /\n\s*\n\s*\n/.test(source(name).replace(/[ \t]+\n/g, "\n")));
     assert.deepEqual(doubled, []);

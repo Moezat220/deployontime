@@ -104,8 +104,9 @@ instructions: an agent that uses it every time puts itself in front of everyone 
 An option that is not in this table, an option without its value or with an empty value, an option given twice,
 or any other word in front of the `--` is refused with exit 2, for example `dotime-queue: unknown option --max-runn`.
 A word that starts with `--` is not taken as the value of the option in front of it: `--label --priority` is refused
-because `--label` has no value. To give such a value, join it to the option with `=`: `--label=--priority`. The
-refusal message says so, with the value in single quotes when a shell would split or change it. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
+because `--label` has no value. Give `--label` a value, or, when the value itself starts with `--`, join it to the
+option with `=`: `--label=--priority`. The refusal message says both, with the value in single quotes when a shell
+would split or change it. The job does not run. The same holds for `status`, `passed` and `history`: each accepts
 only the options shown for it.
 
 `run` started in a folder that was removed checks its options first, as above. When they are fine, it says
@@ -144,12 +145,14 @@ dotime-queue status
 ```
 
 Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
-gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. The gate is
-judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the reading it
-shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above its limit,
-memory, disk and battery do not already hold a job, and `health.json` holds no usable CPU times up to 5 seconds
-old, that reading takes about a second longer, while the CPU is measured. CPU times younger than half a second make
-it wait only for the rest of the half second. `dotime-queue` with nothing after it does the same.
+gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
+with nothing after it prints the same as `status`.
+
+The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
+reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
+its limit, memory, disk and battery do not already hold a job, and `health.json` holds no usable CPU times up to 5
+seconds old, that reading takes about a second longer, while the CPU is measured. CPU times younger than half a
+second make it wait only for the rest of the half second.
 
 `status` only reads the state folder and never changes it. The file of a job that has ended is still left out of
 what it prints, but the file itself stays until a waiting `run` or the reaper removes it.
@@ -170,7 +173,10 @@ It looks at runs started in a repository of the same name, on the commit the fol
 clean tree. Runs that were stopped or timed out are skipped, since they say nothing about the code. If the newest
 of what is left exited 0, it prints a `stamp:` line and exits 0. In every other case it prints a `no stamp:` line
 that says why and exits 1. `--match` keeps only runs whose label or command contains the text, in any letter case;
-without it, the newest run of any check counts. `--cwd` asks about another folder.
+without it, the newest run of any check counts. `--cwd` asks about another folder. A folder outside git gives
+`no stamp: this folder is not a git checkout`, and a repository with no commits yet gives
+`no stamp: this repository has no commits yet`; both exit 1. Without `--cwd`, in a folder that was removed, `passed`
+prints the same line as `run` does there and exits 2.
 
 Note: an untracked entry named `node_modules` that is not a folder (in practice a link) does not count as a change.
 Git's usual `node_modules/` ignore rule matches folders only, so git lists such a link.
@@ -286,7 +292,7 @@ changes only such untracked files, the code counts as unchanged: pass `--after-f
 | Code | Meaning |
 | --- | --- |
 | the job's own | The job ran and ended by itself. A job ended by a signal gives 1; see [`run`](#run). |
-| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run` from a folder that was removed. |
+| 2 | The command line was not understood, for example an unknown option or a value that is not a number. Also `run`, and `passed` without `--cwd`, from a folder that was removed. |
 | 3 | Refused: the same check failed twice on unchanged code. Change the code or pass `--after-fix "<note>"`. |
 | 75 | Gave up waiting after `--max-wait`. Not a test failure. |
 | 124 | Stopped at the run limit. |
@@ -318,7 +324,7 @@ The gate is checked only before a job starts. A running job is never stopped bec
 
 | Reading | Taken from | Holds a job when |
 | --- | --- | --- |
-| Load | 1-minute load average per core, and the share of CPU time in use since the last shared reading (half a second to 5 seconds; about `pollMs` while jobs wait) or over one second | above `health.loadPerCore` while the CPU is at least `health.busyCpuPct` percent busy |
+| Load | 1-minute load average per core, and the share of CPU time in use since the last shared reading, when that was half a second to 5 seconds ago, or else over one second. While jobs wait, a new shared reading is taken about every `pollMs`, so the span is about `pollMs` when that is between half a second and about 5 seconds. With a shorter `pollMs` a reading waits until half a second has passed; from about 5 seconds up, the saved CPU times are always too old, and every reading that measures the CPU waits one second. | above `health.loadPerCore` while the CPU is at least `health.busyCpuPct` percent busy |
 | Free memory | the free percentage that `memory_pressure` reports | below `health.minFreeMemPct` |
 | Free disk | `df` for the disk that holds `/` | below `health.minFreeDiskGB` |
 | Battery | `pmset -g batt` | at or below `health.minBatteryPct` while on battery |
@@ -327,15 +333,15 @@ If the charger cannot keep up and the charge keeps falling, the battery limit ap
 
 The 1-minute load average lags: after heavy work ends it stays high for up to a minute while the CPU is already
 idle. So when the load is above its limit, the gate also measures how busy the CPU is right now, from two readings
-of the CPU times, and holds the job only when that share is at or above `health.busyCpuPct`. Each health reading
-keeps the CPU times it ended on in `health.json`. When those are between half a second and 5 seconds old, the next
-reading measures the CPU since then and does not wait; when they are younger, it waits for the rest of the half
-second and then measures since then; when there are none, they are older or they make no sense, it takes two
-readings one second apart. The
-message then names both numbers, for example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the
-load is inside its limit, the CPU is not measured and the load never holds a job. The CPU is measured after memory,
-disk and battery, and not at all when one of those already holds the job. When the CPU is not measured or cannot be
-measured, a load above its limit holds the job as the load alone would.
+of the CPU times, and holds the job only when that share is at or above `health.busyCpuPct`. Each shared reading
+of a waiting job keeps the CPU times it ended on in `health.json`; a `status` reading only reads them. When those
+are between half a second and 5 seconds old, the next reading measures the CPU since then and does not wait; when
+they are younger, it waits for the rest of the half second and then measures since then; when there are none, they
+are older or they make no sense, it takes two readings one second apart. The message then names both numbers, for
+example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the load is inside its limit, the CPU is not
+measured and the load never holds a job. The CPU is measured after memory, disk and battery, and not at all when one
+of those already holds the job. When the CPU is not measured or cannot be measured, a load above its limit holds the
+job as the load alone would.
 
 When a value cannot be read, such as on a computer with no battery or when a tool does not answer, that check is
 left out and never holds a job, so it protects nothing until it can be read again. A reading of 0, such as a full
@@ -420,10 +426,10 @@ node queue/schedule-check.mjs [--dry] [--json]
 An optional extra, separate from the queue: a health report on your own scheduled jobs. It reads every job file in
 `~/Library/LaunchAgents`, not only ones made for this project, and checks each job: loaded, last exit code
 accepted, scripts present, log as recent as the schedule implies. It changes no job; it only adds to its own log
-files in the state folder. Problems go out as one notice;
-`--dry` only prints. It exits 1 when it cannot read the job list from `launchctl`, and 2, without running, for an
-option other than `--dry` and `--json` or for one of them given twice, as for an option given twice to `run`. Optional rules in
-`$DOTIME_HOME/schedule-check.json`, where `skip` leaves jobs out:
+files in the state folder. Problems go out as one notice; `--dry` only prints. It exits 1 when it cannot read the
+job list from `launchctl`, and 2, without running, for an option other than `--dry` and `--json` or for one of them
+given twice, as for an option given twice to `run`. Optional rules in `$DOTIME_HOME/schedule-check.json`, where
+`skip` leaves jobs out:
 
 ```json
 { "skip": ["com.example.*"], "okExit": { "com.example.sync": [0, 2] }, "maxLogAgeH": { "com.example.weekly": 200 } }
@@ -541,7 +547,7 @@ Environment variables:
 | `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
-| `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. |
+| `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
 A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
