@@ -414,7 +414,10 @@ test("run: three levels of nesting finish with nestedPerJob 1 and one slot, each
 
 test("run: a nested run's marker copied out of its job, or left over after it, is ignored and the run queues as usual", async () => {
     const box = sandbox({ config: { slots: 1 } }), seen = join(box.work, "marker"), release = join(box.work, "release");
-    const waitThenEnd = `require("node:fs").writeFileSync(${J(seen)}, process.env.DOTIME_PARENT); ${untilFile(release)}`;
+    // The marker is written under another name and then renamed, so the file the test waits for is never seen half
+    // written.
+    const waitThenEnd = `require("node:fs").writeFileSync(${J(`${seen}.part`)}, process.env.DOTIME_PARENT); `
+        + `require("node:fs").renameSync(${J(`${seen}.part`)}, ${J(seen)}); ${untilFile(release)}`;
     const outer = start(box, ["run", "--label", "docs-site: test suite", "--", ...innerRun("docs-site: unit tests", NODE, "-e", waitThenEnd)]);
     await until(() => existsSync(seen));
     const marker = readFileSync(seen, "utf8");
