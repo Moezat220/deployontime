@@ -115,13 +115,15 @@ export function enqueue(pid, label, priority, dirs, now = Date.now()) {
     return ticket;
 }
 
-/** Claims a free slot. Returns the slot file, or null when all are taken. */
+/** Claims a free slot, the lowest numbered one. Returns the slot file, or null when all are taken. meta: the fields
+ *  the slot file carries, or a function that gives them for a slot number, so they can depend on the slot claimed. */
 export function takeSlot(pid, label, max, meta, dirs) {
     makeDirs(dirs);
     for (let n = 0; n < max; n++) {
         const slot = join(dirs.slots, `slot-${n}.json`);
         const temp = tempName(slot);
-        writeFileSync(temp, JSON.stringify({ pid, label, at: Date.now(), ...meta, ...bornOf(pid) }));
+        const fields = typeof meta === "function" ? meta(n) : meta;
+        writeFileSync(temp, JSON.stringify({ pid, label, at: Date.now(), ...fields, ...bornOf(pid) }));
         try {
             linkSync(temp, slot);
             return slot;
@@ -129,6 +131,9 @@ export function takeSlot(pid, label, max, meta, dirs) {
     }
     return null;
 }
+
+/** The number of a slot file, as takeSlot() names it, or NaN for another name. */
+export const slotNumber = (file) => Number(/slot-(\d+)\.json$/.exec(String(file))?.[1] ?? NaN);
 
 /** Frees a slot or a place, but only for the pid that holds it. */
 export function releaseSlot(slot, pid) {

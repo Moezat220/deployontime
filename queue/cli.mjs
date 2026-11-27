@@ -6,7 +6,7 @@
 // that are due on each tick, and installs that tick. queue/README.md describes each in full.
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
-import { gateReason } from "./gate.mjs";
+import { extraInQuestion, gateReason, slotRoom, takenText } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
 import { gitState, isRepository, repoTop } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
@@ -35,16 +35,20 @@ const CLI_FILE = fileURLToPath(import.meta.url);
 const insideOf = (entry, h) => !!h.file && entry.outer === markerOf(h.file) && entry.outerPid === h.pid
     && entry.outerBorn === h.born;
 
-/** The lines `status` prints. gate: the reason the gate is shut, or "". nested: the nested runs, each shown under the
- *  job whose slot or note, pid and start time it names in outer, outerPid and outerBorn, so a nested run inside a
- *  nested run is shown one step further in; they hold no slot and are not counted. One that waits for a place under
- *  its parent says so; its minutes count from when it began to wait, and once it runs, from when it started. */
-export function statusLines({ holders, queue, nested = [], gate, max, now = Date.now() }) {
-    const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
+/** The lines `status` prints. gate: the reason the gate is shut, or "". max: the base slot count. room, when given,
+ *  is the slotRoom() answer: an open gate then also says why an extra slot is free. A job in an extra slot says so
+ *  while more jobs than max hold slots, and the count names the extra slots then. nested: the nested runs, each
+ *  shown under the job whose slot or note, pid and start time it names in outer, outerPid and outerBorn, so a nested
+ *  run inside a nested run is shown one step further in; they hold no slot and are not counted. One that waits for a
+ *  place under its parent says so; its minutes count from when it began to wait, and once it runs, from when it
+ *  started. */
+export function statusLines({ holders, queue, nested = [], gate, max, room = null, now = Date.now() }) {
+    const lines = [`slots: ${takenText(holders.length, max)}, ${queue.length} waiting`];
     for (const h of holders) {
         const began = h.startedAt ?? h.at;
         const ranMin = (now - began) / MINUTE;
         const facts = [`pid ${h.pid}`];
+        if (h.extra && holders.length > max) facts.push("extra slot");
         if (h.kind) facts.push(`kind ${h.kind}`);
         facts.push(`${minutesSince(began, now)} min so far`);
         if (h.limitMin == null) facts.push("limit unknown");
@@ -61,7 +65,7 @@ export function statusLines({ holders, queue, nested = [], gate, max, now = Date
         const priority = q.priority ? ", priority" : "";
         lines.push(`waiting ${i + 1} "${q.label}": pid ${q.pid}, ${minutesSince(q.at, now)} min so far${priority}`);
     });
-    lines.push(gate ? `gate: shut; ${gate}` : "gate: open");
+    lines.push(gate ? `gate: shut; ${gate}` : room?.why ? `gate: open; ${room.why}` : "gate: open");
     return lines;
 }
 
@@ -107,13 +111,19 @@ const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
 const DAYS_ERROR = "--days: needs a whole number of days, 1 or more";
 
 /** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`, and
- *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. */
+ *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. Only while the base
+ *  slots are taken and an extra slot is left is it also handed liveCpu, so the live CPU reading, which can take a
+ *  second, is taken only when it decides whether the next job may start. */
 export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
     const { holders, queue, nested } = snapshot({ dirs: files });
     const cpuSince = savedCpuTimes(files.healthCache);
-    const health = healthVerdict(read({ limits: settings.health, cpuSince }), settings.health);
-    const gate = gateReason({ holders, health }, settings.slots);
-    for (const line of statusLines({ holders, queue, nested, gate, max: settings.slots })) print(line);
+    const extra = extraInQuestion(holders, settings);
+    const reading = read({ limits: settings.health, cpuSince, ...(extra ? { liveCpu: true } : {}) });
+    const health = healthVerdict(reading, settings.health);
+    const busyCpuPct = extra ? reading.busyCpuPct : null;
+    const room = slotRoom({ holders, nested, busyCpuPct, now: Date.now() }, settings);
+    const gate = gateReason({ holders, health, room, base: settings.slots }, room.max);
+    for (const line of statusLines({ holders, queue, nested, gate, max: settings.slots, room })) print(line);
     return 0;
 }
 
@@ -267,11 +277,12 @@ export function scheduleDeps({ files }, zone, env = process.env) {
 }
 
 /** The deps `run` uses. Its health reading is shared between jobs that wait at the same time, one per poll, and is
- *  taken with the gate limits, as for `status`. read: the reading behind the shared one. */
+ *  taken with the gate limits, as for `status`. readHealth({ liveCpu }) asks for the live CPU reading as well, as a
+ *  waiter does that may take an extra slot. read: the reading behind the shared one. */
 export function runDeps({ settings, files }, read = readHealth) {
     const readGateHealth = (options) => read({ ...options, limits: settings.health });
     return realDeps({
-        readHealth: () => cachedHealth(files.healthCache, settings.pollMs, readGateHealth),
+        readHealth: (asked = {}) => cachedHealth(files.healthCache, settings.pollMs, readGateHealth, Date.now, asked),
         notify: (title, message) => notify(title, message, { env: process.env, logFile: files.notifyLog }),
         after: afterMinutes,
     });

@@ -2,14 +2,21 @@
 // file is shared by all callers on the machine, so one caller cannot loosen a limit for itself. The environment only
 // selects the state folder, the time zone and the notice channel.
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { availableParallelism, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readJson } from "./files.mjs";
 import { MAX_TIMER_MS } from "./timer.mjs";
 
+/** The default of maxSlots: half the cores, at least the default of slots. loadSettings() raises it to slots when
+ *  slots is set higher. */
+export const defaultMaxSlots = (cores = availableParallelism()) => Math.max(2, Math.floor(cores / 2));
+
 export const DEFAULTS = Object.freeze({
     slots: 2,
+    maxSlots: defaultMaxSlots(),
+    extraSlotCpuPct: 60,
+    extraSlotSettleSec: 10,
     nestedPerJob: 2,
     mcpMaxJobs: 20,
     flakyWindowDays: 14,
@@ -42,10 +49,11 @@ const from0 = [(n) => n >= 0, "a number of 0 or more"];
 const from1 = [(n) => n >= 1, "a number of 1 or more"];
 const whole1 = [(n) => Number.isInteger(n) && n >= 1, "a whole number of 1 or more"];
 const pct = [(n) => n > 0 && n <= 100, "a number above 0 and at most 100"];
+const pct1 = [(n) => n >= 1 && n <= 100, "a number from 1 to 100"];
 // Numbers may be 0 or more unless a stricter rule is listed here.
 const NUMBER_RULES = {
-    "slots": from1, "nestedPerJob": whole1, "mcpMaxJobs": whole1, "flakyWindowDays": whole1,
-    "pollMs": above0, "health.loadPerCore": above0, "health.busyCpuPct": pct,
+    "slots": from1, "maxSlots": whole1, "extraSlotCpuPct": pct1, "nestedPerJob": whole1, "mcpMaxJobs": whole1,
+    "flakyWindowDays": whole1, "pollMs": above0, "health.loadPerCore": above0, "health.busyCpuPct": pct,
     "limits.defaultMin": above0, "limits.debugMin": above0, "limits.floorMin": above0, "limits.p90Factor": above0,
     "limits.longRunFactor": above0, "limits.longRunUnmeasuredMin": above0, "limits.minSamples": from1,
     "limits.windowDays": above0, "limits.priorityGrace": from1, "limits.orphanCheckMs": above0,
@@ -156,5 +164,14 @@ export function loadSettings(env = process.env, { configText, warn = warnOnce } 
     }
     const settings = overlay(DEFAULTS, given, "", warn);
     settings.slots = Math.floor(settings.slots);
+    if (settings.maxSlots < settings.slots) {
+        // A maxSlots that was set but is below slots is reported; the default only follows slots up.
+        const fallback = Math.max(DEFAULTS.maxSlots, settings.slots);
+        if (given.maxSlots !== undefined && settings.maxSlots === given.maxSlots) {
+            warn(`setting ignored: maxSlots is ${given.maxSlots}, needs a whole number of at least slots `
+                + `(${settings.slots}), ${fallback} kept`);
+        }
+        settings.maxSlots = fallback;
+    }
     return settings;
 }

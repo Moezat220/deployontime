@@ -110,11 +110,11 @@ function otherLimitsHold(cores, rest, limits) {
 }
 
 /** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
- *  The live CPU reading is taken only when limits (the health settings) are given, the load is above its limit and
- *  no other limit already holds a job; otherwise busyCpuPct is null. With limits the reading also carries cpuTimes,
- *  the CPU times it ended on; handed back as cpuSince to a later reading, they let that reading measure the CPU
- *  without waiting. */
-export function readHealth({ probes = {}, limits = null, cpuSince = null } = {}) {
+ *  The live CPU reading is taken only when limits (the health settings) are given, the load is above its limit or
+ *  liveCpu asks for it (extra slots need it at any load), and no other limit already holds a job; otherwise
+ *  busyCpuPct is null. With limits the reading also carries cpuTimes, the CPU times it ended on; handed back as
+ *  cpuSince to a later reading, they let that reading measure the CPU without waiting. */
+export function readHealth({ probes = {}, limits = null, cpuSince = null, liveCpu = false } = {}) {
     const read = {
         load: probeLoad, cpuTimes: probeCpuTimes, wait: pause, memory: probeMemoryFreePct,
         disk: probeDiskFreeGB, battery: readBattery, ...probes,
@@ -123,7 +123,7 @@ export function readHealth({ probes = {}, limits = null, cpuSince = null } = {})
     const rest = { freePct: read.memory(), diskGB: read.disk(), battery: read.battery() };
     if (!limits) return { load, cores, busyCpuPct: null, ...rest };
     const loadHolds = load > cores * limits.loadPerCore;
-    const { busyCpuPct, cpuTimes } = loadHolds && !otherLimitsHold(cores, rest, limits)
+    const { busyCpuPct, cpuTimes } = (loadHolds || liveCpu) && !otherLimitsHold(cores, rest, limits)
         ? busyCpuNow(cpuSince, read)
         : { busyCpuPct: null, cpuTimes: cpuTimesNow(read) };
     return { load, cores, busyCpuPct, ...rest, cpuTimes };
@@ -142,13 +142,18 @@ const cpuTimesOf = (saved) => saved?.cpuTimes ?? null;
  *  reading, which the next reading measures the CPU against, and the time a reading finished, so a reading that
  *  took a while is not already old when it is saved. A cache that cannot be read or written only means a fresh
  *  reading. Temporary files of the cache that a process left behind when it died while writing are removed when a
- *  reading is saved. read is handed { cpuSince }. clock gives the time now. */
-export function cachedHealth(file, maxAgeMs, read = readHealth, clock = Date.now) {
+ *  reading is saved. read is handed { cpuSince }, and liveCpu when it is asked for. clock gives the time now.
+ *  liveCpu asks for the live CPU reading at any load: a saved reading that has no CPU value and was not taken with
+ *  liveCpu is then read again, with it. */
+export function cachedHealth(file, maxAgeMs, read = readHealth, clock = Date.now, { liveCpu = false } = {}) {
     const saved = readJson(file, null);
     const age = clock() - saved?.at;
-    if (saved?.reading && age >= 0 && age < Math.min(maxAgeMs, MAX_SHARED_READING_MS)) return saved.reading;
-    const { cpuTimes, ...reading } = read({ cpuSince: cpuTimesOf(saved) });
-    try { writeJsonAtomic(file, { at: clock(), reading, cpuTimes }); } catch { /* the next poll reads again */ }
+    const fresh = saved?.reading && age >= 0 && age < Math.min(maxAgeMs, MAX_SHARED_READING_MS);
+    const enough = !liveCpu || saved?.liveCpu === true || Number.isFinite(saved?.reading?.busyCpuPct);
+    if (fresh && enough) return saved.reading;
+    const asked = liveCpu ? { liveCpu: true } : {};
+    const { cpuTimes, ...reading } = read({ cpuSince: cpuTimesOf(saved), ...asked });
+    try { writeJsonAtomic(file, { at: clock(), reading, cpuTimes, ...asked }); } catch { /* the next poll reads again */ }
     dropOldTemps(file);
     return reading;
 }

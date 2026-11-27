@@ -4,7 +4,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { settingEnv, tempDir } from "./testkit.mjs";
-import { DEFAULTS, defaultHome, homeDir, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
+import { DEFAULTS, defaultHome, defaultMaxSlots, homeDir, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const collect = () => { const seen = []; return { seen, warn: (text) => seen.push(text) }; };
@@ -212,7 +212,8 @@ test("DEFAULTS: output folders and dev-server pattern cover the common tools", (
 
 test("README settings table: every number setting has a row, and each row's marking is what the code enforces", async () => {
     const { readFileSync } = await import("node:fs");
-    const rows = readFileSync(join(HERE, "README.md"), "utf8").split("\n").map((l) => /^\| `([\w.]+)` \| ([\d.]+) \| (.*) \|$/.exec(l)).filter(Boolean);
+    const row = /^\| `([\w.]+)` \| ([\d.]+|half the cores[^|]*) \| (.*) \|$/;
+    const rows = readFileSync(join(HERE, "README.md"), "utf8").split("\n").map((l) => row.exec(l)).filter(Boolean);
     const numberKeys = Object.entries(DEFAULTS).flatMap(([k, v]) => (typeof v === "number"
         ? [k]
         : v && typeof v === "object" && !Array.isArray(v)
@@ -226,10 +227,13 @@ test("README settings table: every number setting has a row, and each row's mark
     };
     for (const [, key, , meaning] of rows) {
         // [value, refused?] pairs that tell the three markings apart
-        const probes = /A whole number, at least 1\./.test(meaning) ? [[0, true], [0.5, true], [1, false], [1.5, true], [2, false]]
+        // "at least `slots`" is judged against the default slots, 2
+        const probes = /A whole number, at least `slots`\./.test(meaning) ? [[0, true], [1, true], [2, false], [2.5, true], [3, false]]
+            : /A whole number, at least 1\./.test(meaning) ? [[0, true], [0.5, true], [1, false], [1.5, true], [2, false]]
             : /At least 1[.;]/.test(meaning) ? [[0, true], [0.5, true], [1.5, false]]
             : /Above 0\./.test(meaning) ? [[0, true], [0.5, false], [-1, true]]
             : /Above 0, at most 100\./.test(meaning) ? [[0, true], [0.5, false], [100, false], [100.5, true]]
+            : /From 1 to 100\./.test(meaning) ? [[0.5, true], [1, false], [100, false], [100.5, true]]
             : [[0, false], [-1, true]];
         for (const [value, no] of probes) assert.equal(refused(key, value), no, `${key} = ${value}: README marking "${meaning}"`);
     }
@@ -245,5 +249,43 @@ test("loadSettings: isolateLinks is a list of relative paths inside the reposito
         assert.deepEqual(warnings, [
             `setting ignored: isolateLinks is ${JSON.stringify(bad)}, needs a list of relative paths inside the repository, default [] kept`,
         ]);
+    }
+});
+
+test("defaultMaxSlots: half the cores, at least 2", () => {
+    assert.deepEqual([1, 2, 3, 4, 5, 10, 16].map((cores) => defaultMaxSlots(cores)), [2, 2, 2, 2, 2, 5, 8]);
+    assert.equal(DEFAULTS.maxSlots, defaultMaxSlots());
+    assert.deepEqual([DEFAULTS.extraSlotCpuPct, DEFAULTS.extraSlotSettleSec], [60, 10]);
+});
+
+test("loadSettings: maxSlots needs a whole number of at least slots, and its default follows slots up", () => {
+    assert.deepEqual(load({ slots: 3, maxSlots: 3 }), { settings: { ...DEFAULTS, slots: 3, maxSlots: 3 }, warnings: [] });
+    assert.equal(load({ slots: 2, maxSlots: 7 }).settings.maxSlots, 7);
+    const high = Math.max(DEFAULTS.maxSlots + 3, 12);
+    assert.deepEqual(load({ slots: high }), { settings: { ...DEFAULTS, slots: high, maxSlots: high }, warnings: [] });
+    const below = load({ slots: 4, maxSlots: 3 });
+    const kept = Math.max(DEFAULTS.maxSlots, 4);
+    assert.equal(below.settings.maxSlots, kept);
+    assert.deepEqual(below.warnings, [`setting ignored: maxSlots is 3, needs a whole number of at least slots (4), ${kept} kept`]);
+    for (const bad of [0, 2.5, -1, "4", null]) {
+        const { settings, warnings } = load({ maxSlots: bad });
+        assert.equal(settings.maxSlots, DEFAULTS.maxSlots, String(bad));
+        assert.equal(warnings.length, 1, String(bad));
+        assert.match(warnings[0], /^setting ignored: maxSlots is .*, needs a whole number of 1 or more, default \d+ kept$/);
+    }
+});
+
+test("loadSettings: extraSlotCpuPct needs a number from 1 to 100, extraSlotSettleSec one of 0 or more", () => {
+    assert.deepEqual(load({ extraSlotCpuPct: 1, extraSlotSettleSec: 0 }).warnings, []);
+    assert.deepEqual([load({ extraSlotCpuPct: 100 }).settings.extraSlotCpuPct, load({ extraSlotSettleSec: 2.5 }).settings.extraSlotSettleSec], [100, 2.5]);
+    for (const bad of [0, 0.5, 100.5, -3, "50"]) {
+        const { settings, warnings } = load({ extraSlotCpuPct: bad });
+        assert.equal(settings.extraSlotCpuPct, 60, String(bad));
+        assert.deepEqual(warnings, [`setting ignored: extraSlotCpuPct is ${JSON.stringify(bad)}, needs a number from 1 to 100, default 60 kept`]);
+    }
+    for (const bad of [-1, "10", Infinity]) {
+        const { settings, warnings } = load({ extraSlotSettleSec: bad });
+        assert.equal(settings.extraSlotSettleSec, 10, String(bad));
+        assert.equal(warnings.length, 1, String(bad));
     }
 });

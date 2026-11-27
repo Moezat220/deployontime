@@ -12,7 +12,7 @@ typecheck of a few files finishes quickly and does not need the queue.
 What the queue does for every job started through it:
 
 1. **Line.** Jobs queue up first come, first served. Only a set number hold a slot at the same time (2 by
-   default).
+   default, and a few more while the CPU has room; see [Extra slots](#extra-slots)).
 2. **Gate.** The first in line starts only when a slot is free and the computer has room: load, free memory, free
    disk, and the battery when the computer runs on it. See [Health gate](#health-gate).
 3. **Limit.** The job runs under a time limit. At the limit, the job and everything it started are stopped.
@@ -297,11 +297,19 @@ and a nested run inside a nested run one step further in; it holds no slot and i
 that waits for a place under its parent says `waiting for a nested place` and names the parent. Its `min so far`
 counts from when it began to wait, and once it runs, from when it started to run.
 
+While jobs hold [extra slots](#extra-slots), the first line counts them apart, for example
+`slots: 3 taken (2 + 1 extra while the CPU has room), 1 waiting`, and each job in an extra slot says `extra slot`.
+Once the base slots are taken, the gate line also says why an extra slot is or is not given, for example
+`gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%` or
+`gate: shut; no free slot: 2 of 2 taken, by "shop-api: lint" and "docs-site: build"; no extra slot: a job started 4 s
+ago, extra slots wait 10 s after a start`.
+
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
-its limit, memory, disk and battery do not already hold a job, and `health.json` holds no usable CPU times up to 5
-seconds old, that reading takes about a second longer, while the CPU is measured. CPU times younger than half a
-second make it wait only for the rest of the half second.
+its limit, or the base slots are all taken and an extra slot is left, memory, disk and battery do not already hold a
+job, and `health.json` holds no usable CPU times up to 5 seconds old, that reading takes about a second longer, while
+the CPU is measured. With a base slot free and the load inside its limit, `status` does not measure the CPU. CPU times
+younger than half a second make it wait only for the rest of the half second.
 
 `status` only reads the state folder and never changes it. The file of a job that has ended is still left out of
 what it prints, but the file itself stays until a waiting `run` or the reaper removes it.
@@ -805,10 +813,45 @@ of a waiting job keeps the CPU times it ended on in `health.json`; a `status` re
 are between half a second and 5 seconds old, the next reading measures the CPU since then and does not wait; when
 they are younger, it waits for the rest of the half second and then measures since then; when there are none, they
 are older or they make no sense, it takes two readings one second apart. The message then names both numbers, for
-example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the load is inside its limit, the CPU is not
-measured and the load never holds a job. The CPU is measured after memory, disk and battery, and not at all when one
-of those already holds the job. When the CPU is not measured or cannot be measured, a load above its limit holds the
-job as the load alone would.
+example `load too high: 12.4 now, 8.0 allowed; CPU 96% busy now`. When the load is inside its limit, the load never
+holds a job, and the CPU is measured only when an [extra slot](#extra-slots) is in question: the base slots are all
+taken, an extra slot is left and, for `run`, the job is first in line. A job that finds a base slot free never
+waits for a CPU reading. The CPU is measured after
+memory, disk and battery, and not at all when one of those already holds the job. When the CPU is not measured or
+cannot be measured, a load above its limit holds the job as the load alone would.
+
+### Extra slots
+
+The `slots` base slots are always there. Beyond them, the first job in line may take an extra slot, up to
+`maxSlots` slots in all, but only when at that moment:
+
+- the live CPU reading, the same one the load check above takes and shares between waiting jobs, is below
+  `extraSlotCpuPct` percent busy; and
+- no job has started in the last `extraSlotSettleSec` seconds, so a job that just started has time to show its real
+  load before another one joins. Every start counts: in a base slot, in an extra slot, and of a nested run, which
+  counts from the moment it starts to run.
+
+The base slots are the slot files numbered 0 to `slots` − 1, and the others are the extra slots. A base slot that
+frees while jobs hold extra slots is taken again at once, without the CPU check, as any base slot is. A job that took
+a slot file numbered `slots` or higher is journalled with `extraSlot`, and `status` names it `extra slot` while more
+jobs than the base slots run.
+When only the settle time holds the first job in line back, it looks again as soon as the settle time has passed,
+not only at its next poll. Two jobs that take a slot at the same moment never both start inside the settle time
+with one of them in an extra slot: a job that has just taken an extra slot looks at the slots again, and gives it
+back and waits on when another job took a slot first inside the settle time.
+
+When the CPU reading is unknown, no extra slot is given. The health gate applies to a job in an extra slot exactly as
+to one in a base slot, and the line keeps its order: an extra slot goes to the first job in line. A job that holds an
+extra slot keeps it until it ends, also when the CPU gets busy later. `maxSlots` set to the same number as `slots`
+turns extra slots off.
+
+Why the number follows the CPU and is not simply set higher: one run of `node bench/slots.mjs` on a Mac, with a light
+workload whose busy threads fit the cores easily (6 agents whose suites use 1 thread each) and a heavy one that asks
+for twice the cores (4 agents with 5 threads each), took 64 s for the light work with 2 slots, with the CPU at most
+37 % busy, and 36 s with 6 slots. The heavy work took 58 s with no failed tests with 2 slots, but 115 to 154 s with
+3, 4 or 6 slots, with 225 to 340 of 400 tests failing because they were slowed past their limit. A fixed higher
+count makes heavy work 2 to 2.7 times slower, and a fixed 2 leaves cores idle with light work.
+`node bench/slots.mjs --slots 2,6,auto` runs the same comparison with extra slots as well.
 
 When a value cannot be read, such as on a computer with no battery or when a tool does not answer, that check is
 left out and never holds a job, so it protects nothing until it can be read again. A reading of 0, such as a full
@@ -1007,7 +1050,10 @@ default. Only a missing file is silent.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `slots` | 2 | Jobs that may run at once. At least 1; a fraction is rounded down. |
+| `slots` | 2 | Jobs that may run at once: the base slots, always there. At least 1; a fraction is rounded down. |
+| `maxSlots` | half the cores, at least `slots` | Jobs that may run at once with [extra slots](#extra-slots). The same number as `slots` turns extra slots off. A whole number, at least `slots`. |
+| `extraSlotCpuPct` | 60 | An extra slot is given only while the live CPU reading is below this percent busy. From 1 to 100. |
+| `extraSlotSettleSec` | 10 | An extra slot is given only when no job has started in this many seconds. |
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
 | `mcpMaxJobs` | 20 | Jobs started by `dotime-mcp` that may wait or run at once; `queue_run` refuses a further one with a tool error. Each costs two Node processes while it waits. A whole number, at least 1. |
 | `flakyWindowDays` | 14 | How many days back the [flaky flag](#flaky-checks) and `dotime-queue flaky` read the journal. A whole number, at least 1. |
@@ -1101,10 +1147,10 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`, `limitMin`,
 `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`, `afterFix`,
 `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested`, `isolate` (an isolated run), `stamp` (on a
-line with outcome `skipped`: the passing run it relied on) or `scheduled` (the id of the scheduled job that started the
-run). The schedule tick also writes lines of its own, with `scheduled` and outcome `missed` (with `missed`, the number
-of missed times, and `missedFrom` and `missedTo`), `busy` (with `busyPid`, the last run that still went) or
-`could-not-start`. Lines written by `run` also carry `pid`, the pid of the
+line with outcome `skipped`: the passing run it relied on), `scheduled` (the id of the scheduled job that started the
+run) or `extraSlot` (the job ran in an extra slot). The schedule tick also writes lines of its own, with `scheduled`
+and outcome `missed` (with `missed`, the number of missed times, and `missedFrom` and `missedTo`), `busy` (with
+`busyPid`, the last run that still went) or `could-not-start`. Lines written by `run` also carry `pid`, the pid of the
 `run` process, so whoever started that process can find its own line. Copies of the queue that share a state folder all
 read the same fields, so a field keeps its name; a new field is only ever added.
 

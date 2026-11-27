@@ -146,6 +146,18 @@ test("readHealth: takes the live CPU reading only when the load is above its lim
     assert.deepEqual([noLimits.busyCpuPct, m.waits], [null, [OWN_CPU_SPAN_MS]]);
 });
 
+test("readHealth: with liveCpu takes the live CPU reading at any load, but not when another limit already holds", () => {
+    const m = machine(10_000);
+    const probes = { memory: () => 71, disk: () => 50, battery: () => null, load: () => ({ load: 1, cores: 4 }), ...m.probes };
+    const calm = readHealth({ probes, limits: LIMITS, liveCpu: true });
+    assert.deepEqual([calm.busyCpuPct, m.waits], [20, [OWN_CPU_SPAN_MS]]);
+    assert.deepEqual(healthVerdict(calm, LIMITS), { ok: true, blocks: [] });
+    const lowDisk = readHealth({ probes: { ...probes, disk: () => 3 }, limits: LIMITS, liveCpu: true });
+    assert.deepEqual([lowDisk.busyCpuPct, m.waits], [null, [OWN_CPU_SPAN_MS]]);
+    const noLimits = readHealth({ probes, liveCpu: true });
+    assert.equal(noLimits.busyCpuPct, null);
+});
+
 test("readHealth: takes the live CPU reading last, and not at all when another limit already holds", () => {
     const order = [], m = machine(10_000);
     const probe = (name, value) => () => { order.push(name); return value; };
@@ -172,6 +184,28 @@ test("cachedHealth: the shared reading carries the live CPU reading, so waiters 
     assert.equal(cachedHealth(file, 3000, read, () => 11_000).busyCpuPct, 20);
     assert.equal(JSON.parse(readFileSync(file, "utf8")).reading.busyCpuPct, 20);
     assert.deepEqual(m.waits, [OWN_CPU_SPAN_MS]);
+});
+
+test("cachedHealth: asked for the live CPU reading, it reads again when the shared reading has none, and shares its own", () => {
+    const file = join(tempDir("health"), "health.json"), handed = [];
+    let busyCpuPct = null;
+    const read = (options) => {
+        handed.push(options.liveCpu ?? false);
+        return { load: 1, cores: 4, busyCpuPct, freePct: 50, diskGB: 80, battery: null, cpuTimes: timesAt(10_000) };
+    };
+    cachedHealth(file, 3000, read, () => 10_000);
+    cachedHealth(file, 3000, read, () => 10_100);
+    assert.deepEqual(handed, [false], "a plain reading is shared with a plain ask");
+    cachedHealth(file, 3000, read, () => 10_200, { liveCpu: true });
+    assert.deepEqual(handed, [false, true], "one without a CPU value is read again, with the live CPU reading");
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).liveCpu, true);
+    cachedHealth(file, 3000, read, () => 10_300, { liveCpu: true });
+    cachedHealth(file, 3000, read, () => 10_400);
+    assert.deepEqual(handed, [false, true], "one taken with liveCpu is shared, even when another limit left it without a value");
+    busyCpuPct = 33;
+    cachedHealth(file, 3000, read, () => 20_000);
+    assert.equal(cachedHealth(file, 3000, read, () => 20_100, { liveCpu: true }).busyCpuPct, 33);
+    assert.deepEqual(handed, [false, true, false], "one with a CPU value serves the live CPU ask");
 });
 
 /** A reading under a high load on a fresh machine whose clock is at now, measured against cpuSince. */

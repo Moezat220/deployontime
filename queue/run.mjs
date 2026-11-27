@@ -16,7 +16,9 @@ import { minutesSince } from "./clock.mjs";
 import { failStop } from "./failstop.mjs";
 import { fingerprint } from "./fingerprint.mjs";
 import { flakyNoteFor } from "./flaky.mjs";
-import { blockReason, blockText, decide, gateBlocks, shouldGiveUp } from "./gate.mjs";
+import {
+    blockReason, blockText, decide, extraInQuestion, gateBlocks, shouldGiveUp, slotRoom, startCrowded,
+} from "./gate.mjs";
 import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
@@ -31,7 +33,7 @@ import {
 } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
-import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
+import { addNested, enqueue, releaseSlot, slotNumber, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 import { SCHEDULED_MARKER } from "./tick.mjs";
@@ -117,13 +119,18 @@ export function lowRoomHint(blocks, configFile) {
 /** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
  *  tally }; waitFrom and tally, when given, carry on an earlier wait, so the wait limit counts from its start and the
  *  time is booked with it. Priority plays no part in here: it is in the job's ticket, which orders the line, and in
- *  slotMeta.
+ *  slotMeta. Once the base slots are taken, the first in line may take an extra slot as slotRoom() allows, judged on
+ *  the live CPU reading of the same health reading; the health gate applies to it as to any slot. Only then is the
+ *  health reading asked for the live CPU reading, which can take a second; a job that finds a base slot free never
+ *  waits for it. A slot taken as an extra one is given back when startCrowded() finds that another job started
+ *  first inside the settle time. The slot counts as extra when its number is beyond the base slots, so a job that
+ *  took a base slot freed a moment earlier is not marked extra.
  *  deps: { now, sleep, readHealth, say, leaving }; leaving() names a signal that asked the job to leave, or null.
- *  Returns { slot, tally, waitFrom }, { gaveUp: true, tally } or { left: signal, tally }; tally is the waiting time
- *  per gate in ms. */
+ *  Returns { slot, tally, waitFrom, extra }, { gaveUp: true, tally } or { left: signal, tally }; tally is the waiting
+ *  time per gate in ms, and extra is true when the slot is an extra one. */
 export async function waitForSlot(job, deps) {
     const { pid, label, maxWait, settings, files } = job;
-    const max = settings.slots;
+    const base = settings.slots;
     const tally = { ...job.tally };
     const waitFrom = job.waitFrom ?? deps.now();
     let shownPosition = 0;
@@ -133,23 +140,34 @@ export async function waitForSlot(job, deps) {
         const signal = deps.leaving?.() ?? null;
         if (signal) return { left: signal, tally };
         const snap = snapshot({ dirs: files, prune: true });
+        // One reading per poll, taken only when something needs it; the extra-slot rule and the message reuse it.
+        let reading = null;
+        let verdict = null;
+        const extraNext = extraInQuestion(snap.holders, settings);
+        const liveCpu = extraNext && decide(snap, pid, Infinity).go ? { liveCpu: true } : {};
+        const read = () => (reading ??= deps.readHealth(liveCpu));
+        const health = () => (verdict ??= healthVerdict(read(), settings.health));
+        const busyCpuPct = extraNext ? read().busyCpuPct : null;
+        const room = slotRoom({ holders: snap.holders, nested: snap.nested, busyCpuPct, now: deps.now() }, settings);
+        const max = room.max;
         const turn = decide(snap, pid, max);
         const ahead = turn.position - 1;
-        // One reading per poll, taken only when something needs it; the message reuses it.
-        let reading = null;
-        const health = () => (reading ??= healthVerdict(deps.readHealth(), settings.health));
         // Only full slots make the health reading irrelevant to a waiter.
         const slotFree = snap.holders.length < max;
         const gateHealth = turn.go || slotFree ? health() : null;
         if (turn.go && gateHealth.ok) {
-            const slot = takeSlot(pid, label, max, job.slotMeta, files);
-            if (slot) return { slot, tally, waitFrom };
+            const meta = (n) => (n >= base ? { ...job.slotMeta, extra: true } : job.slotMeta);
+            const slot = takeSlot(pid, label, room.limit ?? max, meta, files);
+            const crowded = slot && room.extra
+                && startCrowded({ ...snapshot({ dirs: files }), mine: slot, now: deps.now() }, settings);
+            if (crowded) releaseSlot(slot, pid);
+            else if (slot) return { slot, tally, waitFrom, ...(slotNumber(slot) >= base ? { extra: true } : {}) };
         }
-        const heldBy = blockReason({ holders: snap.holders, health: gateHealth, ahead }, max);
+        const heldBy = blockReason({ holders: snap.holders, health: gateHealth, ahead, room, base }, max);
         const now = deps.now();
         const giveUp = shouldGiveUp({ startedAt: waitFrom, now, maxWaitMin: maxWait });
         if (giveUp || turn.position !== shownPosition || now - shownAt > REPEAT_WAIT_LINE_MS) {
-            const all = gateBlocks({ holders: snap.holders, health: health(), ahead }, max);
+            const all = gateBlocks({ holders: snap.holders, health: health(), ahead, room, base }, max);
             const why = blockText(all) || "slot lost: another job took it a moment ago";
             const waited = `${minutesSince(waitFrom, now)} min waited`;
             if (giveUp) {
@@ -167,7 +185,9 @@ export async function waitForSlot(job, deps) {
             shownAt = now;
         }
         const sleptFrom = deps.now();
-        await deps.sleep(settings.pollMs);
+        // The first in line, held back from an extra slot only by the settle time, looks again as soon as it has passed.
+        const nap = turn.position === 1 && room.waitMs > 0 ? Math.min(settings.pollMs, room.waitMs) : settings.pollMs;
+        await deps.sleep(nap);
         // A poll that ends with a signal pending is not booked: the job leaves at the top of the loop.
         if (deps.leaving?.()) continue;
         addWait(tally, heldBy, deps.now() - sleptFrom);
@@ -400,8 +420,8 @@ export function runJob(job, slot, deps) {
 }
 
 /** The writer of a job's one journal line. note({ startedAt, commit, tally, details, extra }) fills in any of those
- *  as the job goes, where extra holds fields written after the details; finish() writes the line once and ignores
- *  later calls, and written() gives that line, or null before.
+ *  as the job goes, where extra holds fields written after the details; addDetails(fields) adds to the details;
+ *  finish() writes the line once and ignores later calls, and written() gives that line, or null before.
  *  pid, when given, is the pid of the `run` process, kept with the line so a caller that started that process can
  *  find its own line. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now, pid }) {
@@ -411,6 +431,9 @@ export function journalWriter({ label, folder, cwd, priority, queuedAt, command,
         written: () => written,
         note(fields) {
             for (const name of Object.keys(known)) if (fields[name] !== undefined) known[name] = fields[name];
+        },
+        addDetails(fields) {
+            known.details = { ...known.details, ...fields };
         },
         finish(outcome, exit, more = {}) {
             if (written) return;
@@ -683,6 +706,10 @@ async function runInLine(job, waitDeps, deps) {
         const ended = endOfWait(waited, journal, waitDeps.leaving());
         if (ended !== null) return ended;
         rmSync(ticket, { force: true });
+        if (waited.extra) {
+            journal.addDetails({ extraSlot: true });
+            deps.say(`extra slot: starts beyond the ${settings.slots} base slots while the CPU has room`);
+        }
         return await runJob({ ...job, waitFrom: waited.waitFrom }, slot, deps);
     } finally {
         leaveLine();
@@ -717,7 +744,8 @@ async function runNested(job, waitDeps, deps) {
         if (ended !== null) return { exit: ended };
         say(waited.atOnce ? `${intro}; starts at once: no slot, no place in line, no health gate`
             : `${intro}; starts now that a nested place is free: no slot, no place in line, no health gate`);
-        updateSlot(note, pid, { waiting: undefined });
+        // The start is noted with the end of the wait, so the settle time of extra slots counts this run at once.
+        updateSlot(note, pid, { waiting: undefined, startedAt: deps.now() });
         return { exit: await runJob({ ...job, waitFrom: waited.waitFrom, slotMarker: parent.slot }, note, deps) };
     } finally {
         leave();
