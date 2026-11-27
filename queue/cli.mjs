@@ -9,14 +9,16 @@ import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health
 import { gitState, isRepository } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { notify } from "./notify.mjs";
+import { markerOf } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
 import { flagError, opt, USAGE } from "./args.mjs";
 import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
-/** The lines `status` prints. gate: the reason the gate is shut, or "". */
-export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
+/** The lines `status` prints. gate: the reason the gate is shut, or "". nested: the nested runs, each shown under the
+ *  job whose slot it names in outer; they hold no slot and are not counted. */
+export function statusLines({ holders, queue, nested = [], gate, max, now = Date.now() }) {
     const lines = [`slots: ${holders.length} of ${max} taken, ${queue.length} waiting`];
     for (const h of holders) {
         const began = h.startedAt ?? h.at;
@@ -32,6 +34,9 @@ export function statusLines({ holders, queue, gate, max, now = Date.now() }) {
             if (h.longRunMin && ranMin > h.longRunMin) facts.push(`past the ${h.longRunMin} min long-run mark`);
         }
         lines.push(`running "${h.label}": ${facts.join(", ")}`);
+        for (const n of nested.filter((entry) => h.file && entry.outer === markerOf(h.file))) {
+            lines.push(`  nested "${n.label}": pid ${n.pid}, ${minutesSince(n.at, now)} min so far, no slot of its own`);
+        }
     }
     queue.forEach((q, i) => {
         const priority = q.priority ? ", priority" : "";
@@ -56,11 +61,11 @@ const say = (text) => process.stderr.write(`dotime-queue: ${text}\n`);
 /** Prints `status` and returns 0. deps: { readHealth, print }; readHealth is handed { limits }, as for `run`, and
  *  the CPU times saved with the shared reading as cpuSince, which status reads but never writes. */
 export function cmdStatus({ settings, files }, { readHealth: read = readHealth, print = console.log } = {}) {
-    const { holders, queue } = snapshot({ dirs: files });
+    const { holders, queue, nested } = snapshot({ dirs: files });
     const cpuSince = savedCpuTimes(files.healthCache);
     const health = healthVerdict(read({ limits: settings.health, cpuSince }), settings.health);
     const gate = gateReason({ holders, health }, settings.slots);
-    for (const line of statusLines({ holders, queue, gate, max: settings.slots })) print(line);
+    for (const line of statusLines({ holders, queue, nested, gate, max: settings.slots })) print(line);
     return 0;
 }
 

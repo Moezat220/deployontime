@@ -138,6 +138,19 @@ Details:
 - `run` ends when the job's main process ends. A process the job started in the background and left running does
   not keep `run` waiting.
 
+**Nested runs.** A job may run the queue itself, for example an `npm test` script that calls `dotime-queue run`, or
+an agent at work inside a queued job. Such an inner run would wait for a slot that its own outer job holds, and with
+one slot it would never get one. So `run` hands every job it starts the variable `DOTIME_JOB`, which names the slot
+the job holds, and a `run` that finds it is a nested run: it starts at once, takes no slot, joins no line and does
+not wait for the health gate, because the outer job was already let through. Everything else stays the same: the
+option checks, the refusal of a check that failed twice, a run limit of its own, the handling of INT, TERM and HUP,
+and a journal line, marked `nested: true` and with no waiting time booked, so pass stamps and `history` see it as
+usual. A nested run says so on a `nested:` line when it starts.
+
+`DOTIME_JOB` is trusted only while the slot it names is held and the process holding that slot is an ancestor of the
+new run. A copy of the variable in another shell, or one left in a program that outlived its job, fails that check,
+and that run queues as usual. The variable therefore cannot be used to skip the line from outside a job.
+
 ### `status`
 
 ```
@@ -146,7 +159,8 @@ dotime-queue status
 
 Prints the taken slots, each running job with its limit and time left, the waiting jobs in start order, and the
 gate. `gate: open` means a job may start now; `gate: shut;` is followed by what holds new jobs back. `dotime-queue`
-with nothing after it prints the same as `status`.
+with nothing after it prints the same as `status`. A [nested run](#run) is shown indented under the job it runs in;
+it holds no slot and is not counted as one.
 
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
@@ -536,12 +550,14 @@ Environment variables:
 | `DOTIME_TZ` | `UTC` | Time zone (an IANA zone name) for printed times and for calendar days. |
 | `DOTIME_NOTIFY` | not set | `log`: notices go to the log file only. |
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
+| `DOTIME_JOB` | set by `run` | Given to each job; names the slot it holds. Not a setting: see nested runs under [`run`](#run). |
 
 ## Files in the state folder
 
 | File | Content |
 | --- | --- |
 | `config.json` | Settings. Optional. |
+| `nested/` | One small file per nested run while it runs, so `status` can show it under its outer job. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
 | `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
 | `journal.jsonl` | One line per job. |
 | `notices/` | Long-run and idle-slot notices, one file each. |
@@ -550,14 +566,14 @@ Environment variables:
 | `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
 
-A file in `slots/` or `line/` is also removed when its pid now belongs to a process that started later.
+A file in `slots/`, `line/` or `nested/` is also removed when its pid now belongs to a process that started later.
 
 Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`,
 `cwd`, `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`,
 `waitBy` (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`,
 `limitMin`, `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`,
-`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt` or `warnedAt`. Copies of the queue that share a state
-folder all read the same fields, so a field keeps its name; a new field is only ever added.
+`afterFix`, `signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt` or `nested`. Copies of the queue that share
+a state folder all read the same fields, so a field keeps its name; a new field is only ever added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
 the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no

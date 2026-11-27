@@ -249,6 +249,65 @@ test("runJob: a command that cannot start ends with 127 and is journalled as cou
     assert.equal(job.said[0].startsWith("start failed: exit 127, "), true);
 });
 
+test("runJob: the job finds the marker of its slot in DOTIME_JOB, for a run of the queue inside it", async () => {
+    const box = sandbox(), seen = join(box.work, "marker");
+    const job = startJob(box, [NODE, "-e", `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB)`]);
+    assert.equal(await job.run.result, 0);
+    assert.equal(readFileSync(seen, "utf8"), "slot-0");
+});
+
+// ---- nested runs: this file's parent stands in for the queue process of the outer job ----
+
+const nestedNotes = (box) => {
+    try { return readdirSync(join(box.home, "nested")); } catch { return []; }
+};
+/** A sandbox whose only slot is held by an ancestor of this process, and deps whose environment names that slot. */
+function nestedBox() {
+    const box = sandbox({ slots: 1 });
+    takeSlot(process.ppid, "docs-site: test suite", 1, {}, box.ctx.files);
+    return box;
+}
+const nestedDeps = (box, overrides = {}) => makeDeps(box, { env: { DOTIME_JOB: "slot-0" }, readHealth: assert.fail, ...overrides });
+
+test("run: a nested run takes no slot, joins no line, skips the gate, passes the marker on and journals nested", async () => {
+    const box = nestedBox(), seen = join(box.work, "marker"), d = nestedDeps(box);
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_JOB)`;
+    const args = ["run", "--label", "docs-site: unit tests", "--max-wait", "0.01", "--", NODE, "-e", script];
+    assert.equal(await runCommand(args, box.ctx, d.deps), 0);
+    assert.equal(readFileSync(seen, "utf8"), "slot-0", "a run nested one level deeper is checked against the same slot");
+    assert.deepEqual(d.said, [`nested: inside "docs-site: test suite", pid ${process.ppid}; starts at once: no slot, no place in line, no health gate`]);
+    const [line] = journal(box);
+    assert.deepEqual([line.outcome, line.exit, line.nested, line.waitBy, line.waitMin, typeof line.startedAt], ["ran", 0, true, {}, 0, "string"]);
+    assert.deepEqual(slots(box).map((slot) => slot.pid), [process.ppid]);
+    assert.deepEqual([readdirSync(join(box.home, "line")), nestedNotes(box), d.signals.eventNames()], [[], [], []]);
+});
+
+test("run: a nested run keeps the repeated-failure stop and its own run limit", async () => {
+    const box = nestedBox(), failing = ["run", "--label", "shop-api: unit tests", "--", NODE, "-e", "process.exit(4)"];
+    for (const attempt of [1, 2]) assert.equal(await runCommand(failing, box.ctx, nestedDeps(box).deps), 4, `attempt ${attempt}`);
+    const refused = nestedDeps(box);
+    assert.equal(await runCommand(failing, box.ctx, refused.deps), EXIT.refused);
+    assert.equal(refused.said.at(-1).startsWith("refused: exit 3; same check failed twice on unchanged code: "), true);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.nested]), [["ran", 4, true], ["ran", 4, true], ["refused", 3, true]]);
+    const pidFile = join(box.work, "job.pid"), limited = nestedDeps(box);
+    const run = settle(runCommand(["run", "--label", "shop-api: e2e", "--max-run", "2", "--", NODE, "-e", savePid(pidFile)], box.ctx, limited.deps));
+    await until(() => existsSync(pidFile));
+    assert.deepEqual(limited.clock.advanceTo(2), [2]);
+    assert.equal(await run.result, EXIT.timedOut);
+    await until(() => !alive(pidIn(pidFile)), 3000);
+    assert.deepEqual([journal(box).at(-1).outcome, journal(box).at(-1).nested, nestedNotes(box)], ["timed-out", true, []]);
+});
+
+test("run: a signal reaches a nested job, which is journalled as stopped", async () => {
+    const box = nestedBox(), pidFile = join(box.work, "job.pid"), d = nestedDeps(box);
+    const run = settle(runCommand(["run", "--label", "docs-site: unit tests", "--", NODE, "-e", savePid(pidFile)], box.ctx, d.deps));
+    await until(() => existsSync(pidFile));
+    d.signals.emit("SIGTERM");
+    assert.equal(await run.result, 1);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.signal, line.nested]), [["stopped", "SIGTERM", true]]);
+    assert.deepEqual([nestedNotes(box), d.signals.eventNames()], [[], []]);
+});
+
 // ---- runCommand, with a made-up reading or a clock moved by hand ----
 
 test("run: when the wait limit runs out, exit 75 names each health reading that kept the gate shut", async () => {

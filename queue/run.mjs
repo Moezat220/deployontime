@@ -3,7 +3,7 @@
 // them and returns the exit code; it never ends the process itself. These come in through deps, so tests can drive
 // each step: the clock, sleeping and timers, the health reading, the commit read when the job is queued and again
 // when it starts, the current folder, starting the job, signals sent to it and signals received, messages,
-// notifications and stored notices.
+// notifications and stored notices, and the environment in which a nested run finds the marker of its outer job.
 // The rest is done directly: the slot, line and journal files in the folders named by files, the git calls for the
 // project name and the code fingerprint, the process table read by snapshot and killTree, and this process's own
 // pid and node binary.
@@ -22,9 +22,10 @@ import { addWait, append, cmdString, jobEnd, parseLines, readLines, record } fro
 import { cmdStem, kindOf } from "./kinds.mjs";
 import { decideLimit, kindStats, stemStats } from "./limits.mjs";
 import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
+import { JOB_MARKER, markerOf, outerJob } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
-import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
+import { addNested, enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -126,9 +127,10 @@ export async function waitForSlot(job, deps) {
 }
 
 /** Runs the job in a slot it holds and resolves with the exit code for `run`. job: { pid, label, project, cwd, cmd
- *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver }, where journal is the writer
- *  from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in place,
- *  so the caller can remove the ones it had until then without a moment in which a signal finds none.
+ *  (the words), priority, kind, limit, waitFrom, settings, files, tz, journal, handOver, marker }, where journal is the
+ *  writer from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in
+ *  place, so the caller can remove the ones it had until then without a moment in which a signal finds none. The job
+ *  finds marker, or else the marker of its slot, in JOB_MARKER. A nested run passes slot null and its outer marker.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
  *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
  *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
@@ -146,7 +148,8 @@ export function runJob(job, slot, deps) {
     // File descriptor 3 is a pipe on which the wrapper reports a command that could not be started. Whether the
     // job inherits it depends on the system, so the run ends when the wrapper exits and not when the pipe closes.
     const stdio = ["inherit", "inherit", "inherit", "pipe"];
-    const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true });
+    const env = { ...process.env, [JOB_MARKER]: job.marker ?? markerOf(slot) };
+    const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
     const signalJob = (signal) => {
         if (signalGroup(child.pid, signal, deps.kill).sent) return;
@@ -304,6 +307,7 @@ export function realDeps({ readHealth, notify, after }) {
         gitState: readGitState,
         signals: process,
         cwd: () => process.cwd(),
+        env: process.env,
     };
 }
 
@@ -322,7 +326,8 @@ export function jobFolder(ctx, deps) {
 /** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd }; without cwd
  *  the current folder is read, and only after the arguments were found valid, so a usage error is reported the same
  *  way in a folder that was removed. A signal while the job waits takes it out of the line and resolves with 130
- *  instead of ending the process. */
+ *  instead of ending the process. A run whose deps.env holds a genuine marker of the job it runs in is nested: once
+ *  past the refusal check it runs at once, with no slot, no place in line and no health gate. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -349,8 +354,12 @@ export async function runCommand(args, ctx, deps) {
     // The journal is read and parsed once for the whole plan.
     const rows = parseLines(readLines(files.journal));
     const plan = planJob({ ...request, head: before.head, fingerprint: print }, settings, rows);
+    const pid = process.pid;
+    const marker = deps.env?.[JOB_MARKER];
+    const outer = marker ? outerJob({ marker, pid, holders: snapshot({ dirs: files }).holders }) : null;
+    const details = outer ? { ...plan.details, nested: true } : plan.details;
     const journal = journalWriter({
-        label, folder, cwd, priority, queuedAt, command, details: plan.details, file: files.journal, now: deps.now,
+        label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now,
     });
     if (plan.refusal) {
         journal.note({ commit: before });
@@ -361,9 +370,11 @@ export async function runCommand(args, ctx, deps) {
     if (plan.afterFixUsed) {
         say(`--after-fix accepted: note "${afterFix}", the check had failed twice on unchanged code`);
     }
+    const { limit, kind } = plan;
+    const job = { pid, label, project, cwd, cmd, priority, kind, limit, settings, files, tz, journal };
+    if (outer) return runNested({ ...job, outer }, deps);
 
     // Wait in line. INT and TERM wake the wait, which then returns, so the one exit path in main() ends the process.
-    const pid = process.pid;
     const ticket = enqueue(pid, label, priority, files);
     let slot = null;
     const leaveLine = () => {
@@ -378,7 +389,6 @@ export async function runCommand(args, ctx, deps) {
         sleeps.wake();
     }]);
     for (const [signal, handler] of leavers) signals.on(signal, handler);
-    const { limit, kind } = plan;
     const slotMeta = {
         kind, limitMin: limit.limitMin, killMin: limit.killMin, longRunMin: limit.longRunMin, project, cwd,
         ...(priority ? { priority: true } : {}),
@@ -401,14 +411,29 @@ export async function runCommand(args, ctx, deps) {
             return EXIT.gaveUp;
         }
         rmSync(ticket, { force: true });
-        const job = {
-            pid, label, project, cwd, cmd, priority, kind, limit, waitFrom: waited.waitFrom,
-            settings, files, tz, journal, handOver: dropLeavers,
-        };
-        return await runJob(job, slot, deps);
+        return await runJob({ ...job, waitFrom: waited.waitFrom, handOver: dropLeavers }, slot, deps);
     } finally {
         dropLeavers();
         leaveLine();
         signals.off("exit", leaveLine);
+    }
+}
+
+/** Runs a nested job: at once, in no slot, noted in the nested folder while it runs so `status` can show it under
+ *  its outer job. job is the one runJob takes, without waitFrom, and with outer, the slot holder it runs inside.
+ *  Everything from the handlers runJob adds onwards is the same as for a job in a slot, and nothing waits on the way
+ *  there, so no signal can arrive while there is no handler for it. */
+async function runNested(job, deps) {
+    const { pid, label, outer, files } = job;
+    const marker = markerOf(outer.file);
+    deps.say(`nested: inside "${outer.label}", pid ${outer.pid}; starts at once: no slot, no place in line, no health gate`);
+    const note = addNested(pid, label, marker, files);
+    const forget = () => rmSync(note, { force: true });
+    deps.signals.on("exit", forget);
+    try {
+        return await runJob({ ...job, marker, waitFrom: deps.now() }, null, deps);
+    } finally {
+        forget();
+        deps.signals.off("exit", forget);
     }
 }

@@ -92,6 +92,22 @@ test("statusLines: one line per running job, per waiting job and for the gate", 
     ]);
 });
 
+test("statusLines: a nested run is shown under the job it runs in and is not counted as taking a slot", () => {
+    const now = Date.UTC(2031, 5, 9, 10, 0);
+    const holders = [
+        { file: "/state/slots/slot-0.json", label: "docs-site: test suite", pid: 3201, at: now - 5 * MINUTE },
+        { file: "/state/slots/slot-1.json", label: "shop-api: lint", pid: 3202, at: now - MINUTE },
+    ];
+    const nested = [{ label: "docs-site: unit tests", pid: 3205, outer: "slot-0", at: now - 3 * MINUTE }];
+    assert.deepEqual(statusLines({ holders, queue: [], nested, gate: "no free slot: 2 of 2 taken", max: 2, now }), [
+        "slots: 2 of 2 taken, 0 waiting",
+        'running "docs-site: test suite": pid 3201, 5 min so far, limit unknown',
+        '  nested "docs-site: unit tests": pid 3205, 3 min so far, no slot of its own',
+        'running "shop-api: lint": pid 3202, 1 min so far, limit unknown',
+        "gate: shut; no free slot: 2 of 2 taken",
+    ]);
+});
+
 test("statusLines: an empty queue with an open gate", () => {
     assert.deepEqual(statusLines({ holders: [], queue: [], gate: "", max: 2 }), ["slots: 0 of 2 taken, 0 waiting", "gate: open"]);
 });
@@ -183,6 +199,56 @@ test("run: a caller's environment cannot raise the slot count", async () => {
     assert.deepEqual([result.code, result.stdout], [75, ""]);
     assert.equal(result.stderr.includes('no free slot: 1 of 1 taken, by "docs-site: build"'), true);
     assert.equal((await cli(box, ["status"], { env: pushy })).stdout.startsWith("slots: 1 of 1 taken"), true);
+});
+
+// ---- nested runs ----
+
+/** The words that run the queue again from inside a job. */
+const innerRun = (label, ...cmd) => [NODE, CLI, "run", "--label", label, "--max-wait", "0.05", "--", ...cmd];
+const nestedNotes = (box) => {
+    try { return readdirSync(join(box.home, "nested")); } catch { return []; }
+};
+
+test("run: a job that runs the queue again gets its inner run started at once, also with the only slot taken", async () => {
+    const box = sandbox({ config: { slots: 1 } });
+    const inner = innerRun("docs-site: unit tests", NODE, "-e", "process.exit(0)");
+    const outer = await cli(box, ["run", "--label", "docs-site: test suite", "--max-wait", "0.05", "--", ...inner]);
+    assert.equal(outer.code, 0, outer.stderr);
+    assert.equal(outer.stderr.includes("gave up"), false);
+    assert.match(outer.stderr, /^dotime-queue: nested: inside "docs-site: test suite", pid \d+; starts at once: no slot, no place in line, no health gate\n$/);
+    const lines = journal(box).map((line) => [line.label, line.outcome, line.exit, line.nested ?? false]);
+    assert.deepEqual(lines, [["docs-site: unit tests", "ran", 0, true], ["docs-site: test suite", "ran", 0, false]]);
+    assert.deepEqual([slots(box), nestedNotes(box)], [[], []]);
+});
+
+test("status: a nested run shows under its outer job while it runs, and the slot count stays at the outer job", async () => {
+    const box = sandbox({ config: { slots: 1 } }), release = join(box.work, "release");
+    const outer = start(box, ["run", "--label", "docs-site: test suite", "--", ...innerRun("docs-site: unit tests", NODE, "-e", untilFile(release))]);
+    await until(() => nestedNotes(box).length === 1);
+    const shown = (await cli(box, ["status"])).stdout.split("\n");
+    assert.equal(shown[0], "slots: 1 of 1 taken, 0 waiting");
+    assert.equal(shown[1].startsWith('running "docs-site: test suite": pid '), true, shown[1]);
+    assert.match(shown[2], /^ {2}nested "docs-site: unit tests": pid \d+, 0 min so far, no slot of its own$/);
+    assert.equal(shown[3], 'gate: shut; no free slot: 1 of 1 taken, by "docs-site: test suite"');
+    writeFileSync(release, "");
+    assert.equal((await outer.done).code, 0);
+    assert.deepEqual(nestedNotes(box), []);
+});
+
+test("run: a copied, stale or malformed marker is ignored and the run queues as usual", async () => {
+    const box = sandbox({ config: { slots: 1 } });
+    // The slot is held by a process that is not an ancestor of the runs below.
+    const other = track(spawn(NODE, ["-e", FOREVER], { stdio: "ignore" }));
+    takeSlot(other.pid, "shop-api: e2e", 1, {}, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
+    for (const marker of ["slot-0", "slot-1", "../slots/slot-0"]) {
+        const env = { ...box.env, DOTIME_JOB: marker };
+        const result = await cli(box, ["run", "--label", "docs-site: lint", "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"], { env });
+        assert.deepEqual([result.code, result.stdout], [75, ""], marker);
+        assert.equal(result.stderr.includes('no free slot: 1 of 1 taken, by "shop-api: e2e"'), true, marker);
+        assert.equal(result.stderr.includes("nested"), false, marker);
+    }
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.nested ?? false]), [["gave-up", false], ["gave-up", false], ["gave-up", false]]);
+    other.kill("SIGKILL");
 });
 
 test("run: when the queue process is killed, its job is stopped", async () => {
