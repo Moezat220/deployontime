@@ -32,7 +32,8 @@ const LIST_TTL_MS = 60 * 60 * 1000;
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 export const SERVER_INFO = Object.freeze({ name: "dotime-mcp", title: "DeployOnTime machine queue", version: VERSION });
 const INSTRUCTIONS = "Run heavy commands (test suites, builds) with queue_run instead of starting them directly, "
-    + "then poll queue_job with the job id until it is finished. queue_status shows the slots and the line; "
+    + "then poll queue_job with the job id until it is finished (a client with the tasks extension gets a task "
+    + "instead and its result when the job ends). queue_status shows the slots and the line; "
     + "queue_passed finds the pass stamp of a folder's commit; queue_history sums up the journal.";
 
 const isPlain = (x) => !!x && typeof x === "object" && !Array.isArray(x);

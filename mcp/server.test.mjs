@@ -675,3 +675,12 @@ test("tailLines: the last lines only, cut when very long, and never through a sy
     assert.equal(spawnSync("mkfifo", [join(dir, "pipe.log")]).status, 0);
     assert.deepEqual(tailLines(join(dir, "pipe.log"), 5), [], "a FIFO is refused without waiting for a writer");
 });
+
+test("sameProcess: strict answers false when the start time or the age cannot be read, so cancel never stops a stranger", async () => {
+    const { sameProcess } = await import("./jobs.mjs");
+    const isAlive = () => true, noAge = () => new Map();
+    assert.equal(sameProcess(4242, Date.now(), { isAlive, ages: noAge }), true);
+    assert.equal(sameProcess(4242, Date.now(), { isAlive, ages: noAge, strict: true }), false);
+    assert.equal(sameProcess(4242, undefined, { isAlive, ages: noAge, strict: true }), false);
+    assert.equal(sameProcess(4242, Date.now() - 2000, { isAlive, ages: () => new Map([[4242, 2]]), strict: true }), true);
+});

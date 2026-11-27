@@ -74,7 +74,7 @@ export function cancelTask(params, ctx) {
     if (!status) return unknown(id);
     if (status.where.state === "finished" || status.where.state === "lost") return { result: {} };
     const pid = status.job.pid;
-    if (!pid || !ctx.sameProcess(pid.runnerPid, pid.runnerStartedAt)) {
+    if (!pid || !ctx.sameProcess(pid.runnerPid, pid.runnerStartedAt, { strict: true })) {
         return { error: "Invalid params: the job is still starting and cannot be stopped yet; cancel it again in a moment" };
     }
     try { ctx.kill(pid.runnerPid, "SIGTERM"); } catch (e) {

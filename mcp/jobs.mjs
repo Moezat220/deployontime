@@ -47,11 +47,13 @@ export function readJob(dir, id) {
 }
 
 /** True while the process with this pid is the one that wrote startedAt (ms) when it began: a pid that a later
- *  process was given counts as gone. ages: pid to seconds run, as `ps` reports it. */
-export function sameProcess(pid, startedAt, { isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)) } = {}) {
+ *  process was given counts as gone. ages: pid to seconds run, as `ps` reports it. strict: when the start time or the
+ *  age cannot be read, answer false instead of true; used before sending a signal, so a stranger is never stopped. */
+export function sameProcess(pid, startedAt, { isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)), strict = false } = {}) {
     if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return false;
-    if (!Number.isFinite(startedAt)) return true;
+    if (!Number.isFinite(startedAt)) return !strict;
     const seconds = ages([pid]).get(pid);
+    if (seconds === undefined && strict) return false;
     // ps counts whole seconds, and the runner writes its start a moment after it began.
     return seconds === undefined || Math.abs(Date.now() - seconds * 1000 - startedAt) <= SAME_START_MS + 1000;
 }
