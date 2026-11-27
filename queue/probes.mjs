@@ -25,18 +25,29 @@ export function runTool(tool, args, timeout = 5000) {
 
 export const probeLoad = () => ({ load: loadavg()[0], cores: cpus().length });
 
+const TIME_NAMES = ["user", "nice", "sys", "idle", "irq"];
+
+/** True when list is a list of cores as os.cpus() gives them: each with times.{user,nice,sys,idle,irq} as numbers
+ *  of 0 or more. Times read back from a file are checked with it before use. */
+export function validCpuTimes(list) {
+    if (!Array.isArray(list)) return false;
+    return list.every((core) => TIME_NAMES.every((name) => Number.isFinite(core?.times?.[name]) && core.times[name] >= 0));
+}
+
 /** The share of CPU time in use across all cores between two os.cpus() snapshots, in percent, or null when no time
- *  passed between them. Only cores found in both snapshots count, so a core list that changed size still gives a
- *  fair share. */
+ *  passed between them, a snapshot is not a valid list of core times, or a counter went backwards. Only cores found
+ *  in both snapshots count, so a core list that changed size still gives a fair share. */
 export function cpuBusyPct(before, after) {
+    if (!validCpuTimes(before) || !validCpuTimes(after)) return null;
     let busy = 0, total = 0;
-    for (let i = 0; i < Math.min(before?.length ?? 0, after?.length ?? 0); i++) {
-        const spent = (name) => (after[i].times?.[name] ?? 0) - (before[i].times?.[name] ?? 0);
-        const idle = spent("idle"), used = spent("user") + spent("nice") + spent("sys") + spent("irq");
+    for (let i = 0; i < Math.min(before.length, after.length); i++) {
+        const spent = Object.fromEntries(TIME_NAMES.map((name) => [name, after[i].times[name] - before[i].times[name]]));
+        if (TIME_NAMES.some((name) => spent[name] < 0)) return null;
+        const used = spent.user + spent.nice + spent.sys + spent.irq;
         busy += used;
-        total += used + idle;
+        total += used + spent.idle;
     }
-    if (!(total > 0) || busy < 0 || busy > total) return null;
+    if (!(total > 0)) return null;
     return (busy / total) * 100;
 }
 

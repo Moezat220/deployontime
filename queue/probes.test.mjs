@@ -8,7 +8,7 @@ import { tempDir } from "./testkit.mjs";
 import {
     cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeBusyCpuPct, probeCpuTimes, probeDiskFreeGB,
     probeGroupOf, probeLoad, probeMemoryFreePct,
-    probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct,
+    probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct, validCpuTimes,
     runTool, showDesktopNotice, toolEnv,
 } from "./probes.mjs";
 
@@ -88,6 +88,24 @@ test("cpuBusyPct: null when no time passed or the counters went backwards", () =
     assert.equal(cpuBusyPct(same, same), null);
     assert.equal(cpuBusyPct([core(500, 0, 100)], [core(100, 0, 600)]), null);
     assert.equal(cpuBusyPct(undefined, same), null);
+    assert.equal(cpuBusyPct([core(100, 0, 500)], [core(300, 0, 450)]), null, "idle went backwards, busy went forward");
+});
+
+test("validCpuTimes: a list of cores, each with all five times as numbers of 0 or more", () => {
+    assert.equal(validCpuTimes([core(100, 50, 1000), core(0, 0, 0, 3, 2)]), true);
+    assert.equal(validCpuTimes([]), true);
+    for (const bad of [null, "nonsense", [null], [{}], [{ times: 5 }], [{ times: { user: 1, nice: 0, sys: 0, idle: 9 } }],
+        [{ times: { user: "1", nice: 0, sys: 0, idle: 9, irq: 0 } }], [core(Number.NaN, 0, 9)], [core(-1, 0, 9)]]) {
+        assert.equal(validCpuTimes(bad), false, JSON.stringify(bad));
+    }
+});
+
+test("cpuBusyPct: null, not a share since boot, when a snapshot holds cores without valid times", () => {
+    const good = [core(100, 0, 900)];
+    for (const bad of [[null], [{}], [{ times: 5 }], [{ times: { user: "x", nice: 0, sys: 0, idle: 0, irq: 0 } }]]) {
+        assert.equal(cpuBusyPct(bad, good), null, JSON.stringify(bad));
+        assert.equal(cpuBusyPct(good, bad), null, JSON.stringify(bad));
+    }
 });
 
 test("probeCpuTimes: the time and the times of each core, nothing else", () => {

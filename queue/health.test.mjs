@@ -162,8 +162,13 @@ test("readHealth: measures the CPU against saved CPU times without waiting, when
     assert.deepEqual([readHealth({ probes, limits: LIMITS }).busyCpuPct, waits], [55, 4], "none saved");
     const broken = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus: "nonsense" } });
     assert.deepEqual([broken.busyCpuPct, waits], [55, 5], "saved times that make no sense");
+    const nonNumber = [{ times: { ...timesAt(18_000).cpus[0].times, user: "3600" } }];
+    for (const [i, cpus] of [[null], [{}], nonNumber].entries()) {
+        const odd = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus } });
+        assert.deepEqual([odd.busyCpuPct, waits], [55, 6 + i], `saved times that make no sense: ${JSON.stringify(cpus)}`);
+    }
     const backwards = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus: timesAt(90_000).cpus } });
-    assert.deepEqual([backwards.busyCpuPct, waits], [55, 6], "counters that went backwards");
+    assert.deepEqual([backwards.busyCpuPct, waits], [55, 9], "counters that went backwards");
 });
 
 test("readHealth: keeps the CPU times also when it does not measure the CPU, and none without limits", () => {
