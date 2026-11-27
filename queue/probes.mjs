@@ -55,16 +55,8 @@ export function cpuBusyPct(before, after) {
  *  cpuBusyPct(). */
 export const probeCpuTimes = (now = Date.now) => ({ at: now(), cpus: cpus().map(({ times }) => ({ times })) });
 
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-/** How busy the CPU is right now: the busy share over windowMs, in percent, or null. It waits windowMs. */
-export function probeBusyCpuPct(windowMs = 1000, { snapshot = cpus, wait = pause } = {}) {
-    try {
-        const before = snapshot();
-        wait(windowMs);
-        return cpuBusyPct(before, snapshot());
-    } catch { return null; }
-}
+/** Blocks for ms milliseconds. */
+export const pause = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 /** Parses memory_pressure output into free percent, or null. */
 export function parseMemoryPressure(text) {

@@ -6,7 +6,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./testkit.mjs";
 import {
-    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, probeBusyCpuPct, probeCpuTimes, probeDiskFreeGB,
+    cpuBusyPct, parseDf, parseLaunchctlList, parseMemoryPressure, parseSwap, pause, probeCpuTimes, probeDiskFreeGB,
     probeGroupOf, probeLoad, probeMemoryFreePct,
     probePowerText, probeProcessCpu, probeProcessTable, probeProcessTree, probeReadPlist, probeScheduledJobs, probeSwapPct, validCpuTimes,
     runTool, showDesktopNotice, toolEnv,
@@ -120,13 +120,10 @@ test("probeCpuTimes: the time and the times of each core, nothing else", () => {
     assert.equal(share === null || (share >= 0 && share <= 100), true, "share between two snapshots out of range");
 });
 
-test("probeBusyCpuPct: two snapshots one window apart, null when a snapshot fails", () => {
-    const snaps = [[core(0, 0, 0)], [core(30, 0, 70)]], waited = [];
-    const got = probeBusyCpuPct(250, { snapshot: () => snaps.shift(), wait: (ms) => waited.push(ms) });
-    assert.deepEqual([got, waited], [30, [250]]);
-    assert.equal(probeBusyCpuPct(10, { snapshot: () => { throw new Error("no cpu list"); }, wait: () => {} }), null);
-    const live = probeBusyCpuPct(50);
-    assert.equal(live === null || (live >= 0 && live <= 100), true, "live CPU reading out of range");
+test("pause: blocks for about the time asked", () => {
+    const began = performance.now();
+    assert.equal(pause(40), undefined);
+    assert.equal(performance.now() - began >= 35, true);
 });
 
 test("probeLoad: a load figure and at least one core", () => {

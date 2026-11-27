@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { tempDir } from "./testkit.mjs";
 import {
-    cachedHealth, healthVerdict, MAX_SHARED_READING_MS, MIN_CPU_SPAN_MS, parsePower, powerState, readBattery, readHealth,
+    cachedHealth, healthVerdict, MAX_SHARED_READING_MS, MIN_CPU_SPAN_MS, OWN_CPU_SPAN_MS, parsePower, powerState, readBattery, readHealth,
 } from "./health.mjs";
 
 const LIMITS = { loadPerCore: 2, busyCpuPct: 90, minFreeMemPct: 25, minFreeDiskGB: 12, minBatteryPct: 30 };
@@ -101,80 +101,112 @@ test("readBattery: null whenever the reading is incomplete or the probe fails", 
 
 test("readHealth: combines the probes it is given", () => {
     const probes = { load: () => ({ load: 0.8, cores: 6 }), memory: () => 71, disk: () => 0, battery: () => null };
-    assert.deepEqual(readHealth({ probes: { ...probes, cpu: assert.fail } }), { load: 0.8, cores: 6, busyCpuPct: null, freePct: 71, diskGB: 0, battery: null });
+    const reading = readHealth({ probes: { ...probes, wait: assert.fail } });
+    assert.deepEqual(reading, { load: 0.8, cores: 6, busyCpuPct: null, freePct: 71, diskGB: 0, battery: null });
 });
 
+// CPU times at a given time on a one-core computer that is 20% busy.
+const timesAt = (at) => ({ at, cpus: [{ times: { user: at / 5, nice: 0, sys: 0, idle: (at * 4) / 5, irq: 0 } }] });
+
+/** The CPU probes of that computer on a clock that moves only while a reading waits. waits: each wait in ms;
+ *  snapshots: how often the CPU times were read. */
+function machine(start) {
+    const m = { now: start, waits: [], snapshots: 0 };
+    m.probes = { cpuTimes: () => { m.snapshots++; return timesAt(m.now); }, wait: (ms) => { m.waits.push(ms); m.now += ms; } };
+    return m;
+}
+
 test("readHealth: takes the live CPU reading only when the load is above its limit", () => {
-    let cpuReads = 0;
-    const probes = { memory: () => 71, disk: () => 50, battery: () => null, cpu: () => { cpuReads++; return 34; } };
+    const m = machine(10_000);
+    const probes = { memory: () => 71, disk: () => 50, battery: () => null, ...m.probes };
     const calm = readHealth({ probes: { ...probes, load: () => ({ load: 8, cores: 4 }) }, limits: LIMITS });
-    assert.deepEqual([calm.busyCpuPct, cpuReads], [null, 0]);
+    assert.deepEqual([calm.busyCpuPct, m.waits], [null, []]);
     const loaded = readHealth({ probes: { ...probes, load: () => ({ load: 8.1, cores: 4 }) }, limits: LIMITS });
-    assert.deepEqual([loaded.busyCpuPct, cpuReads], [34, 1]);
+    assert.deepEqual([loaded.busyCpuPct, m.waits], [20, [OWN_CPU_SPAN_MS]]);
     assert.equal(healthVerdict(loaded, LIMITS).ok, true);
     const noLimits = readHealth({ probes: { ...probes, load: () => ({ load: 50, cores: 4 }) } });
-    assert.deepEqual([noLimits.busyCpuPct, cpuReads], [null, 1]);
+    assert.deepEqual([noLimits.busyCpuPct, m.waits], [null, [OWN_CPU_SPAN_MS]]);
 });
 
 test("readHealth: takes the live CPU reading last, and not at all when another limit already holds", () => {
-    const order = [];
+    const order = [], m = machine(10_000);
     const probe = (name, value) => () => { order.push(name); return value; };
     const probes = {
         load: probe("load", { load: 30, cores: 4 }), memory: probe("memory", 71), disk: probe("disk", 50),
-        battery: probe("battery", null), cpu: probe("cpu", 34),
+        battery: probe("battery", null),
+        cpuTimes: () => { order.push("cpuTimes"); return m.probes.cpuTimes(); },
+        wait: (ms) => { order.push("wait"); m.probes.wait(ms); },
     };
-    assert.equal(readHealth({ probes, limits: LIMITS }).busyCpuPct, 34);
-    assert.deepEqual(order, ["load", "memory", "disk", "battery", "cpu"]);
+    assert.equal(readHealth({ probes, limits: LIMITS }).busyCpuPct, 20);
+    assert.deepEqual(order, ["load", "memory", "disk", "battery", "cpuTimes", "wait", "cpuTimes"]);
     for (const shut of [{ memory: () => 3 }, { disk: () => 1 }, { battery: () => ({ onBattery: true, pct: 5, plugged: false }) }]) {
-        const reading = readHealth({ probes: { ...probes, ...shut, cpu: assert.fail }, limits: LIMITS });
+        const reading = readHealth({ probes: { ...probes, ...shut, wait: assert.fail }, limits: LIMITS });
         assert.equal(reading.busyCpuPct, null);
         assert.deepEqual(gates(reading).includes("load"), true, "the load still holds as the load alone would");
     }
 });
 
 test("cachedHealth: the shared reading carries the live CPU reading, so waiters do not each take one", () => {
-    const file = join(tempDir("health"), "health.json");
-    let cpuReads = 0;
-    const probes = { load: () => ({ load: 30, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null, cpu: () => { cpuReads++; return 15; } };
+    const file = join(tempDir("health"), "health.json"), m = machine(10_000);
+    const probes = { load: () => ({ load: 30, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null, ...m.probes };
     const read = () => readHealth({ probes, limits: LIMITS });
-    assert.equal(cachedHealth(file, 3000, read, () => 10_000).busyCpuPct, 15);
-    assert.equal(cachedHealth(file, 3000, read, () => 11_000).busyCpuPct, 15);
-    assert.equal(JSON.parse(readFileSync(file, "utf8")).reading.busyCpuPct, 15);
-    assert.equal(cpuReads, 1);
+    assert.equal(cachedHealth(file, 3000, read, () => 10_000).busyCpuPct, 20);
+    assert.equal(cachedHealth(file, 3000, read, () => 11_000).busyCpuPct, 20);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).reading.busyCpuPct, 20);
+    assert.deepEqual(m.waits, [OWN_CPU_SPAN_MS]);
 });
 
-// CPU times at a given time on a one-core computer that is 20% busy.
-const timesAt = (at) => ({ at, cpus: [{ times: { user: at / 5, nice: 0, sys: 0, idle: (at * 4) / 5, irq: 0 } }] });
+/** A reading under a high load on a fresh machine whose clock is at now, measured against cpuSince. */
+function readAt(cpuSince, now = 20_000) {
+    const m = machine(now);
+    const probes = { load: () => ({ load: 30, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null, ...m.probes };
+    const reading = readHealth({ probes, limits: LIMITS, cpuSince });
+    return { reading, waits: m.waits, snapshots: m.snapshots };
+}
 
 test("readHealth: measures the CPU against saved CPU times without waiting, when they are old enough and young enough", () => {
-    let waits = 0;
+    const since = (cpuSince) => {
+        const { reading, waits } = readAt(cpuSince);
+        return [reading.busyCpuPct, waits];
+    };
+    assert.deepEqual(since(timesAt(20_000 - MIN_CPU_SPAN_MS)), [20, []], "half a second old");
+    assert.deepEqual(since(timesAt(20_000 - MAX_SHARED_READING_MS)), [20, []], "5 seconds old");
+    assert.deepEqual(readAt(timesAt(17_000)).reading.cpuTimes, timesAt(20_000), "the reading carries the CPU times it ended on");
+    const own = [20, [OWN_CPU_SPAN_MS]];
+    assert.deepEqual(since(timesAt(20_000 - MAX_SHARED_READING_MS - 1)), own, "too old: a reading of its own");
+    assert.deepEqual(since(timesAt(21_000)), own, "from the future");
+    assert.deepEqual(since(null), own, "none saved");
+    assert.deepEqual(since({ at: 18_000, cpus: "nonsense" }), own, "saved times that make no sense");
+    const nonNumber = [{ times: { ...timesAt(18_000).cpus[0].times, user: "3600" } }];
+    for (const cpus of [[null], [{}], nonNumber]) {
+        assert.deepEqual(since({ at: 18_000, cpus }), own, `saved times that make no sense: ${JSON.stringify(cpus)}`);
+    }
+    assert.deepEqual(since({ at: 18_000, cpus: timesAt(90_000).cpus }), own, "counters that went backwards");
+});
+
+test("readHealth: saved CPU times younger than half a second wait only for the rest of the half second", () => {
+    const young = readAt(timesAt(20_000 - 200));
+    assert.deepEqual([young.reading.busyCpuPct, young.waits], [20, [MIN_CPU_SPAN_MS - 200]]);
+    assert.deepEqual(young.reading.cpuTimes, timesAt(20_300), "it ends on the CPU times after the wait");
+    assert.deepEqual(readAt(timesAt(20_000)).waits, [MIN_CPU_SPAN_MS], "taken at the same moment");
+    assert.deepEqual(readAt(timesAt(20_000 - MIN_CPU_SPAN_MS + 1)).waits, [1], "one millisecond short");
+});
+
+test("readHealth: a reading of its own takes two CPU snapshots one span apart, and none without CPU times", () => {
+    const own = readAt(null);
+    assert.deepEqual([own.reading.busyCpuPct, own.waits, own.snapshots], [20, [OWN_CPU_SPAN_MS], 2]);
+    assert.deepEqual(own.reading.cpuTimes, timesAt(20_000 + OWN_CPU_SPAN_MS), "it ends on the second snapshot");
     const probes = {
         load: () => ({ load: 30, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null,
-        cpuTimes: () => timesAt(20_000), cpu: () => { waits++; return 55; },
+        cpuTimes: () => { throw new Error("no cpu list"); }, wait: assert.fail,
     };
-    const since = (at) => readHealth({ probes, limits: LIMITS, cpuSince: timesAt(at) });
-    assert.deepEqual([since(20_000 - MIN_CPU_SPAN_MS).busyCpuPct, waits], [20, 0], "half a second old");
-    assert.deepEqual([since(20_000 - MAX_SHARED_READING_MS).busyCpuPct, waits], [20, 0], "5 seconds old");
-    assert.deepEqual(since(17_000).cpuTimes, timesAt(20_000), "the reading carries the CPU times it ended on");
-    assert.deepEqual([since(20_000 - MIN_CPU_SPAN_MS + 1).busyCpuPct, waits], [55, 1], "too young: a reading of its own");
-    assert.deepEqual([since(20_000 - MAX_SHARED_READING_MS - 1).busyCpuPct, waits], [55, 2], "too old");
-    assert.deepEqual([since(21_000).busyCpuPct, waits], [55, 3], "from the future");
-    assert.deepEqual([readHealth({ probes, limits: LIMITS }).busyCpuPct, waits], [55, 4], "none saved");
-    const broken = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus: "nonsense" } });
-    assert.deepEqual([broken.busyCpuPct, waits], [55, 5], "saved times that make no sense");
-    const nonNumber = [{ times: { ...timesAt(18_000).cpus[0].times, user: "3600" } }];
-    for (const [i, cpus] of [[null], [{}], nonNumber].entries()) {
-        const odd = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus } });
-        assert.deepEqual([odd.busyCpuPct, waits], [55, 6 + i], `saved times that make no sense: ${JSON.stringify(cpus)}`);
-    }
-    const backwards = readHealth({ probes, limits: LIMITS, cpuSince: { at: 18_000, cpus: timesAt(90_000).cpus } });
-    assert.deepEqual([backwards.busyCpuPct, waits], [55, 9], "counters that went backwards");
+    assert.equal(readHealth({ probes, limits: LIMITS, cpuSince: timesAt(19_000) }).busyCpuPct, null);
 });
 
 test("readHealth: keeps the CPU times also when it does not measure the CPU, and none without limits", () => {
     const probes = {
         load: () => ({ load: 1, cores: 4 }), memory: () => 71, disk: () => 50, battery: () => null,
-        cpuTimes: () => timesAt(30_000), cpu: assert.fail,
+        cpuTimes: () => timesAt(30_000), wait: assert.fail,
     };
     assert.deepEqual(readHealth({ probes, limits: LIMITS }).cpuTimes, timesAt(30_000));
     assert.equal("cpuTimes" in readHealth({ probes }), false);
@@ -223,7 +255,7 @@ const { workerData, parentPort } = require("node:worker_threads");
     const times = () => { const at = clock(); return { at, cpus: [{ times: { user: at / 5, nice: 0, sys: 0, idle: (at * 4) / 5, irq: 0 } }] }; };
     const probes = {
         load: () => ({ load: 30, cores: 4 }), memory: () => 70, disk: () => 100, battery: () => null,
-        cpuTimes: times, cpu: () => { waits++; block(1000); return 20; },
+        cpuTimes: times, wait: (ms) => { waits++; block(ms); },
     };
     const read = (options) => { readings++; return readHealth({ ...options, probes, limits: workerData.limits }); };
     block(workerData.offset);

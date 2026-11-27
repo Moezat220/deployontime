@@ -284,9 +284,12 @@ test("run and status: a high load with an idle CPU starts the job, with a busy C
 
 test("run: the shared reading the cli hands to run is taken with the gate limits, so an idle CPU lets a job start", async () => {
     const box = sandbox({ health: { loadPerCore: 2 } }), clock = fakeClock(), asked = [];
+    // One core, a quarter busy, on a CPU clock that moves only while the reading waits.
+    let cpuMs = 0;
     const probes = {
         load: () => ({ load: 14.8, cores: 4 }), memory: () => 70, disk: () => 100, battery: () => null,
-        cpuTimes: () => ({ at: clock.now(), cpus: [{ times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }] }), cpu: () => 12,
+        cpuTimes: () => ({ at: cpuMs, cpus: [{ times: { user: cpuMs / 4, nice: 0, sys: 0, idle: (cpuMs * 3) / 4, irq: 0 } }] }),
+        wait: (ms) => { cpuMs += ms; },
     };
     const read = (options) => { asked.push(options); return readHealth({ ...options, probes }); };
     const { readHealth: shared } = runDeps(box.ctx, read);
@@ -294,7 +297,7 @@ test("run: the shared reading the cli hands to run is taken with the gate limits
     const code = await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps);
     assert.deepEqual(asked.map((options) => options.limits), [box.ctx.settings.health], "run reads the health with the gate limits");
     assert.deepEqual([code, d.said.filter((text) => text.startsWith("gave up"))], [0, []]);
-    assert.equal(JSON.parse(readFileSync(box.ctx.files.healthCache, "utf8")).reading.busyCpuPct, 12);
+    assert.equal(JSON.parse(readFileSync(box.ctx.files.healthCache, "utf8")).reading.busyCpuPct, 25);
 });
 
 test("status: measures the CPU against the CPU times saved with the shared reading, and leaves the file as it was", () => {

@@ -3,7 +3,7 @@
 // shares one reading between jobs that wait at the same time. The 1-minute load lags behind: it stays high for a while
 // after heavy work has ended. So a high load holds a job only while the CPU is also busy right now.
 import {
-    cpuBusyPct, probeBusyCpuPct, probeCpuTimes, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText,
+    cpuBusyPct, pause, probeCpuTimes, probeDiskFreeGB, probeLoad, probeMemoryFreePct, probePowerText, validCpuTimes,
 } from "./probes.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { DEFAULTS } from "./settings.mjs";
@@ -70,23 +70,33 @@ export const MAX_SHARED_READING_MS = 5000;
 /** The shortest span of saved CPU times a live CPU reading is measured over. */
 export const MIN_CPU_SPAN_MS = 500;
 
+/** The span a live CPU reading of its own is measured over, when no usable CPU times were saved. */
+export const OWN_CPU_SPAN_MS = 1000;
+
 /** CPU times now, or null when they cannot be read. */
 function cpuTimesNow(read) {
     try { return read.cpuTimes(); } catch { return null; }
 }
 
-/** { busyCpuPct, cpuTimes }: the live CPU reading and the CPU times it ended on. Saved CPU times (since) that are
- *  between MIN_CPU_SPAN_MS and MAX_SHARED_READING_MS old give the share at once; otherwise the cpu probe takes its
- *  own reading, which waits about a second. */
+/** { busyCpuPct, cpuTimes }: the live CPU reading and the CPU times it ended on. Valid saved CPU times (since) up to
+ *  MAX_SHARED_READING_MS old are measured against: at once when they are at least MIN_CPU_SPAN_MS old, after waiting
+ *  the rest of MIN_CPU_SPAN_MS when they are younger. Otherwise the reading waits OWN_CPU_SPAN_MS between two
+ *  snapshots of its own. */
 function busyCpuNow(since, read) {
-    const times = cpuTimesNow(read);
+    let times = cpuTimesNow(read);
     const age = times?.at - since?.at;
-    if (Array.isArray(since?.cpus) && age >= MIN_CPU_SPAN_MS && age <= MAX_SHARED_READING_MS) {
-        const busyCpuPct = cpuBusyPct(since.cpus, times.cpus);
+    if (validCpuTimes(since?.cpus) && age >= 0 && age <= MAX_SHARED_READING_MS) {
+        if (age < MIN_CPU_SPAN_MS) {
+            read.wait(MIN_CPU_SPAN_MS - age);
+            times = cpuTimesNow(read);
+        }
+        const busyCpuPct = cpuBusyPct(since.cpus, times?.cpus);
         if (busyCpuPct != null) return { busyCpuPct, cpuTimes: times };
     }
-    const busyCpuPct = read.cpu();
-    return { busyCpuPct, cpuTimes: cpuTimesNow(read) };
+    if (!times) return { busyCpuPct: null, cpuTimes: null };
+    read.wait(OWN_CPU_SPAN_MS);
+    const after = cpuTimesNow(read);
+    return { busyCpuPct: cpuBusyPct(times.cpus, after?.cpus), cpuTimes: after };
 }
 
 /** The current reading: { load, cores, busyCpuPct, freePct, diskGB, battery }. probes replaces single readings.
@@ -96,7 +106,7 @@ function busyCpuNow(since, read) {
  *  without waiting. */
 export function readHealth({ probes = {}, limits = null, cpuSince = null } = {}) {
     const read = {
-        load: probeLoad, cpu: probeBusyCpuPct, cpuTimes: probeCpuTimes, memory: probeMemoryFreePct,
+        load: probeLoad, cpuTimes: probeCpuTimes, wait: pause, memory: probeMemoryFreePct,
         disk: probeDiskFreeGB, battery: readBattery, ...probes,
     };
     const { load, cores } = read.load();
