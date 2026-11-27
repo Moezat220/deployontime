@@ -497,11 +497,14 @@ Every message has the same shape: clauses separated by `; `, each clause a topic
 commas. Durations are written as `12 min`, percentages as `20%`, sizes as `40 GB`, clock times on a 24-hour clock
 with the zone name.
 
-Sample lines. Each is one line on screen; the stamp line is wrapped here, and `<date and time>` stands for a value.
+Sample lines. Each is one line on screen; long lines are wrapped here, and `<date and time>` stands for a value.
 
 ```
 dotime-queue: in line: position 2, 3 min waited, wait limit 60 min; no free slot: 2 of 2 taken, by "shop-api: e2e"
 and "docs-site: build"
+dotime-queue: in line: position 1, 0 min waited, wait limit 60 min; disk too low: 7.4 GB free, 10 GB needed; hint:
+the job starts once there is more free disk; to start with less, lower health.minFreeDiskGB in
+/home/you/.dotime/config.json
 dotime-queue: gave up: exit 75, position 1, 60 min waited; memory too low: 9% free, 20% needed; hint: --max-wait 0
 waits without limit
 dotime-queue: skipped: "shop-api: unit tests" already passed on commit 0a1b2c3d (12 min ago); --no-skip runs it anyway

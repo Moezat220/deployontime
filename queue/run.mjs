@@ -100,6 +100,17 @@ export function skipFor(job, rows) {
     return skipStamp(rows, folder, check, { tz: job.tz, at: job.at });
 }
 
+/** The advice for a wait held by low memory or disk: free some, or lower the limit in config.json. Empty for other
+ *  reasons to wait. */
+export function lowRoomHint(blocks, configFile) {
+    const keys = { memory: "health.minFreeMemPct", disk: "health.minFreeDiskGB" };
+    const low = blocks.filter((b) => keys[b.gate]);
+    if (!low.length) return "";
+    const what = low.map((b) => b.gate).join(" or ");
+    return `; hint: the job starts once there is more free ${what}; to start with less, lower `
+        + `${low.map((b) => keys[b.gate]).join(" and ")} in ${configFile}`;
+}
+
 /** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
  *  tally }; waitFrom and tally, when given, carry on an earlier wait, so the wait limit counts from its start and the
  *  time is booked with it. Priority plays no part in here: it is in the job's ticket, which orders the line, and in
@@ -114,6 +125,7 @@ export async function waitForSlot(job, deps) {
     const waitFrom = job.waitFrom ?? deps.now();
     let shownPosition = 0;
     let shownAt = 0;
+    let hinted = false;
     for (;;) {
         const signal = deps.leaving?.() ?? null;
         if (signal) return { left: signal, tally };
@@ -143,7 +155,11 @@ export async function waitForSlot(job, deps) {
                 return { gaveUp: true, tally };
             }
             const limitText = maxWait ? `wait limit ${maxWait} min` : "no wait limit";
-            deps.say(`in line: position ${turn.position}, ${waited}, ${limitText}; ${why}`);
+            // Low memory or disk does not pass by itself as a busy CPU does, so the first time it holds the job,
+            // the line says what to do about it.
+            const hint = hinted ? "" : lowRoomHint(all, files.config);
+            if (hint) hinted = true;
+            deps.say(`in line: position ${turn.position}, ${waited}, ${limitText}; ${why}${hint}`);
             shownPosition = turn.position;
             shownAt = now;
         }

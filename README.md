@@ -111,6 +111,10 @@ dotime-queue status
 To work from the source instead: `git clone https://github.com/Moezat220/deployontime.git`, then `npm link` in its
 top folder.
 
+A job waits while the computer is short of room: by default below 20% free memory or 10 GB free disk, and while the
+CPU is overloaded. On a small machine, `dotime-queue status` shows whether that gate is shut, and the limits can be
+lowered in `~/.dotime/config.json`, for example `{ "health": { "minFreeMemPct": 5, "minFreeDiskGB": 2 } }`.
+
 Then tell your agents to use it. In the folder of each project they work in, run:
 
 ```

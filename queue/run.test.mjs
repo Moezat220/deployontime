@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("run");
-const { EXIT, journalWriter, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
+const { EXIT, journalWriter, lowRoomHint, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
 const { cmdStatus, runDeps } = await import("./cli.mjs");
 const { readHealth } = await import("./health.mjs");
 const { DEFAULTS, paths } = await import("./settings.mjs");
@@ -173,6 +173,27 @@ test("waitForSlot: takes one health reading per poll, also when it prints why it
     const got = await waitForSlot(waiter(box, { maxWait: 0.003 }), { ...clock, readHealth, say: (t) => said.push(t) });
     assert.equal(got.gaveUp, true);
     assert.deepEqual([said.length, readings], [2, 4], "four polls, each with one reading");
+});
+
+test("waitForSlot: the first wait held by low memory or disk says what to do, and only once", async () => {
+    const box = sandbox({ slots: 2, health: { minFreeDiskGB: 12 } }), clock = fakeClock(), said = [];
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+    let polls = 0;
+    const readHealth = () => ({ ...CALM, diskGB: 3 });
+    const sleep = async () => { await clock.sleep(MINUTE + 1); polls++; };
+    const leaving = () => (polls >= 2 ? "SIGTERM" : null);
+    const got = await waitForSlot(waiter(box, { maxWait: 0 }), { now: clock.now, sleep, readHealth, say: (t) => said.push(t), leaving });
+    assert.equal(got.left, "SIGTERM");
+    const hint = "; hint: the job starts once there is more free disk; to start with less, lower health.minFreeDiskGB in "
+        + box.ctx.files.config;
+    assert.deepEqual(said.map((line) => line.endsWith(hint)), [true, false]);
+});
+
+test("lowRoomHint: names each low resource and its setting, and says nothing for other reasons", () => {
+    const memory = { gate: "memory", text: "memory too low" }, disk = { gate: "disk", text: "disk too low" };
+    assert.equal(lowRoomHint([memory, disk], "/h/config.json"), "; hint: the job starts once there is more free memory or disk; "
+        + "to start with less, lower health.minFreeMemPct and health.minFreeDiskGB in /h/config.json");
+    assert.equal(lowRoomHint([{ gate: "load", text: "load too high" }, { gate: "slots", text: "no free slot" }], "/h/config.json"), "");
 });
 
 test("waitForSlot: carries on an earlier wait, so the wait limit counts from its start and its time is booked with it", async () => {
@@ -410,7 +431,9 @@ test("run: when the wait limit runs out, exit 75 names each health reading that 
     const code = await runCommand(["run", "--label", "docs-site: build", "--max-wait", "0.01", "--", NODE, "-e", "console.log('started')"], box.ctx, d.deps);
     assert.equal(code, 75);
     const why = "load too high: 50.0 now, 8.0 allowed; disk too low: 0.0 GB free, 12 GB needed";
-    assert.equal(d.said.includes(`in line: position 1, 0 min waited, wait limit 0.01 min; ${why}`), true);
+    const hint = "; hint: the job starts once there is more free disk; to start with less, lower health.minFreeDiskGB in "
+        + box.ctx.files.config;
+    assert.equal(d.said.includes(`in line: position 1, 0 min waited, wait limit 0.01 min; ${why}${hint}`), true);
     assert.equal(d.said.at(-1), `gave up: exit 75, position 1, 0 min waited; ${why}; hint: --max-wait 0 waits without limit`);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.exit, Object.keys(line.waitBy).sort(), line.startedAt], ["gave-up", 75, ["disk", "load"], null]);
