@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { addNested, enqueue, releaseSlot, snapshot, takeSlot, updateSlot } = await import("./slots.mjs");
+const { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), waitingLine: join(home, "line") }; };
@@ -155,12 +155,43 @@ test("addNested: notes a nested run, which a snapshot lists apart from the holde
     const home = tempDir("slots-nested");
     const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };
     const outer = { marker: "slot-0", pid: 4100, born: 6000 };
-    const note = addNested(process.pid, "docs-site: unit tests", outer, dirs, 7000);
+    const note = addNested(process.pid, "docs-site: unit tests", outer, dirs, { now: 7000 });
     addNested(2 ** 30 + 9, "docs-site: lint", outer, dirs);
     const stored = read(note);
-    const fields = [stored.pid, stored.label, stored.outer, stored.outerPid, stored.outerBorn, stored.at, Number.isFinite(stored.born)];
-    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0", 4100, 6000, 7000, true]);
+    const fields = [stored.pid, stored.label, stored.outer, stored.outerPid, stored.outerBorn, stored.at, Number.isFinite(stored.born), stored.waiting];
+    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0", 4100, 6000, 7000, true, undefined]);
     const snap = snapshot({ dirs, prune: true });
     assert.deepEqual([snap.holders, snap.queue, snap.nested.map((n) => [n.file, n.label])], [[], [], [[note, "docs-site: unit tests"]]]);
-    assert.deepEqual(readdirSync(dirs.nested), [`${process.pid}.json`], "the note of a dead run is pruned");
+    assert.deepEqual(readdirSync(dirs.nested), [`nested-${process.pid}.json`], "the note of a dead run is pruned");
+});
+
+test("addNested: a run that waits for a place is noted as waiting until updateSlot ends the wait", () => {
+    const home = tempDir("slots-nested");
+    const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };
+    const note = addNested(process.pid, "docs-site: unit tests", { marker: "nested-4101", pid: 4101, born: 6000 }, dirs, { waiting: true });
+    assert.deepEqual([read(note).waiting, read(note).outer], [true, "nested-4101"]);
+    assert.equal(updateSlot(note, process.pid, { waiting: undefined, pgid: 4300 }), true);
+    assert.deepEqual([read(note).waiting, read(note).pgid, "waiting" in read(note)], [undefined, 4300, false]);
+});
+
+test("takePlace: hands out at most max places per parent, frees one only for its holder, and prunes a dead holder's", () => {
+    const home = tempDir("slots-places");
+    const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), places: join(home, "places") };
+    const first = takePlace(process.pid, "docs-site: unit tests", "slot-0.6000", 2, dirs, 7000);
+    const second = takePlace(process.ppid, "docs-site: lint", "slot-0.6000", 2, dirs);
+    assert.equal(takePlace(process.pid, "docs-site: e2e", "slot-0.6000", 2, dirs), null, "both places of that parent are taken");
+    const other = takePlace(process.pid, "shop-api: unit tests", "slot-1.6100", 2, dirs);
+    assert.deepEqual([first, second, other].map((f) => f.slice(dirs.places.length + 1)), ["slot-0.6000.0.json", "slot-0.6000.1.json", "slot-1.6100.0.json"]);
+    const stored = read(first);
+    const fields = [stored.pid, stored.label, stored.parent, stored.at, Number.isFinite(stored.born)];
+    assert.deepEqual(fields, [process.pid, "docs-site: unit tests", "slot-0.6000", 7000, true]);
+    releaseSlot(second, 999);
+    assert.equal(existsSync(second), true, "only the holder frees its place");
+    releaseSlot(second, process.ppid);
+    assert.equal(takePlace(process.pid, "docs-site: e2e", "slot-0.6000", 2, dirs), second, "a freed place is taken again");
+    writeFileSync(first, JSON.stringify({ pid: 2 ** 30 + 9, label: "gone", parent: "slot-0.6000", at: 1 }));
+    const snap = snapshot({ dirs, prune: true });
+    assert.deepEqual(snap.places.map((p) => p.file).sort(), [other, second].sort());
+    assert.equal(existsSync(first), false, "the place of a dead run is pruned");
+    assert.equal(takePlace(process.pid, "docs-site: e2e", "slot-0.6000", 2, dirs), first);
 });

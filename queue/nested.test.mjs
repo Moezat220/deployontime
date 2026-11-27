@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isolateProcess } from "./testkit.mjs";
 
 isolateProcess("nested");
-const { JOB_MARKER, markerOf, outerJob } = await import("./nested.mjs");
+const { JOB_MARKER, markerOf, outerJob, placeKey } = await import("./nested.mjs");
 
 // A run (pid 5104) started by a shell (5103) inside a job (5102) under its wrapper (5101), whose queue process is
 // 5100; 5200 is an unrelated process that holds the other slot.
@@ -40,10 +40,45 @@ test("outerJob: a slot file without the pid above 1, start time and process grou
     assert.equal(check({ ...real, pid: 1 }), null, "pid 1 with every other field in place");
 });
 
+// The run 5104 above is itself nested: its job (5106) under its wrapper (5105) starts a shell (5107) that runs the
+// queue again (5108). 5300 is a nested run of the other slot's job.
+const DEEP_ROWS = [
+    ...ROWS, { pid: 5105, ppid: 5104 }, { pid: 5106, ppid: 5105 }, { pid: 5107, ppid: 5106 }, { pid: 5108, ppid: 5107 },
+    { pid: 5300, ppid: 5200 },
+];
+const NOTE = {
+    file: "/state/nested/nested-5104.json", pid: 5104, label: "docs-site: unit tests", outer: "slot-0", outerPid: 5100,
+    outerBorn: 1_900_000_000_000, born: 1_900_000_000_500, pgid: 5105,
+};
+const OTHER_NOTE = { ...NOTE, file: "/state/nested/nested-5300.json", pid: 5300, label: "shop-api: unit tests", pgid: 5301 };
+const findDeep = (marker, pid = 5108, nested = [NOTE, OTHER_NOTE]) => outerJob({ marker, pid, holders: HOLDERS, nested, rows: DEEP_ROWS })?.label ?? null;
+
+test("outerJob: a nested run's marker names its own note and is checked as strictly as a slot's", () => {
+    assert.equal(findDeep("nested-5104"), "docs-site: unit tests", "the direct parent, not the outermost job");
+    assert.equal(findDeep("slot-0"), "docs-site: test suite", "the slot marker still names the outer job");
+    assert.equal(findDeep("nested-5300"), null, "a marker copied from another nested run: not an ancestor");
+    assert.equal(findDeep("nested-5999"), null, "a stale marker: no such note");
+    assert.equal(findDeep("nested-5104", 5200), null, "the right note, asked from outside the job");
+    assert.equal(findDeep("nested-5104", 5104), null, "the nested run itself is not nested in its own note");
+    assert.equal(findDeep("nested-5104", 5108, [{ ...NOTE, pgid: undefined }]), null, "no process group: its job has not started");
+    assert.equal(findDeep("nested-5104", 5108, [{ ...NOTE, waiting: true }]), null, "the run still waits for a place");
+    assert.equal(findDeep("nested-5104", 5108, [{ ...NOTE, born: undefined }]), null, "no start time");
+    assert.equal(findDeep("nested-5104", 5108, [{ ...NOTE, pid: 5100 }]), null, "a note that names another pid than its file");
+    assert.equal(findDeep("nested-5104", 5108, []), null, "notes are only looked up among the nested runs");
+    assert.equal(outerJob({ marker: "slot-0", pid: 5108, holders: [], nested: [{ ...NOTE, file: "/state/nested/slot-0.json" }], rows: DEEP_ROWS }), null,
+        "a slot marker is never looked up among the notes");
+});
+
+test("placeKey: the parent's marker and start time", () => {
+    assert.equal(placeKey(HOLDERS[0]), "slot-0.1900000000000");
+    assert.equal(placeKey(NOTE), "nested-5104.1900000000500");
+});
+
 test("outerJob: a missing or malformed marker is ignored before any process listing is read", () => {
     const rows = { get byPid() { throw new Error("the process table was read"); } };
-    for (const marker of [undefined, "", "slot-", "slot-0 ", "../slots/slot-0", "slot-0.json"]) {
-        assert.equal(outerJob({ marker, pid: 5104, holders: HOLDERS, rows }), null, JSON.stringify(marker));
+    const malformed = ["", "slot-", "slot-0 ", "../slots/slot-0", "slot-0.json", "nested-", "nested-5104 ", "nested-x", "../nested/nested-5104"];
+    for (const marker of [undefined, ...malformed]) {
+        assert.equal(outerJob({ marker, pid: 5104, holders: HOLDERS, nested: [NOTE], rows }), null, JSON.stringify(marker));
     }
 });
 

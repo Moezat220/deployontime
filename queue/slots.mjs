@@ -1,5 +1,6 @@
-// Slots, the waiting line and the nested runs, stored as small JSON files in the state folder so unrelated processes
-// can share them without a server. A slot is claimed with a hard link, which only one process can win. Every file is
+// Slots, the waiting line, the nested runs and their places, stored as small JSON files in the state folder so
+// unrelated processes can share them without a server. A slot, and a nested run's place under its parent job, is
+// claimed with a hard link, which only one process can win. Every file is
 // written under a temporary name and then moved into place, so a reader never meets half a file.
 import { linkSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,7 +30,8 @@ function pidReused(data, seconds, now) {
 const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at - b.at || a.pid - b.pid;
 
 /** Returns { holders, queue }: the jobs holding a slot, and the line in start order; each entry carries the path of
- *  its file. When dirs names a nested folder, nested lists the nested runs too. Entries of dead processes, and
+ *  its file. When dirs names a nested folder, nested lists the nested runs too, and when it names a places folder,
+ *  places lists the places nested runs hold. Entries of dead processes, and
  *  entries whose pid now belongs to a process that started later, are left out. Only with prune are their files, and
  *  abandoned temporary files, deleted and the slot and line folders created: a job that waits for a slot prunes, so
  *  the slot of a dead job comes free; `status` and other readers change nothing. */
@@ -61,19 +63,41 @@ export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date
     };
     const holders = liveEntries(dirs.slots);
     const queue = liveEntries(dirs.waitingLine).sort(lineOrder);
-    return { holders, queue, ...(dirs.nested ? { nested: liveEntries(dirs.nested) } : {}) };
+    return {
+        holders, queue,
+        ...(dirs.nested ? { nested: liveEntries(dirs.nested) } : {}),
+        ...(dirs.places ? { places: liveEntries(dirs.places) } : {}),
+    };
 }
 
-/** Notes a nested run, one that runs inside the job holding a slot and takes no slot itself. outer: { marker, pid,
- *  born }, the marker of that slot and the pid and start time of its holder, stored as outer, outerPid and outerBorn
- *  so the note is never taken for one of a later job in the same slot. Returns its file; deleting the file removes
- *  the note. */
-export function addNested(pid, label, outer, dirs, now = Date.now()) {
+/** Notes a nested run, one that runs inside another job and takes no slot itself. outer: { marker, pid, born }, the
+ *  marker of the job it runs in, its direct parent (a slot holder or another nested run), and that job's pid and
+ *  start time, stored as outer, outerPid and outerBorn so the note is never taken for one of a later job with the same
+ *  marker. waiting: the run waits for a place under that job, which updateSlot(file, pid, { waiting: undefined })
+ *  ends. The file is named nested-<pid>.json, and its name without the ending is the marker the run hands its own
+ *  job. Returns the file; deleting it removes the note. */
+export function addNested(pid, label, outer, dirs, { waiting = false, now = Date.now() } = {}) {
     mkdirSync(dirs.nested, { recursive: true });
-    const file = join(dirs.nested, `${pid}.json`);
+    const file = join(dirs.nested, `nested-${pid}.json`);
     const from = { outer: outer.marker, outerPid: outer.pid, outerBorn: outer.born };
-    writeJsonAtomic(file, { pid, label, ...from, at: now, ...bornOf(pid) });
+    writeJsonAtomic(file, { pid, label, ...from, at: now, ...(waiting ? { waiting: true } : {}), ...bornOf(pid) });
     return file;
+}
+
+/** Claims one of the max places under a parent job for a nested run. parent: the key of that job, from placeKey().
+ *  Returns the place file, or null when all are taken. releaseSlot() frees it. */
+export function takePlace(pid, label, parent, max, dirs, now = Date.now()) {
+    mkdirSync(dirs.places, { recursive: true });
+    for (let n = 0; n < max; n++) {
+        const place = join(dirs.places, `${parent}.${n}.json`);
+        const temp = tempName(place);
+        writeFileSync(temp, JSON.stringify({ pid, label, parent, at: now, ...bornOf(pid) }));
+        try {
+            linkSync(temp, place);
+            return place;
+        } catch { /* another nested run holds this place */ } finally { rmSync(temp, { force: true }); }
+    }
+    return null;
 }
 
 /** Joins the line. Returns the ticket file; deleting it leaves the line. */
@@ -99,7 +123,7 @@ export function takeSlot(pid, label, max, meta, dirs) {
     return null;
 }
 
-/** Frees a slot, but only for the pid that holds it. */
+/** Frees a slot or a place, but only for the pid that holds it. */
 export function releaseSlot(slot, pid) {
     if (slot && readJson(slot)?.pid === pid) rmSync(slot, { force: true });
 }
