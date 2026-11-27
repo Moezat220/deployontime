@@ -151,6 +151,14 @@ test("updateSlot: merges fields for the holder and refuses anyone else", () => {
     assert.deepEqual(readdirSync(dirs.slots), ["slot-0.json"]);
 });
 
+test("updateSlot: a write that fails returns false instead of throwing, and the slot keeps what it had", () => {
+    const dirs = newDirs(), slot = takeSlot(822, "mobile-app: bundle", 1, { kind: "build" }, dirs);
+    // A folder where the temporary file would go makes the write fail.
+    fs.mkdirSync(`${slot}.tmp-${process.pid}`);
+    assert.equal(updateSlot(slot, 822, { pgid: 8220 }), false);
+    assert.deepEqual([read(slot).pid, read(slot).pgid], [822, undefined]);
+});
+
 test("addNested: notes a nested run, which a snapshot lists apart from the holders, and only while it lives", () => {
     const home = tempDir("slots-nested");
     const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), nested: join(home, "nested") };

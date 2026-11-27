@@ -129,10 +129,16 @@ export function releaseSlot(slot, pid) {
     if (slot && readJson(slot)?.pid === pid) rmSync(slot, { force: true });
 }
 
-/** Merges `fields` into `slot` if `pid` owns it; false otherwise. */
+/** Merges `fields` into `slot` if `pid` owns it; false otherwise, and false when the write fails. It never throws:
+ *  a job calls it after its command has started, and a failed note must not end the job and leave the command
+ *  running on its own. */
 export function updateSlot(slot, pid, fields) {
     const current = slot && readJson(slot);
     if (current?.pid !== pid) return false;
-    writeJsonAtomic(slot, { ...current, ...fields });
+    try {
+        writeJsonAtomic(slot, { ...current, ...fields });
+    } catch {
+        return false;
+    }
     return true;
 }
