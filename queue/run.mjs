@@ -1,8 +1,9 @@
 // The `run` command, in three steps: planJob decides the limit and whether the job is refused, waitForSlot waits in
 // line until a slot is taken, and runJob runs the job in its own process group under the limit. runCommand chains
 // them and returns the exit code; it never ends the process itself. These come in through deps, so tests can drive
-// each step: the clock, sleeping and timers, the health reading, the commit read at the start of a job, the current
-// folder, starting the job, signals sent to it and signals received, messages, notifications and stored notices.
+// each step: the clock, sleeping and timers, the health reading, the commit read when the job is queued and again
+// when it starts, the current folder, starting the job, signals sent to it and signals received, messages,
+// notifications and stored notices.
 // The rest is done directly: the slot, line and journal files in the folders named by files, the git calls for the
 // project name and the code fingerprint, the process table read by snapshot and killTree, and this process's own
 // pid and node binary.
@@ -24,7 +25,7 @@ import { addNotice as storeNotice, longRunAlert } from "./notices.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
 import { enqueue, releaseSlot, snapshot, takeSlot, updateSlot } from "./slots.mjs";
-import { MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
+import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
@@ -118,6 +119,8 @@ export async function waitForSlot(job, deps) {
         }
         const sleptFrom = deps.now();
         await deps.sleep(settings.pollMs);
+        // A poll cut short by a signal is not booked: the job leaves at the top of the loop.
+        if (deps.leaving?.()) continue;
         addWait(tally, heldBy, deps.now() - sleptFrom);
     }
 }
@@ -127,9 +130,9 @@ export async function waitForSlot(job, deps) {
  *  from journalWriter() and handOver(), when given, is called as soon as the job's own signal handlers are in place,
  *  so the caller can remove the ones it had until then without a moment in which a signal finds none.
  *  deps: { now, spawn, say, after, later, kill, notify, addNotice, gitState, signals }: after(minutes, fn) is the long
- *  timer, later(ms, fn) a short one, kill(pid, signal) sends a signal, addNotice(key, entry, file) stores a notice,
- *  gitState(cwd) reads the commit, and signals is the process whose INT, TERM, HUP and exit events are watched. Every
- *  handler it adds is removed at the end. A run limit whose last KILL is refused is reported, and journalled with
+ *  timer, later(ms, fn) a short one, each returning a function that cancels it, kill(pid, signal) sends a signal,
+ *  addNotice(key, entry, file) stores a notice, gitState(cwd) reads the commit, and signals is the process whose INT,
+ *  TERM, HUP and exit events are watched. Every handler and timer it adds is removed at the end. A run limit whose last KILL is refused is reported, and journalled with
  *  stopFailed, as a stop that failed. */
 export function runJob(job, slot, deps) {
     const { pid, label, project, limit, settings, files, tz, journal } = job;
@@ -169,6 +172,9 @@ export function runJob(job, slot, deps) {
     let longRunAt = null;
     let warnedAt = null;
     let ended = false;
+    const timers = [];
+    const after = (minutes, fn) => { timers.push(deps.after(minutes, fn)); };
+    const later = (ms, fn) => { timers.push(deps.later(ms, fn)); };
     let done;
     const result = new Promise((resolve) => { done = resolve; });
     const end = (exit) => {
@@ -179,6 +185,7 @@ export function runJob(job, slot, deps) {
         // Safe to drop: the wrapper has exited, or the backstop ended a run whose last KILL was refused, and a TERM
         // at exit would be refused the same way.
         signals.off("exit", onExit);
+        for (const cancel of timers) cancel();
         done(exit);
     };
     const stamps = () => ({
@@ -198,24 +205,24 @@ export function runJob(job, slot, deps) {
             + `${job.kind} (--kind <name> overrides it), and --max-run <min> sets the limit directly`);
         end(EXIT.timedOut);
     };
-    deps.after(limit.killMin, () => {
+    after(limit.killMin, () => {
         pastLimit = true;
         say(`run limit: stopping "${label}", KILL follows TERM after ${killGraceMs / 1000} s; ran ${limit.killMin} min `
             + `against a limit of ${limit.limitMin} min, set by ${limit.basis}`);
         killJob("SIGTERM");
-        deps.later(killGraceMs, () => killJob("SIGKILL"));
+        later(killGraceMs, () => killJob("SIGKILL"));
         // Backstop for a wrapper that never exits.
-        deps.later(Math.min(killGraceMs + 5000, MAX_TIMER_MS), endTimedOut);
+        later(Math.min(killGraceMs + 5000, MAX_TIMER_MS), endTimedOut);
     });
     if (job.priority) {
-        deps.after(limit.limitMin, () => {
+        after(limit.limitMin, () => {
             warnedAt = deps.now();
             say(`priority warning: hard stop at ${limit.killMin} min, the ${limit.limitMin} min limit `
                 + `(set by ${limit.basis}) was passed by "${label}"`);
         });
     }
     if (limit.notifyLongRun) {
-        deps.after(limit.longRunMin, () => {
+        after(limit.longRunMin, () => {
             longRunAt = deps.now();
             try {
                 const alert = longRunAlert({
@@ -290,7 +297,7 @@ export function realDeps({ readHealth, notify, after }) {
         say: (text) => process.stderr.write(`dotime-queue: ${text}\n`),
         usage: (text) => process.stderr.write(`${text}\n`),
         after,
-        later: (ms, fn) => setTimeout(fn, ms).unref(),
+        later: afterMs,
         kill: (pid, signal) => process.kill(pid, signal),
         notify,
         addNotice: storeNotice,

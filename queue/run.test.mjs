@@ -19,6 +19,7 @@ const { enqueue, takeSlot } = await import("./slots.mjs");
 const { notify } = await import("./notify.mjs");
 const { addNotice } = await import("./notices.mjs");
 const { gitState } = await import("./git.mjs");
+const { afterMs } = await import("./timer.mjs");
 
 const NODE = process.execPath, MINUTE = 60_000;
 const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
@@ -58,11 +59,16 @@ const slots = (box) => {
 };
 
 /** A timer in minutes that fires only when the test says how many minutes have passed. advanceTo() returns the
- *  marks it fired, so a test can see that a moment was reached and nothing was due. */
+ *  marks it fired, so a test can see that a moment was reached and nothing was due. A cancelled timer counts as
+ *  fired. */
 function fakeMinutes() {
     const timers = [];
     return {
-        after: (min, fn) => { timers.push({ min, fn, fired: false }); return null; },
+        after: (min, fn) => {
+            const timer = { min, fn, fired: false };
+            timers.push(timer);
+            return () => { timer.fired = true; };
+        },
         advanceTo(minutes) {
             const due = timers.filter((t) => !t.fired && t.min <= minutes).sort((a, b) => a.min - b.min);
             for (const t of due) { t.fired = true; t.fn(); }
@@ -83,7 +89,7 @@ function makeDeps(box, overrides = {}) {
         now: Date.now, sleep: (ms) => new Promise((done) => setTimeout(done, ms)), readHealth: () => CALM,
         spawn: (program, args, options) => track(spawn(program, args, { ...options, stdio: ["ignore", "ignore", "ignore", "pipe"] }), { group: true }),
         say: (text) => said.push(text), usage: (text) => said.push(text), after: clock.after,
-        later: (ms, fn) => setTimeout(fn, ms).unref(), kill: (pid, signal) => process.kill(pid, signal),
+        later: afterMs, kill: (pid, signal) => process.kill(pid, signal),
         notify: (title, message) => notify(title, message, { env: { DOTIME_NOTIFY: "log" }, logFile: box.ctx.files.notifyLog }),
         addNotice, gitState, signals, ...overrides,
     };
@@ -172,7 +178,7 @@ test("waitForSlot: leaves the line when a signal asks for it", async () => {
     let leaving = null;
     const sleep = async (ms) => { await clock.sleep(ms); leaving = "SIGTERM"; };
     const got = await waitForSlot(waiter(box), { now: clock.now, sleep, readHealth: () => CALM, say: () => {}, leaving: () => leaving });
-    assert.deepEqual(got, { left: "SIGTERM", tally: { slots: 60 } });
+    assert.deepEqual(got, { left: "SIGTERM", tally: {} }, "the poll the signal cut short is not booked");
 });
 
 // ---- realDeps ----
@@ -221,7 +227,7 @@ test("runJob: passes the job's exit code on, journals the run and frees the slot
     const box = sandbox(), job = startJob(box, [NODE, "-e", "process.exit(4)"]);
     assert.equal(await job.run.result, 4);
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.kind, typeof line.startedAt]), [["ran", 4, "build", "string"]]);
-    assert.deepEqual([slots(box), job.clock.pending, job.signals.eventNames()], [[], [30], []]);
+    assert.deepEqual([slots(box), job.clock.pending, job.signals.eventNames()], [[], [], []]);
 });
 
 test("runJob: a signal on the watched process goes on to the job, and the run is journalled as stopped", async () => {
@@ -342,7 +348,7 @@ test("run: a run-limit stop whose KILL is refused is reported and journalled as 
         if (signal === 0) return process.kill(pid, 0);
         throw Object.assign(new Error("not permitted"), { code: "EPERM" });
     };
-    const d = makeDeps(box, { later: (ms, fn) => timers.push({ ms, fn }), kill: refuse });
+    const d = makeDeps(box, { later: (ms, fn) => { timers.push({ ms, fn }); return () => {}; }, kill: refuse });
     const args = ["run", "--label", "shop-api: e2e", "--max-run", "2", "--", NODE, "-e", savePid(pidFile)];
     const run = settle(runCommand(args, box.ctx, d.deps));
     await until(() => existsSync(pidFile));
@@ -360,6 +366,38 @@ test("run: a run-limit stop whose KILL is refused is reported and journalled as 
     assert.deepEqual([line.outcome, line.exit, refused.test(line.stopFailed)], ["timed-out", 124, true]);
     process.kill(job, "SIGKILL");
     await until(() => !alive(job), 3000);
+});
+
+test("run: at the end every timer is cancelled: the warning, the long-run notice, the KILL and the backstop", async () => {
+    const box = sandbox({ limits: { longRunUnmeasuredMin: 3 } }), pidFile = join(box.work, "job.pid"), short = [];
+    const later = (ms, fn) => {
+        const timer = { ms, fn, cancelled: false };
+        short.push(timer);
+        return () => { timer.cancelled = true; };
+    };
+    const d = makeDeps(box, { later });
+    const args = ["run", "--priority", "--label", "shop-api: e2e", "--max-run", "2", "--", NODE, "-e", savePid(pidFile)];
+    const run = settle(runCommand(args, box.ctx, d.deps));
+    await until(() => existsSync(pidFile));
+    assert.deepEqual(d.clock.pending, [2, 3, 4], "the warning, the long-run notice and the stop");
+    assert.deepEqual(d.clock.advanceTo(2), [2]);
+    process.kill(pidIn(pidFile), "SIGKILL");
+    assert.equal(await run.result, 1, "the job ended by itself before its stop");
+    assert.deepEqual([d.clock.pending, short], [[], []], "no timer is left once the job has ended");
+    const box2 = sandbox(), pidFile2 = join(box2.work, "job.pid"), short2 = [];
+    const later2 = (ms, fn) => {
+        const timer = { ms, fn, cancelled: false };
+        short2.push(timer);
+        return () => { timer.cancelled = true; };
+    };
+    const d2 = makeDeps(box2, { later: later2 });
+    const args2 = ["run", "--label", "shop-api: e2e", "--max-run", "2", "--", NODE, "-e", savePid(pidFile2)];
+    const run2 = settle(runCommand(args2, box2.ctx, d2.deps));
+    await until(() => existsSync(pidFile2));
+    assert.deepEqual(d2.clock.advanceTo(2), [2]);
+    assert.equal(await run2.result, 124);
+    assert.deepEqual(short2.map((t) => [t.ms, t.cancelled]), [[250, true], [5250, true]],
+        "the KILL after the grace and the backstop are cancelled once the job ended by its TERM");
 });
 
 test("run: with --priority the limit only warns, and the stop comes at double the limit", async () => {
@@ -411,7 +449,7 @@ test("run: a signal while waiting comes back as exit 130 through the return valu
     await until(() => d.said.some((line) => line.startsWith("in line")));
     d.signals.emit("SIGINT");
     assert.equal(await run.result, EXIT.left);
-    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal]), [["left", 130, "SIGINT"]]);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.signal, line.waitBy]), [["left", 130, "SIGINT", {}]]);
     assert.deepEqual([readdirSync(join(box.home, "line")), d.signals.eventNames()], [[], []]);
 });
 
