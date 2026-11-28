@@ -1,7 +1,7 @@
 {
   "name": "deployontime",
   "mcpName": "io.github.Moezat220/deployontime",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A shared job queue that lets several coding agents use one computer without overloading it.",
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -42,7 +42,8 @@
     "!mcp/*.test.mjs",
     "README.md",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test"
