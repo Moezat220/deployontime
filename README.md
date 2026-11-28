@@ -23,12 +23,17 @@
 
 <br>
 
-**DeployOnTime is an open-source autonomous software factory in the making** for building with AI coding agents:
-several agents working side by side today; tests, reviews and security checks, safe live releases and AI orchestration
-next. It is published one part at a time, and the first part, the machine queue, works on its own.
+**You built it with AI, but is it actually done?** When several coding agents run their checks on one computer, they
+fail each other's test suites, and an agent then spends rounds fixing code that was never broken. DeployOnTime starts
+with the part that makes those results trustworthy: **the machine queue** (macOS and Linux), which lets several agents
+share one computer without overloading it, and records every run, with why it failed when it did.
 
-**Ready to use today: the machine queue** (macOS and Linux). It lets several coding agents share one computer without
-overloading it. The next parts are on the [roadmap](#roadmap).
+Current release: **0.3.2** on npm. On main, in the next release: the macOS schedule tick fires at the start of every
+minute. See the [changelog](CHANGELOG.md).
+
+DeployOnTime is an open-source software factory in the making, published one part at a time. The direction is a
+factory where you define what "done" means and checks verify it automatically; those checks are not built yet (see the
+[roadmap](#roadmap) and [what it does not do](#what-it-does-not-do-yet)).
 
 <p align="center">
   <img src="docs/assets/status.svg" alt="dotime-queue status: two jobs running, one waiting for a free slot" width="860">
@@ -52,7 +57,18 @@ was never broken. Each agent sees only its own run, so neither you nor the agent
 | **A check keeps failing on the same code** | An agent may keep re-running it | A third try is blocked for up to 6 hours (exit 3) until the code changes or `--after-fix` is given |
 | **This commit already has a green run** | It may run again | A test or lint check that already passed on the same clean commit, in the same folder, is skipped (exit 0); `--no-skip` runs it anyway |
 | **Where did the time go?** | No record | `dotime-queue history` totals waits and results per project |
+| **Why did a run fail?** | Only a red exit code | Each failed run is journalled with a reason class (port, network, disk, memory, test, build, run limit, …), never its output text; `dotime-queue reasons` counts them and how many passed on a plain re-run |
+| **The computer restarted mid-run** | The run just vanishes | It is journalled once as `lost`, its slot is freed, and it never counts as a code failure |
 | **Dev servers left running** | They keep using memory | An optional reaper stops the idle ones |
+
+## What it does not do (yet)
+
+The queue runs and records the heavy commands your agents start. It does not judge your code:
+
+- no code review, security review or performance review;
+- no deploys or releases;
+- it does not fix a failing test or decide what "done" means for your project;
+- it does not retry a failure for you: it records why a run failed, so you can see which failures were real.
 
 ## How it works
 
