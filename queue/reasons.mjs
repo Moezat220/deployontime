@@ -94,8 +94,8 @@ function body(c) {
 /** The lines of `dotime-queue reasons` for a reasonsReport(). */
 export function reasonsLines(report) {
     const { classes, total, retry, days } = report;
-    const left = total.unrecorded ? `; ${plural(total.unrecorded, "older failure", "older failures")} without a reason left out` : "";
-    if (!classes.length) return [`reasons: no failures in ${plural(days, "day", "days")}${left}`];
+    const left = total.unrecorded ? `; ${plural(total.unrecorded, "failure", "failures")} from before reasons were recorded not counted` : "";
+    if (!classes.length) return [`reasons: ${total.unrecorded ? "no failure with a reason yet" : "no failures"} in ${plural(days, "day", "days")}${left}`];
     const lines = classes.map((c) => {
         const signs = Object.keys(c.signs).length ? `; signs ${counts(c.signs)}` : "";
         const also = Object.keys(c.alsoSaw).length ? `; also saw ${counts(c.alsoSaw)}` : "";

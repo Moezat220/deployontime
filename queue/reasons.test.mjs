@@ -78,9 +78,9 @@ test("reasons: the window counts failures by their end, and older failures witho
     const rows = [fail(8 * 24 * 60, net), fail(2 * 24 * 60, net), row(60, { exit: 1 })];
     const week = reasonsReport(rows, { now: NOW });
     assert.deepEqual([week.classes.length, week.total.failures, week.total.unrecorded], [1, 1, 1]);
-    assert.equal(reasonsLines(week)[1].endsWith("; 1 older failure without a reason left out"), true);
+    assert.equal(reasonsLines(week)[1].endsWith("; 1 failure from before reasons were recorded not counted"), true);
     const day = reasonsReport(rows, { now: NOW, days: 1 });
-    assert.deepEqual(reasonsLines(day), ["reasons: no failures in 1 day; 1 older failure without a reason left out"]);
+    assert.deepEqual(reasonsLines(day), ["reasons: no failure with a reason yet in 1 day; 1 failure from before reasons were recorded not counted"]);
     assert.equal(day.from, new Date(NOW - DAY).toISOString());
 });
 
