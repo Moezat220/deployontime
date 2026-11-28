@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
+import { spawn } from "node:child_process";
+import { ended, FOREVER, isolateProcess, pidIn, readNotices, savePid, tempDir, track, until, withChild } from "./testkit.mjs";
 
 isolateProcess("run");
 const { EXIT, journalWriter, lowRoomHint, planJob, realDeps, reasonOf, runCommand, runJob, viaNested, waitForSlot } = await import("./run.mjs");
@@ -31,22 +31,8 @@ const CALM = { load: 0.4, cores: 4, freePct: 70, diskGB: 150, battery: null };
 const NOW = Date.UTC(2031, 3, 7, 9, 0);
 
 // Job scripts, run with `node -e`.
-const FOREVER = "setInterval(() => {}, 1000)";
 const untilFile = (file) => "const fs = require(\"node:fs\"); "
     + `const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
-const savePid = (file) => `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); ${FOREVER}`;
-const withChild = (file) => "const c = require(\"node:child_process\")"
-    + `.spawn(process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); `
-    + `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
-const pidIn = (file) => Number(readFileSync(file, "utf8"));
-/** True once the process is gone: no longer there, or a zombie that has ended and waits only to be reaped, which
- *  kill(pid, 0) still reaches. */
-const ended = (pid) => {
-    if (!alive(pid)) return true;
-    const ps = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
-    const state = ps.stdout.trim();
-    return state === "" || state.startsWith("Z");
-};
 const count = (lines, part) => lines.filter((line) => line.includes(part)).length;
 
 /** A state folder and a work folder, with the settings the e2e tests use: short polls and a short kill grace. The

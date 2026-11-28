@@ -1363,7 +1363,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `clock.mjs` | Clock times, days and zone offsets. | library | None. |
 | `stats.mjs` | The percentile that limits and `history` share. | library | None. |
 | `units.mjs` | Time units and rounding. | library | None. |
-| `testkit.mjs` | Test helpers: temp folders, started processes, isolated git and state folder, stored notices, a script started as on another platform. | test helper | Creates and removes temp folders, signals processes the tests started. |
+| `testkit.mjs` | Test helpers: temp folders, started processes, isolated git and state folder, stored notices, a script started as on another platform, job scripts that write a whole pid, and whether a pid has ended. | test helper | Creates and removes temp folders, signals processes the tests started. |
 
 ## Tests
 

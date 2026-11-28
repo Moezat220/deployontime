@@ -176,6 +176,37 @@ export function feedCpuReading(home, busyCpuPct) {
 }
 
 export const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+
+// Job scripts, run with `node -e`. The two that write a pid write it under a temporary name and then move it into
+// place, so a test that waits for the file to exist never reads it half written: an empty file reads as pid 0, and
+// signal 0 to pid 0 reaches this whole process group, so such a process would look alive for ever.
+export const FOREVER = "setInterval(() => {}, 1000)";
+const writePid = (file, pid) => `require("node:fs").writeFileSync(${JSON.stringify(`${file}.part`)}, String(${pid})); `
+    + `require("node:fs").renameSync(${JSON.stringify(`${file}.part`)}, ${JSON.stringify(file)}); `;
+/** A job script that writes its own pid to file and then runs until it is stopped. */
+export const savePid = (file) => `${writePid(file, "process.pid")}${FOREVER}`;
+/** A job script that starts a child of its own, writes the child's pid to file, and runs until it is stopped. */
+export const withChild = (file) => `const c = require("node:child_process").spawn(`
+    + `process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); ${writePid(file, "c.pid")}${FOREVER}`;
+const checkedPid = (pid, from) => {
+    if (!Number.isInteger(pid) || pid <= 1) throw new Error(`not a pid of a started process: ${JSON.stringify(pid)}${from}`);
+    return pid;
+};
+/** The pid that savePid() or withChild() wrote to file. Throws unless it is a whole number above 1. */
+export const pidIn = (file) => checkedPid(Number(readFileSync(file, "utf8")), `, read from ${file}`);
+/** True once the process is gone: no longer there, or a zombie that has ended and waits only to be reaped, which
+ *  signal 0 still reaches. A process whose parent died is reaped by the system's first process, at its own pace.
+ *  Throws for anything but a pid above 1, for which `ps` prints nothing and the answer would always be true. */
+export function ended(pid) {
+    checkedPid(pid, "");
+    try {
+        process.kill(pid, 0);
+    } catch (e) {
+        if (e.code !== "EPERM") return true;
+    }
+    const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+    return state === "" || state.startsWith("Z");
+}
 /** Waits until check() is truthy; throws after the time limit. check may be async: its promise is awaited, since a
  *  promise itself is always truthy. */
 export async function until(check, limitMs = 10_000) {

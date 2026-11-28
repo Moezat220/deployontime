@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-    asPlatform, cleanEnv, feedCpuReading, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until,
+    asPlatform, cleanEnv, ended, feedCpuReading, FOREVER, git as testGit, isolateProcess, makeRepo, pidIn, savePid, settingEnv, tempDir,
+    track, until,
 } from "./testkit.mjs";
 
 isolateProcess("cli");
@@ -67,14 +68,8 @@ const slots = (box) => {
 const count = (text, part) => text.split(part).length - 1;
 
 // Job scripts, run with `node -e`.
-const FOREVER = "setInterval(() => {}, 1000)";
 const untilFile = (file) => `const fs = require("node:fs"); `
     + `const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) { clearInterval(t); } }, 20);`;
-const savePid = (file) => `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); ${FOREVER}`;
-const withChild = (file) => `const c = require("node:child_process").spawn(`
-    + `process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); `
-    + `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
-const pidIn = (file) => Number(readFileSync(file, "utf8"));
 
 // ---- functions ----
 
@@ -392,7 +387,12 @@ test("run: six light jobs at once fill the base slots, then extra slots one sett
     stopFeed = feedCpuReading(box.home, 95);
     const baseHolder = JSON.parse(readFileSync(join(box.home, "slots", "slot-0.json"), "utf8"));
     writeFileSync(release(baseHolder.label), "");
-    await until(() => started().length === 4 && slots(box).every((s) => s.label !== baseHolder.label), 10_000);
+    // Both conditions come from one reading of the slots: from two, the job could end between them, and its freed
+    // slot would pass for a refilled one.
+    await until(() => {
+        const now = slots(box);
+        return now.filter((s) => s.pgid).length === 4 && now.every((s) => s.label !== baseHolder.label);
+    }, 10_000);
     const refill = JSON.parse(readFileSync(join(box.home, "slots", "slot-0.json"), "utf8"));
     assert.equal(refill.extra, undefined);
     for (const label of labels) writeFileSync(release(label), "");
@@ -595,7 +595,9 @@ test("run: when the queue process is killed, its job is stopped", async () => {
     assert.deepEqual([alive(job), alive(wrapper)], [true, true]);
     run.child.kill("SIGKILL");
     assert.equal((await run.done).signal, "SIGKILL");
-    await until(() => !alive(job) && !alive(wrapper), 5000);
+    // The queue is gone, so the system reaps the wrapper at its own pace, and the job too when the wrapper's KILL of
+    // its own group comes before it has reaped the job: until then each is a zombie.
+    await until(() => ended(job) && ended(wrapper), 10_000);
     assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting; ${DEFAULTS.slots}, set in settings\ngate: open\n`);
 });
 
@@ -646,7 +648,8 @@ test("run: a signal while running stops the job and is journalled as stopped", a
     const result = await run.done;
     assert.equal(result.code, 1);
     assert.equal(result.stderr, "dotime-queue: stopped: signal SIGTERM, 0 min run, journalled as stopped and not as failed\n");
-    await until(() => !alive(job), 3000);
+    // The wrapper exits only once it has reaped the job, so the job is gone and not merely a zombie.
+    await until(() => !alive(job), 10_000);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.signal, typeof line.stoppedAt, slots(box)], ["stopped", "SIGTERM", "string", []]);
 });
