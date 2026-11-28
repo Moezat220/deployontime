@@ -42,7 +42,7 @@ const PLIST = [
     "        <key>PATH</key>", "        <string>/opt/node/bin:/usr/bin:/bin</string>",
     "        <key>DOTIME_TZ</key>", "        <string>Europe/Paris</string>",
     "        <key>DOTIME_HOME</key>", "        <string>/srv/agent/.dotime</string>", "    </dict>",
-    "    <key>StartInterval</key>", "    <integer>60</integer>", "    <key>RunAtLoad</key>", "    <true/>",
+    "    <key>StartCalendarInterval</key>", "    <dict/>", "    <key>RunAtLoad</key>", "    <true/>",
     "    <key>AbandonProcessGroup</key>", "    <true/>",
     "    <key>StandardOutPath</key>", "    <string>/srv/agent/.dotime/schedule.log</string>",
     "    <key>StandardErrorPath</key>", "    <string>/srv/agent/.dotime/schedule.log</string>",

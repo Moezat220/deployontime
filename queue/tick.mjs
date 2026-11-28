@@ -181,7 +181,7 @@ function tickJob(job, plan, now, jobs, files, deps) {
         const { count, oldest, newest } = plan.missed;
         append(tickRow(job, "missed", now, { missed: count, missedFrom: iso(oldest), missedTo: iso(newest) }), files.journal);
         const next = busy ? "not started now: the last run is still going" : "running once now";
-        // One due time missed by a tick that came a few seconds late (a launchd StartInterval drifts against the clock)
+        // One due time missed by a tick that came a few seconds late (a slow tick, or a system entry that drifts)
         // is journalled and printed, but is no notice: only a real gap is worth interrupting someone for.
         const jitter = count === 1 && now - newest < GRACE_MS;
         if (!jitter) {

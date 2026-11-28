@@ -44,7 +44,9 @@ export function tickEnv(env, home) {
 
 const xml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** The LaunchAgent: tick every 60 seconds, also once when it is loaded, with its output in schedule.log.
+/** The LaunchAgent: tick at the start of every minute, as cron would (an empty StartCalendarInterval: every field is a
+ *  wildcard), also once when it is loaded, with its output in schedule.log. A calendar interval that passes while the
+ *  computer sleeps runs once on wake, where a StartInterval would be skipped and would drift against the clock.
  *  AbandonProcessGroup: launchd leaves the runs the tick started alone when the tick ends; each also runs in a process
  *  group of its own. */
 export function launchdPlist({ node, cli, env, log }) {
@@ -65,8 +67,8 @@ export function launchdPlist({ node, cli, env, log }) {
         "    <dict>",
         ...vars,
         "    </dict>",
-        "    <key>StartInterval</key>",
-        "    <integer>60</integer>",
+        "    <key>StartCalendarInterval</key>",
+        "    <dict/>",
         "    <key>RunAtLoad</key>",
         "    <true/>",
         "    <key>AbandonProcessGroup</key>",

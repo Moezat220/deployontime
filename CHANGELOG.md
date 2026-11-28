@@ -3,6 +3,13 @@
 What changed in each release of the `deployontime` package (`dotime-queue` and `dotime-mcp`). The full manual is
 [queue/README.md](queue/README.md).
 
+## Unreleased
+
+- **The macOS tick fires on the minute.** The LaunchAgent uses an empty `StartCalendarInterval` instead of
+  `StartInterval` 60, so it runs at the start of every minute as cron and the systemd timer do, does not drift, and
+  runs once on wake for the minutes the Mac slept through. Run `dotime-queue schedule install` again to switch a tick
+  installed by an older version.
+
 ## 0.3.2
 
 - **No missed due time is dropped without a word** ([#36](https://github.com/Moezat220/deployontime/pull/36)). When
