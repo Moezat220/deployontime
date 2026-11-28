@@ -10,7 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 isolateProcess("tick");
-const { GRACE_MS, NO_PID_MS, planTick, runTick, SCHEDULED_MARKER, startRun, stillGoing, tickRow } = await import("./tick.mjs");
+const { GRACE_MS, NO_PID_MS, noticeBook, planTick, runTick, SCHEDULED_MARKER, startRun, stillGoing, tickRow } = await import("./tick.mjs");
 // A run may be writing its journal line while a test reads, so a line that does not parse yet is left out, as the
 // journal reader does.
 const parse = (line) => { try { return [JSON.parse(line)]; } catch { return []; } };
@@ -459,4 +459,24 @@ test("acceptance: two real ticks started at once start the due job once", async 
     await runFinished(r, j.id, 1);
     assert.equal(rowsOf(r, j.id).length, 1);
     assert.equal(existsSync(r.files.scheduleLock), false);
+});
+
+test("noticeBook: when its own file cannot be saved either, as on a full disk, a notice still goes out, at most once an hour", () => {
+    const blocker = join(tempDir("tick-notes-full"), "a-file");
+    writeFileSync(blocker, "");
+    const notes = join(blocker, "schedule-notes.json");
+    const sent = [];
+    const tickAt = (iso) => noticeBook(notes, (title, message) => sent.push([iso, title, message]), Date.parse(iso));
+    for (const iso of ["2040-01-01T10:57:05Z", "2040-01-01T10:58:05Z", "2040-01-01T10:59:05Z", "2040-01-01T11:00:05Z",
+        "2040-01-01T11:01:05Z", "2040-01-01T11:59:05Z", "2040-01-01T12:00:05Z"]) {
+        tickAt(iso).once("save", "ENOSPC", "dotime: schedule tick stopped", "schedule.json could not be saved (ENOSPC)");
+    }
+    assert.deepEqual(sent.map(([iso]) => iso), ["2040-01-01T11:00:05Z", "2040-01-01T12:00:05Z"]);
+    assert.equal(existsSync(notes), false);
+    const book = join(tempDir("tick-notes-ok"), "schedule-notes.json");
+    const told = [];
+    for (const minute of ["05", "06"]) {
+        noticeBook(book, (title) => told.push(title), Date.parse(`2040-01-01T10:${minute}:05Z`)).once("save", "ENOSPC", "stopped", "x");
+    }
+    assert.deepEqual(told, ["stopped"], "with a file that saves, still once, at any minute");
 });

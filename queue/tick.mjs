@@ -100,8 +100,10 @@ const runs = (n) => `${n} ${n === 1 ? "run" : "runs"}`;
 
 /** The notices the tick sends for a problem that would otherwise come back every minute, kept in a file by a key:
  *  once(key, value, title, message) sends one only when the key had another value, and only once that is saved, so
- *  it is never sent each minute; clear(key) forgets it when the problem is gone. */
-export function noticeBook(file, notify) {
+ *  it is never sent each minute; clear(key) forgets it when the problem is gone. When even that file cannot be saved,
+ *  as on a full disk, the notice goes out on the tick in minute 0 of each hour only, so it is still told, at most
+ *  once an hour. now: the time of this tick in ms. */
+export function noticeBook(file, notify, now = Date.now()) {
     const kept = readJson(file, {}) ?? {};
     const save = () => {
         try { writeJsonAtomic(file, kept, undefined, OWNER_ONLY); return true; } catch { return false; }
@@ -110,7 +112,10 @@ export function noticeBook(file, notify) {
         once(key, value, title, message) {
             if (kept[key] === value) return;
             kept[key] = value;
-            if (!save()) return;
+            if (!save()) {
+                delete kept[key];
+                if (new Date(now).getUTCMinutes() !== 0) return;
+            }
             try { notify(title, message); } catch { /* a notice that fails changes nothing */ }
         },
         clear(key) {
@@ -188,7 +193,7 @@ export function runTick(files, deps) {
     const release = takeLock(files.scheduleLock, deps.owner, { isGone: deps.isGone, now: deps.now() });
     if (!release) return 0;
     try {
-        const book = noticeBook(files.tickNotes, deps.notify);
+        const book = noticeBook(files.tickNotes, deps.notify, deps.now());
         const distrust = scheduleTrust(files.schedule, deps.uid);
         if (distrust) {
             deps.say(`schedule tick: nothing runs; ${distrust}`);

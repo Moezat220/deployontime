@@ -715,8 +715,8 @@ not complete. Each of these problems, and a save that fails, is sent as one noti
 `dotime: schedule cannot be used` or `dotime: schedule tick stopped`, with the fix, such as `chmod 600 <file>`;
 `schedule-notes.json` keeps which ones were sent, so the next ticks do not send them again. A broken file is told
 again once it changes, and a problem that went away and comes back is told again. A notice is sent only once that
-record is saved, so it is never sent each minute; when even that file cannot be written, the line in `schedule.log`
-is all that says it.
+record is saved, so it is never sent each minute; when even that file cannot be written, as on a full disk, the
+notice goes out on the tick in minute 0 of each hour instead, so it is still told, at most once an hour.
 
 **`install`** writes the one system entry and starts it; `--dry` prints what it would write and run, and changes
 nothing. On macOS it is the LaunchAgent `~/Library/LaunchAgents/com.deployontime.schedule-tick.plist`, with
