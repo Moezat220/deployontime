@@ -812,7 +812,7 @@ notice goes out on the tick in minute 0 of each hour instead, so it is still tol
 **`install`** writes the one system entry and starts it; `--dry` prints what it would write and run, and changes
 nothing. On macOS it is the LaunchAgent `~/Library/LaunchAgents/com.deployontime.schedule-tick.plist`, with an
 empty `StartCalendarInterval`, which fires at the start of every minute as cron does, loaded with `launchctl
-bootstrap`. A minute that passes while the Mac sleeps is run once on wake, and the tick does not drift against the
+bootstrap`. The minutes the Mac sleeps through give one tick on wake, and the tick does not drift against the
 clock. A tick installed by an older version runs every 60 seconds from when it was loaded; run `install` again to
 switch it. On Linux, when `systemctl --user` works, it is the user service
 and timer `dotime-schedule-tick` in `~/.config/systemd/user`, enabled with `systemctl --user enable --now`; a user timer
