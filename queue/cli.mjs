@@ -84,15 +84,16 @@ function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
     }
 }
 
-/** One line of `history` for a project's totals. Skipped jobs are named only when there are any, with the run time
- *  of the passing runs they relied on as the time saved. flaky: the number of flaky checks in the range. scheduled:
+/** One line of `history` for a project's totals; lost counts the runs cut off by a restart or a dead queue process.
+ *  Skipped jobs are named only when there are any, with the run time of the passing runs they relied on as the time
+ *  saved. flaky: the number of flaky checks in the range. scheduled:
  *  the jobs the schedule tick started; the tick's missed and busy lines are named only when there are any. */
 export function historyRow(name, t, flaky = 0) {
     const gates = Object.entries(t.waitBy).map(([gate, min]) => `${gate} ${min} min`).join(", ") || "nothing";
     const skipped = t.skipped ? `, skipped ${t.skipped} (saved ${t.savedMin} min)` : "";
     const tick = `${t.missed ? `, missed ${t.missed}` : ""}${t.busy ? `, busy ${t.busy}` : ""}`;
     return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, `
-        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}, flaky ${flaky}, scheduled ${t.scheduled ?? 0}${tick}; `
+        + `refused ${t.refused}, gave up ${t.gaveUp}, lost ${t.lost ?? 0}${skipped}, flaky ${flaky}, scheduled ${t.scheduled ?? 0}${tick}; `
         + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, `
         + `clock with no job running ${t.blockedOnlyMin} min, `
         + `median ${t.waitMedian} min, p90 ${t.waitP90} min; held by: ${gates}`;

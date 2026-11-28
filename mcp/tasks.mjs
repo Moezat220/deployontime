@@ -2,7 +2,7 @@
 // for it in a request gets the job back as a task, and its own polling of tasks/get hands the result to the agent
 // once the job has finished, with no queue_job rounds. A task is a job of mcp/jobs.mjs and its id is the job id, so a
 // task outlives the server as a job does. Each function gives { result } or { error } for the server to send.
-import { callTool, jobStatus } from "./tools.mjs";
+import { callTool, jobStatus, lostFacts } from "./tools.mjs";
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 /** How often a client is asked to poll tasks/get. */
@@ -49,7 +49,8 @@ export function createdTask(id, ctx) {
 const unknown = (id) => ({ error: `Invalid params: unknown task ${JSON.stringify(String(id).slice(0, 100))}` });
 
 /** tasks/get: a working job gives working, a finished one completed with the queue_job result (isError unless it
- *  passed or was skipped), a lost one failed. */
+ *  passed or was skipped), a lost one failed, with a message that says it was cut off, when the journal recorded
+ *  that, and the job that started it again, if any. */
 export function getTask(params, ctx) {
     const id = params?.taskId;
     const status = jobStatus(id, ctx);
@@ -57,7 +58,7 @@ export function getTask(params, ctx) {
     const base = fields(id, status);
     if (base.status === "working") return { result: { ...base, statusMessage: workingMessage(status.where), pollIntervalMs: POLL_INTERVAL_MS } };
     if (base.status === "failed") {
-        const message = "the job's runner ended without a result; queue_job shows its output";
+        const message = lostFacts(status.job, ctx).text;
         return { result: { ...base, statusMessage: "lost", error: { code: LOST_CODE, message } } };
     }
     const job = callTool("queue_job", { jobId: id }, ctx);

@@ -162,8 +162,10 @@ test("tools/list: the five tools in a fixed order, each with a strict object sch
     assert.deepEqual(byName.queue_run.required, ["label", "command"]);
     assert.deepEqual(byName.queue_run.properties.command.items, { type: "string", maxLength: 32768 });
     assert.deepEqual(byName.queue_run.properties.kind.enum, ["test", "lint", "build", "deploy", "debug", "other"]);
-    assert.deepEqual(Object.keys(byName.queue_run.properties), ["label", "command", "cwd", "kind", "maxRunMin", "noSkip", "afterFix", "isolate"]);
+    const runArgs = ["label", "command", "cwd", "kind", "maxRunMin", "noSkip", "afterFix", "isolate", "rerunIfLost"];
+    assert.deepEqual(Object.keys(byName.queue_run.properties), runArgs);
     assert.equal(byName.queue_run.properties.isolate.type, "boolean");
+    assert.equal(byName.queue_run.properties.rerunIfLost.type, "boolean");
     assert.deepEqual(byName.queue_passed.required, ["match"]);
     assert.deepEqual(byName.queue_job.required, ["jobId"]);
     const { description, ...days } = byName.queue_history.properties.days;
@@ -522,7 +524,8 @@ test("queue_job: an unknown id is a tool error, and a job whose runner ended wit
     const lost = await server.call("queue_job", { jobId: id });
     assert.equal(lost.isError, false);
     assert.equal(lost.structuredContent.state, "lost");
-    assert.match(lost.content[0].text, /lost; its runner ended without a result/);
+    assert.match(lost.content[0].text, /lost; the run was cut off: the machine restarted or the queue process died; nothing ran to the end\n/);
+    assert.deepEqual([lost.structuredContent.lostAt, lost.structuredContent.rerunAs], [null, null], "no journal line, no re-run");
     await server.close();
 });
 
@@ -587,9 +590,91 @@ test("tasks: a failed command is completed with isError, and a lost job is faile
     writeFileSync(files.pid, JSON.stringify({ runnerPid: Number(gone.stdout), runnerStartedAt: Date.now() - 1000, queuePid: 1, startedAt: Date.now() }));
     const lost = (await server.request("tasks/get", { taskId: id, _meta: MODERN_META })).result;
     assert.equal(lost.status, "failed");
-    assert.deepEqual(lost.error, { code: -32603, message: "the job's runner ended without a result; queue_job shows its output" });
+    const cutOff = "the run was cut off: the machine restarted or the queue process died; nothing ran to the end";
+    assert.deepEqual(lost.error, { code: -32603, message: cutOff });
     assert.equal(lost.result, undefined);
     assert.equal((await server.request("tasks/cancel", { taskId: id, _meta: MODERN_META })).result.resultType, "complete");
+    await server.close();
+});
+
+// ---- jobs cut off by a restart ----
+
+/** A command that counts its runs in a file and runs until it is stopped for the first `hang` runs, then ends with
+ *  "done". */
+const hangFirst = (file, hang) => `const fs = require("node:fs"); const f = ${JSON.stringify(file)}; `
+    + `const n = (fs.existsSync(f) ? Number(fs.readFileSync(f, "utf8")) : 0) + 1; fs.writeFileSync(f, String(n)); `
+    + `if (n <= ${hang}) setInterval(() => {}, 1000); else console.log("done");`;
+
+/** KILL to a running job's runner, its queue process and the job's own process group, as a restart would. */
+async function cutOffJob(box, id) {
+    const pids = JSON.parse(readFileSync(jobFiles(jobsFolder(box), id).pid, "utf8"));
+    const slots = join(box.home, "slots");
+    let slot;
+    await until(() => (slot = readdirSync(slots).filter((n) => n.endsWith(".json"))
+        .map((n) => JSON.parse(readFileSync(join(slots, n), "utf8"))).find((e) => e.pid === pids.queuePid && e.startedAt)));
+    track(slot.pgid, { group: true });
+    for (const target of [pids.runnerPid, pids.queuePid, -slot.pgid]) { try { process.kill(target, "SIGKILL"); } catch { /* gone */ } }
+    await until(() => ![pids.runnerPid, pids.queuePid].some((pid) => alive(pid)));
+}
+const trackRunner = async (box, id) => {
+    const pidFile = jobFiles(jobsFolder(box), id).pid;
+    await until(() => existsSync(pidFile));
+    track(JSON.parse(readFileSync(pidFile, "utf8")).runnerPid, { group: true });
+};
+const journalOf = (box) => readFileSync(join(box.home, "journal.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+test("lost jobs: with rerunIfLost a job cut off by a restart is failed with the new job's id, and the new one runs to the end", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const counter = join(tempDir("mcp-count"), "runs");
+    const created = await startTask(server, box, { label: "shop: unit tests", command: nodeCommand(hangFirst(counter, 1)), rerunIfLost: true });
+    await taskUntil(server, created.taskId, (task) => task.statusMessage.startsWith("running"));
+    await until(() => existsSync(counter) && readFileSync(counter, "utf8") === "1");
+    await cutOffJob(box, created.taskId);
+    const lost = await taskUntil(server, created.taskId);
+    assert.equal(lost.status, "failed");
+    const again = /; journalled as lost at (\S+); started again as job ([0-9a-f]{24})$/.exec(lost.error.message);
+    assert.ok(again, lost.error.message);
+    assert.match(lost.error.message, /^the run was cut off: the machine restarted or the queue process died; nothing ran to the end; /);
+    const [, lostAt, next] = again;
+    await trackRunner(box, next);
+    const done = await taskUntil(server, next);
+    assert.deepEqual([done.status, done.result.structuredContent.outcome, done.result.structuredContent.tail], ["completed", "ran", "done"]);
+    assert.equal(done.result.structuredContent.rerunOf, created.taskId);
+    const rows = journalOf(box);
+    assert.deepEqual(rows.map((r) => [r.outcome, r.rerunOf ?? null]), [["lost", null], ["ran", created.taskId]]);
+    assert.equal(rows[0].endedAt, lostAt);
+    const old = await server.call("queue_job", { jobId: created.taskId });
+    assert.deepEqual([old.structuredContent.state, old.structuredContent.lostAt, old.structuredContent.rerunAs], ["lost", lostAt, next]);
+    assert.equal((await taskUntil(server, created.taskId)).error.message, lost.error.message, "asked again, the same job and no other");
+    assert.equal(jobFilesOf(box).filter((n) => n.endsWith(".json")).length, 2);
+    await server.close();
+});
+
+test("lost jobs: a re-run that is cut off as well is not started a third time, and without rerunIfLost nothing is", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const counter = join(tempDir("mcp-count"), "runs");
+    const created = await startTask(server, box, { label: "shop: unit tests", command: nodeCommand(hangFirst(counter, 2)), rerunIfLost: true });
+    await taskUntil(server, created.taskId, (task) => task.statusMessage.startsWith("running"));
+    await until(() => existsSync(counter) && readFileSync(counter, "utf8") === "1");
+    await cutOffJob(box, created.taskId);
+    const next = /started again as job ([0-9a-f]{24})$/.exec((await taskUntil(server, created.taskId)).error.message)[1];
+    await trackRunner(box, next);
+    await taskUntil(server, next, (task) => task.statusMessage.startsWith("running"));
+    await until(() => existsSync(counter) && readFileSync(counter, "utf8") === "2");
+    await cutOffJob(box, next);
+    const second = await taskUntil(server, next);
+    assert.equal(second.status, "failed");
+    assert.match(second.error.message, /nothing ran to the end; journalled as lost at \S+$/);
+    const plain = await startTask(server, box, { label: "shop: lint", command: nodeCommand(hangFirst(join(tempDir("mcp-count"), "runs"), 1)) });
+    await taskUntil(server, plain.taskId, (task) => task.statusMessage.startsWith("running"));
+    await cutOffJob(box, plain.taskId);
+    assert.doesNotMatch((await taskUntil(server, plain.taskId)).error.message, /started again/);
+    await server.call("queue_status", {});
+    assert.equal(jobFilesOf(box).filter((n) => n.endsWith(".json")).length, 3, "no third run, and no re-run of the plain job");
+    assert.equal(readFileSync(counter, "utf8"), "2");
+    assert.deepEqual(journalOf(box).map((r) => r.outcome), ["lost", "lost", "lost"]);
     await server.close();
 });
 

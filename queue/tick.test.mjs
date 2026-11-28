@@ -4,7 +4,7 @@
 import { cleanEnv, feedCpuReading, git as testGit, isolateProcess, makeRepo, tempDir, track, until } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -142,7 +142,9 @@ test("tick: after a gap, one missed line, one notice and one catch-up run, never
     ]);
     assert.equal(b.stored()[0].lastDue, iso(T0 + 90 * MINUTE));
     b.tick(T0 + 91 * MINUTE + 5000);
-    assert.deepEqual([b.seen.starts.length, b.journal().length, b.seen.notices.length], [2, 1, 1], "then the normal cadence");
+    // The stand-in run wrote no journal line, as a run cut off by a restart would not: it is recorded as lost.
+    assert.deepEqual([b.seen.starts.length, b.journal().length, b.seen.notices.length], [2, 2, 1], "then the normal cadence");
+    assert.deepEqual(b.journal().map((r) => r.outcome), ["missed", "lost"]);
 });
 
 test("tick: a gap with one due time only is reported as one run missed", () => {
@@ -168,7 +170,44 @@ test("tick: while the last run still waits or runs, no second start; one busy li
     b.live.clear();
     b.tick(T0 + 4 * MINUTE);
     assert.equal(b.seen.starts.length, 2);
-    assert.equal(b.journal().length, 2);
+    // The stand-in run ended with no journal line, so the tick records it as lost before the next start.
+    assert.deepEqual(b.journal().map((r) => r.outcome), ["busy", "busy", "lost"]);
+});
+
+test("tick: a last run cut off with no journal line gets one lost line, then the missed rule decides: one catch-up, no burst", () => {
+    const b = bench([job({ lastPid: 5000, lastBorn: T0, lastStart: iso(T0), lastDue: iso(T0) })]);
+    b.tick(T0 + 30 * MINUTE + 10_000);
+    const rows = b.journal();
+    assert.deepEqual(rows.map((r) => [r.outcome, r.scheduled, r.lostPid, r.lastStart, r.reason?.class, r.reason?.source]), [
+        ["lost", "0a1b2c3d", 5000, iso(T0), "lost", "tick"], ["missed", "0a1b2c3d", undefined, undefined, undefined, undefined],
+    ]);
+    assert.equal(b.seen.printed[0],
+        'schedule tick: lost 0a1b2c3d "shop-api: lint", the last run, pid 5000, was cut off with no journal line; it counts as free');
+    assert.equal(b.seen.starts.length, 1, "one catch-up run");
+    b.tick(T0 + 31 * MINUTE + 10_000);
+    assert.equal(b.journal().filter((r) => r.outcome === "lost").length, 2, "the stand-in run of the catch-up left no line either");
+});
+
+test("tick: no lost line when the last run wrote its own, when a claim of its slot is being settled, or when its slot already gave one", () => {
+    const own = bench([job({ lastPid: 5000, lastBorn: T0, lastStart: iso(T0), lastDue: iso(T0) })]);
+    appendFileSync(own.files.journal, `${JSON.stringify({ scheduled: "0a1b2c3d", pid: 5000, outcome: "ran", exit: 0, queuedAt: iso(T0 + 1000) })}\n`);
+    own.tick(T0 + MINUTE);
+    assert.deepEqual(own.journal().map((r) => r.outcome), ["ran"]);
+    const claimed = bench([job({ lastPid: 5000, lastBorn: T0, lastStart: iso(T0), lastDue: iso(T0) })]);
+    mkdirSync(claimed.files.lost, { recursive: true });
+    writeFileSync(join(claimed.files.lost, "5000-slot-0-77-abcd.claim"), "{}");
+    claimed.tick(T0 + MINUTE);
+    assert.deepEqual(claimed.journal(), [], "the claimer writes the line");
+    const gone = Number(spawnSync(NODE, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout);
+    const slot = bench([job({ lastPid: gone, lastBorn: T0, lastStart: iso(T0), lastDue: iso(T0) })]);
+    const run = {
+        label: "shop-api: lint", cwd: slot.files.home, queuedAt: T0 + 500, startedAt: T0 + 1000, cmd: "npm run lint",
+        extra: { pid: gone, scheduled: "0a1b2c3d" },
+    };
+    mkdirSync(slot.files.slots, { recursive: true });
+    writeFileSync(join(slot.files.slots, "slot-0.json"), JSON.stringify({ pid: gone, at: T0, startedAt: T0 + 1000, pgid: gone, run }));
+    slot.tick(T0 + MINUTE);
+    assert.deepEqual(slot.journal().map((r) => [r.outcome, r.reason.source, r.scheduled]), [["lost", "slot", "0a1b2c3d"]]);
 });
 
 test("tick: a gap while the last run still goes is reported, and nothing starts", () => {
@@ -375,8 +414,8 @@ test("acceptance: a job every minute runs through the real run path, history cou
     await runFinished(r, j.id, 2);
     const history = r.cli(["history", "--days", "1"]);
     assert.deepEqual(history.stdout.trim().split("\n").slice(1).map((row) => row.split(";")[0]), [
-        "all projects: jobs 2, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 2",
-        "docs-site: jobs 2, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 2",
+        "all projects: jobs 2, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 2",
+        "docs-site: jobs 2, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 2",
     ]);
     const list = r.cli(["schedule", "list"]);
     assert.match(list.stdout, new RegExp(`^schedule ${j.id}: "docs-site: link check", every 1m, enabled; next: .*; last: ran, exit 0\\n$`));
@@ -459,7 +498,8 @@ test("acceptance: a run that still goes at the next due time is not started agai
     // The tick's clock is a minute ahead of the real one here, so the range ends later than now.
     const history = historyLines(readFileSync(r.files.journal, "utf8").trim().split("\n"), { from: 0, to: Date.now() + 5 * MINUTE, title: "all" }).lines;
     assert.equal(history[0], "history: all, jobs 1", "a busy line is no job");
-    assert.equal(history[1].split(";")[0], "all projects: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 1, busy 1");
+    assert.equal(history[1].split(";")[0],
+        "all projects: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 1, busy 1");
 });
 
 test("acceptance: two real ticks started at once start the due job once", async () => {

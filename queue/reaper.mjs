@@ -255,7 +255,8 @@ async function main() {
     const files = paths();
     const stateFile = files.reaperState;
     const state = readJson(stateFile, {});
-    const { holders, queue } = snapshot({ dirs: files, prune: !dry });
+    // A dry run changes nothing, so it records no lost run either.
+    const { holders, queue } = snapshot({ dirs: files, prune: !dry, lost: !dry });
     const { load, cores } = probeLoad();
     const run = await reap({
         rows: parseProcessTable(probeProcessTable()), holders, queue, state, now, dry, settings, tz: timeZone(),

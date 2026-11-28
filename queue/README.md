@@ -296,7 +296,8 @@ gate. `gate: open` means a job may start now; `gate: shut;` is followed by what 
 with nothing after it prints the same as `status`. A [nested run](#run) is shown indented under the job it runs in,
 and a nested run inside a nested run one step further in; it holds no slot and is not counted as one. A nested run
 that waits for a place under its parent says `waiting for a nested place` and names the parent. Its `min so far`
-counts from when it began to wait, and once it runs, from when it started to run.
+counts from when it began to wait, and once it runs, from when it started to run. The one thing `status` changes is
+a [cut-off run](#cut-off-runs): it journals it as `lost` and frees its slot.
 
 The first line ends with how many slots this computer has and why: `2, this computer has 4 cores` on a computer with 5
 cores or fewer, `up to 8 while the CPU has room (half of 16 cores)` on a larger one, and `3, set in settings` or
@@ -358,12 +359,12 @@ dotime-queue history [--days <n> | --day <YYYY-MM-DD>]
 ```
 
 Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time and the gates
-that caused the waiting. Once a row has skipped jobs, its outcome counts end with `skipped N (saved M min)`, where M
-is the run time of the passing runs those jobs relied on. Then come `flaky N`, the [flaky checks](#flaky-checks) of
-that row whose runs ended in the range, and `scheduled N`, the jobs of the row that the [schedule
-tick](#scheduled-jobs) started. Once there are any, `missed N` and `busy N` follow: the tick's lines for a gap in which
-it did not run, and for a due time it did not start because the last run still went. Those lines are not jobs and
-count in nothing else. The waiting columns answer three questions. `sum`:
+that caused the waiting. `lost N` counts the [cut-off runs](#cut-off-runs). Once a row has skipped jobs, its outcome
+counts end with `skipped N (saved M min)`, where M is the run time of the passing runs those jobs relied on. Then
+come `flaky N`, the [flaky checks](#flaky-checks) of that row whose runs ended in the range, and `scheduled N`, the
+jobs of the row that the [schedule tick](#scheduled-jobs) started. Once there are any, `missed N` and `busy N`
+follow: the tick's lines for a gap in which it did not run, and for a due time it did not start because the last run
+still went. Those lines are not jobs and count in nothing else. The waiting columns answer three questions. `sum`:
 how much waiting all jobs did together. `clock`: how long the line was not empty. `clock with no job running`: how
 much of that time jobs were waiting while none of this row's jobs ran, for example because the health gate was shut.
 `--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
@@ -401,10 +402,12 @@ changes never counts either way. A total line follows, then one line that names,
 `disk`, `files`, `port`, `network`), the re-runs that passed and their run minutes: what a retry of that class would
 have saved. Failures journalled before reasons were recorded are named in the total line and left out of the classes,
 and so is the failure of a job that failed because a run nested in it failed (`total.nested` in `--json`): that
-failure is counted once, on the nested run.
-With no failure it prints one line, `reasons: no failures in 7 days`. `--json` prints the same report as one JSON
-object with `days`, `from`, `to`, `classes`, `total` and `retry`. `--days` takes a whole number of 1 or more; anything
-else exits 2. Nothing in the report changes how a run ends: it only measures.
+failure is counted once, on the nested run. [Cut-off runs](#cut-off-runs) are no failure and are in no class: once there
+are any, they get a line of their own, `lost: N runs cut off by a restart or a dead queue process`, before the total.
+With no failure it prints one line, `reasons: no failures in 7 days`, and the lost line when there is one. `--json`
+prints the same report as one JSON object with `days`, `from`, `to`, `classes`, `total`, `retry` and `lost`. `--days`
+takes a whole number of 1 or more; anything else exits 2. Nothing in the report changes how a run ends: it only
+measures.
 
 ```
 network: 12 failures, 10 on a clean tree, 8 passed on a plain re-run of the same commit (80%), 31 run-min; signs ECONNRESET 8, ETIMEDOUT 4
@@ -781,7 +784,11 @@ the due times since the last one it handled:
 - its last scheduled run still waits or runs (its process is alive and is the one that was started, checked the way
   slots are): no second start, and one journal line with outcome `busy` for that due time. Runs never pile up. A run
   whose pid could not be saved counts as still going until a journal line of the job from its start on comes, for at
-  most a day.
+  most a day;
+- its last scheduled run is gone with no journal line of its own, as after a restart: each tick first journals the
+  [cut-off runs](#cut-off-runs) it finds in the slots, and a last run that never reached its slot gets a line with
+  outcome `lost`, `lostPid` and `lastStart` from the tick. The job then counts as free, and the rules above decide:
+  it starts once, with one `missed` line when due times passed meanwhile, never a burst.
 
 The tick saves the due time, and that a start is under way, in `schedule.json` before it starts the run, and the
 run's pid after. When that first save fails, for example on a full disk, it starts nothing, journals nothing and
@@ -821,6 +828,28 @@ for you to remove.
 
 Not the same as the [scheduled-job report](#scheduled-job-report): that report only reads the launchd jobs you made
 yourself and tells whether they ran well. `schedule` runs jobs of its own through the queue.
+
+## Cut-off runs
+
+A restart, or a queue process that is killed, can cut off a job while its command runs. A process cannot carry on
+from the middle, so the queue records the run instead: it never vanishes. Once a job has started its command, `run`
+keeps the fields of its journal line in its slot file. The next queue command that finds the slot of a holder that is
+gone, or whose pid now belongs to a later process (`status`, a `run` that waits, the reaper, the schedule tick, the MCP
+server), journals that run once with outcome `lost`, `exit` null, its label, project, folder, command, start and
+commit, `endedAt` set to when it was found, `reason: { "class": "lost", "source": "slot" }`, and for an isolated run
+the `isolate` fields that name the worktree it left, so it can be looked at. The slot file is first moved to `lost/`
+under a name of the finder's own; only one finder can win that move, so several of them at the same moment write one
+line. A holder that was still in line or claiming its slot writes no line, and neither does a run that wrote its own
+line before it died.
+
+A `lost` line means the machine or the queue process died, not the code. It counts in no failure rule: not for the
+[repeated-failure stop](#repeated-failures), [flaky checks](#flaky-checks), [run limits](#run-limits), pass stamps or
+the [extra slots](#extra-slots). `history` counts it as `lost N` and `reasons` on a line of its own.
+
+A `dotime-queue run` that is cut off cannot be started again by the queue: the caller that waited for it is gone too.
+Its line says `lost`; run it again. The [schedule tick](#scheduled-jobs) treats a scheduled job whose last run was cut
+off as free, and the MCP server can start a lost job again once when `queue_run` was given `rerunIfLost` (see "Use
+with an MCP client" in the README). Exit codes do not change.
 
 ## Exit codes
 
@@ -1222,8 +1251,9 @@ Environment variables:
 | `config.json` | Settings. Optional. |
 | `nested/` | One small file per nested run while it waits for a place and while it runs, so `status` can show it under its parent job; it names the slot or nested run, pid and start time of that job, so it never shows under a later job in the same slot. Its name without `.json` is the `DOTIME_PARENT` the run hands its own job, and it names the outer slot the run hands on in `DOTIME_JOB`. Removed by the run when it ends; the file of a run that died goes the same way as one in `slots/`. |
 | `places/` | One small file per place a running nested run holds under its parent job, named after that job's marker and start time and the place number. Claimed and freed the same way as a slot, and the file of a run that died goes the same way as one in `slots/`. |
-| `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them. |
+| `slots/`, `line/` | One small file per running and per waiting job. The files of ended processes are removed by a `run` that waits in line and by the reaper (not with `--dry`); `status` leaves them, except the slot of a [cut-off run](#cut-off-runs), which any of them journals as `lost` and removes. |
 | `journal.jsonl` | One line per job. |
+| `lost/` | A slot file of a [cut-off run](#cut-off-runs) for the moment between its claim and its `lost` line, `<pid>-<slot>-<finder pid>-<random>.claim`. A claim older than a minute was left by a finder that died, and the next one finishes it. |
 | `notices/` | Long-run and idle-slot notices, one file each. |
 | `notify.log` | Every notice sent. |
 | `reaper-state.json` | CPU samples between reaper runs. |
@@ -1235,7 +1265,7 @@ Environment variables:
 | `schedule-runs/` | The output of the last run of each scheduled job, `<id>.log`. |
 | `schedule.log` | The lines of the tick, when the system entry that `schedule install` wrote starts it. |
 | `worktrees/` | The worktrees of [isolated runs](#isolated-runs), `<repo>-<id>`, with one state file `<id>.json` per kept job, and the temporary worktrees of `integrate` while it runs. |
-| `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`) and its output (`.log`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
+| `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`), its output (`.log`) and, for a lost job that was started again, the new job's id (`.rerun`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
 
 A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
 started later.
@@ -1247,9 +1277,11 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `signal`, `stopFailed`, `stoppedAt`, `reason` (on a failed, timed-out or stopped run: see [Failure
 reasons](#failure-reasons)), `longRunAt`, `warnedAt`, `nested` with `parentPid` (the `pid` of the job it ran in),
 `isolate` (an isolated run), `stamp` (on a line with outcome `skipped`: the passing run it relied on), `scheduled` (the
-id of the scheduled job that started the run) or `extraSlot` (the job ran in an extra slot). The schedule tick also
+id of the scheduled job that started the run), `rerunOf` (the MCP job that this run starts again) or `extraSlot` (the
+job ran in an extra slot). Outcome `lost` marks a [cut-off run](#cut-off-runs). The schedule tick also
 writes lines of its own, with `scheduled` and outcome `missed` (with `missed`, the number of missed times, and
-`missedFrom` and `missedTo`), `busy` (with `busyPid`, the last run that still went) or `could-not-start`. Lines written
+`missedFrom` and `missedTo`), `busy` (with `busyPid`, the last run that still went), `could-not-start`, or `lost` (with
+`lostPid` and `lastStart`, a last run that ended with no line of its own). Lines written
 by `run` also carry `pid`, the pid of the `run` process, so whoever started that process can find its own line. Copies
 of the queue that share a state folder all read the same fields, so a field keeps its name; a new field is only ever
 added.
@@ -1288,6 +1320,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
 | `settings.mjs` | Defaults, `config.json`, which slot settings the user set, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks; reads the core count for the capacity plan. |
 | `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |
+| `lost.mjs` | Cut-off runs: the claim of a dead holder's slot and its one `lost` journal line, and the marker of an MCP re-run. | library | Moves slot files to `lost/` and removes them; appends to the journal. |
 | `nested.mjs` | Nested runs: the marker a job is given, the check that a marker is genuine, and the key of a parent's places. | library | Runs `ps` when no listing is given. |
 | `capacity.mjs` | How many slots a computer has, from its core count and the settings the user set, and whether one more job may take an extra slot. Pure: it is handed numbers, so it holds for any computer. | library | None. |
 | `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up; asks `capacity.mjs` about extra slots. | library | None. |

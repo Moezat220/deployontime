@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { isMainModule, loadSettings, paths, timeZone } from "../queue/settings.mjs";
 import { jobsDir, pruneJobs } from "./jobs.mjs";
 import { cancelTask, createdTask, getTask, TASKS_EXTENSION, updateTask, wantsTasks } from "./tasks.mjs";
-import { callTool, realToolDeps, TOOLS } from "./tools.mjs";
+import { callTool, lookAfterLost, realToolDeps, TOOLS } from "./tools.mjs";
 
 export const MODERN_VERSIONS = Object.freeze(["2026-07-28"]);
 /** Revisions answered with initialize; the first is the one offered to a client that asks for another. */
@@ -64,6 +64,12 @@ const shaped = (result, modern) => (modern ? { resultType: "complete", ...result
  *  reply from the client, an empty line). context() gives the settings, files and zone for one tool call, plus the
  *  tool deps. Nothing in here throws or ends the process. */
 export function createServer({ context, log = () => {} }) {
+    // Runs cut off by a restart are recorded, and the lost jobs that asked for it started again, before a request
+    // that reads or starts jobs is answered; a failure here never stops the request.
+    const withLost = (ctx) => {
+        try { lookAfterLost(ctx); } catch (e) { log(`lost jobs could not be looked after: ${e?.message ?? e}`); }
+        return ctx;
+    };
     const methods = {
         initialize(params) {
             const asked = params?.protocolVersion;
@@ -91,7 +97,7 @@ export function createServer({ context, log = () => {} }) {
             if (typeof params?.name !== "string") return { error: "Invalid params: tools/call needs name, a string" };
             const args = params.arguments ?? {};
             if (!isPlain(args)) return { error: "Invalid params: arguments must be an object" };
-            const ctx = context();
+            const ctx = withLost(context());
             const out = callTool(params.name, args, ctx);
             if (!out) return { error: `Unknown tool: ${short(params.name)}` };
             // A job that started becomes a task for a client that asked for one; a refusal stays a plain result.
@@ -100,8 +106,8 @@ export function createServer({ context, log = () => {} }) {
             }
             return { result: out };
         },
-        "tasks/get": (params, modern) => (modern ? getTask(params, context()) : null),
-        "tasks/cancel": (params, modern) => (modern ? cancelTask(params, context()) : null),
+        "tasks/get": (params, modern) => (modern ? getTask(params, withLost(context())) : null),
+        "tasks/cancel": (params, modern) => (modern ? cancelTask(params, withLost(context())) : null),
         "tasks/update": (_params, modern) => (modern ? updateTask() : null),
     };
 

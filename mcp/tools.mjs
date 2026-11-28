@@ -13,10 +13,12 @@ import { flakyFor } from "../queue/flaky.mjs";
 import { gitState, isRepository } from "../queue/git.mjs";
 import { readHealth } from "../queue/health.mjs";
 import { cmdString, findStamp, historyWindow, isFailedRun, lineProject, parseLines, readLines } from "../queue/journal.mjs";
+import { isLost, LOST_TEXT } from "../queue/lost.mjs";
 import { folderProject } from "../queue/project.mjs";
 import { snapshot } from "../queue/slots.mjs";
 import {
-    activeJobs, createJob, JOB_ID_RE, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess, START_GRACE_MS, tailLines,
+    activeJobs, claimRerun, createJob, JOB_ID_RE, jobIds, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess,
+    START_GRACE_MS, tailLines,
 } from "./jobs.mjs";
 
 const RUNNER = fileURLToPath(new URL("./runner.mjs", import.meta.url));
@@ -96,6 +98,8 @@ export const TOOLS = Object.freeze([
                 }),
                 isolate: text("boolean", "Run in a git worktree of its own on a new branch, so jobs side by side never edit "
                     + "the same files; bring it back with dotime-queue integrate <id> -- <check> once it passed."),
+                rerunIfLost: text("boolean", "Start the job again once, as a new job, when it is cut off by a restart or a "
+                    + "dead queue process; the old job then names the new one. Default: false."),
             },
             required: ["label", "command"],
             additionalProperties: false,
@@ -106,7 +110,8 @@ export const TOOLS = Object.freeze([
         name: "queue_job",
         title: "Job state",
         description: "The state of a job started with queue_run: starting, waiting, running, finished or lost (its "
-            + "runner ended without a result). For a finished job: the exit code and the outcome from the queue "
+            + "runner ended without a result: the machine restarted or the queue process died; lostAt is when the "
+            + "queue journal recorded it, and rerunAs the job that started it again). For a finished job: the exit code and the outcome from the queue "
             + "journal (ran, skipped, refused, timed-out, gave-up, left, stopped, could-not-start). flaky is null, or "
             + "for a failed or refused run of a check that also passed on the same clean commit, the counts and a note. "
             + "A failed, timed-out or stopped run carries reason, the class of the failure from the queue journal "
@@ -266,6 +271,7 @@ function queueRun(args, ctx) {
         ...(args.noSkip ? { noSkip: true } : {}),
         ...(args.afterFix !== undefined ? { afterFix: args.afterFix.trim() } : {}),
         ...(args.isolate ? { isolate: true } : {}),
+        ...(args.rerunIfLost ? { rerunIfLost: true } : {}),
     };
     createJob(dir, id, request);
     ctx.startRunner(dir, id, cwd, ctx.files.home);
@@ -302,6 +308,46 @@ function flakyOf(row, journal, { settings }) {
     if (!row || !(isFailedRun(row) || row.outcome === "refused")) return null;
     const check = { label: row.label, cmd: row.cmd, project: lineProject(row), cwd: row.cwd };
     return flakyFor(journal, check, { now: Date.now(), windowDays: settings.flakyWindowDays });
+}
+
+/** What is known of a lost job: { lostAt, rerunAs, text }. lostAt is the end time of the lost journal line of its
+ *  queue process, or null when none was written (the run had not started its command); rerunAs the id of the job
+ *  that started it again, or null; text the sentence that says so. rows: the parsed journal, read when not given. */
+export function lostFacts(job, ctx, rows = parseLines(readLines(ctx.files.journal))) {
+    const row = journalLine(job.request, job.pid, rows);
+    const lostAt = isLost(row) ? row.endedAt : null;
+    const rerunAs = typeof job.rerun?.id === "string" ? job.rerun.id : null;
+    const text = `${LOST_TEXT}${lostAt ? `; journalled as lost at ${lostAt}` : ""}${rerunAs ? `; started again as job ${rerunAs}` : ""}`;
+    return { lostAt, rerunAs, text };
+}
+
+/** Starts again, once, each lost job in this server's job folder whose request asked for it with rerunIfLost: as a
+ *  new job with the same request, a new id and rerunOf naming the old one, which is noted in the old job's .rerun
+ *  file before anything starts, so two servers never both start it. A job counts as lost here only when its queue
+ *  process is gone too. A re-run is never started again itself. Returns the new ids. */
+export function rerunLost(ctx, now = Date.now()) {
+    const dir = jobsDir(ctx.files.home);
+    const started = [];
+    for (const id of jobIds(dir)) {
+        const job = readJob(dir, id);
+        const { request } = job;
+        if (!request?.rerunIfLost || request.rerunOf || job.rerun || job.exit || runnerActive(job, now, ctx.sameProcess)) continue;
+        if (job.pid && ctx.sameProcess(job.pid.queuePid, job.pid.startedAt)) continue;
+        const next = newJobId();
+        if (!claimRerun(dir, id, next, now)) continue;
+        const { rerunIfLost: _asked, ...same } = request;
+        createJob(dir, next, { ...same, id: next, createdAt: now, rerunOf: id });
+        ctx.startRunner(dir, next, request.cwd, ctx.files.home);
+        started.push(next);
+    }
+    return started;
+}
+
+/** What the server does at the start of each request: records the runs that were cut off (as any queue command does
+ *  through snapshot()), then starts again the lost jobs that asked for it. Returns the new job ids. */
+export function lookAfterLost(ctx) {
+    snapshot({ dirs: ctx.files });
+    return rerunLost(ctx);
 }
 
 /** Where a job stands now: { state, position?, nested?, since? }; since is when a running job started (ms). */
@@ -341,11 +387,17 @@ function queueJob(args, ctx) {
         createdAt: new Date(request.createdAt).toISOString(),
         ...(where.position ? { position: where.position } : {}),
         ...(where.nested ? { nested: true } : {}),
+        ...(request.rerunOf ? { rerunOf: request.rerunOf } : {}),
     };
     let head = `job ${id} "${request.label}": ${where.state}`;
     if (where.position) head += `, position ${where.position} in line`;
     if (where.state === "starting" && !job.pid) head += ` (no runner yet; lost after ${START_GRACE_MS / 1000} s)`;
-    if (where.state === "lost") head += "; its runner ended without a result, see the output";
+    if (where.state === "lost") {
+        const lost = lostFacts(job, ctx);
+        Object.assign(info, { lostAt: lost.lostAt, rerunAs: lost.rerunAs });
+        head += `; ${lost.text}`;
+    }
+    if (request.rerunOf) head += `; started again for the lost job ${request.rerunOf}`;
     if (job.exit) {
         const journal = parseLines(readLines(ctx.files.journal));
         const row = journalLine(request, job.pid, journal);

@@ -1,10 +1,13 @@
-// The jobs the MCP server starts, kept in mcp-jobs/ in the state folder. A job id names four files there:
+// The jobs the MCP server starts, kept in mcp-jobs/ in the state folder. A job id names up to five files there:
 // <id>.json (the request, written once by the server), <id>.pid (the runner and queue pids, written by the runner),
-// <id>.exit (how the queue process ended, written by the runner) and <id>.log (everything the queue process and the
-// job printed). An id is 24 lowercase hex characters, and every file name is built from a checked id only, so no
-// caller can name a file outside this folder. Old jobs are pruned; a job whose runner is still alive never is.
+// <id>.exit (how the queue process ended, written by the runner), <id>.log (everything the queue process and the
+// job printed) and <id>.rerun (the id of the job that started it again after it was lost, written once). An id is 24
+// lowercase hex characters, and every file name is built from a checked id only, so no caller can name a file outside
+// this folder. Old jobs are pruned; a job whose runner is still alive never is.
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
+import {
+    closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../queue/files.mjs";
 import { sameProcess } from "../queue/proctree.mjs";
@@ -19,7 +22,7 @@ export const START_GRACE_MS = 30_000;
 const DAY = 24 * 60 * 60 * 1000;
 const TAIL_BYTES = 256 * 1024;
 const MAX_LINE = 2000;
-const EXTENSIONS = [".json", ".pid", ".exit", ".log"];
+const EXTENSIONS = [".json", ".pid", ".exit", ".log", ".rerun"];
 
 export const jobsDir = (home) => join(home, "mcp-jobs");
 export const newJobId = () => randomBytes(12).toString("hex");
@@ -28,7 +31,7 @@ export const newJobId = () => randomBytes(12).toString("hex");
 export function jobFiles(dir, id) {
     if (typeof id !== "string" || !JOB_ID_RE.test(id)) throw new Error("not a job id");
     const file = (ext) => join(dir, `${id}${ext}`);
-    return { request: file(".json"), pid: file(".pid"), exit: file(".exit"), log: file(".log") };
+    return { request: file(".json"), pid: file(".pid"), exit: file(".exit"), log: file(".log"), rerun: file(".rerun") };
 }
 
 /** Writes the request of a new job and returns its files. */
@@ -39,10 +42,22 @@ export function createJob(dir, id, request) {
     return files;
 }
 
-/** { request, pid, exit } of a job, each null when its file is missing or broken; request null means no such job. */
+/** { request, pid, exit, rerun } of a job, each null when its file is missing or broken; request null means no such
+ *  job. */
 export function readJob(dir, id) {
     const files = jobFiles(dir, id);
-    return { files, request: readJson(files.request), pid: readJson(files.pid), exit: readJson(files.exit) };
+    return { files, request: readJson(files.request), pid: readJson(files.pid), exit: readJson(files.exit), rerun: readJson(files.rerun) };
+}
+
+/** Notes that the lost job id is started again as the job next. Only one caller ever wins: the file is created only
+ *  when there is none. Returns true for the winner. */
+export function claimRerun(dir, id, next, now = Date.now()) {
+    try {
+        writeFileSync(jobFiles(dir, id).rerun, JSON.stringify({ id: next, at: now }), { flag: "wx" });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /** Whether a job's runner may still be working: it has no exit file and its runner is alive, or it is younger than
@@ -54,7 +69,7 @@ export function runnerActive(job, now = Date.now(), check = sameProcess) {
 }
 
 /** The ids that have at least one job file in the folder. */
-function jobIds(dir) {
+export function jobIds(dir) {
     let names = [];
     try { names = readdirSync(dir); } catch { return new Set(); }
     const ids = new Set();

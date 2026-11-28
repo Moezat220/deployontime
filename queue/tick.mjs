@@ -2,7 +2,8 @@
 // reads schedule.json, starts each job that is due as a `dotime-queue run` of its own, and returns at once, so it never
 // waits for a slot. A due time older than GRACE_MS means the tick did not run for a while: that is journalled and
 // sent as one notice, and the job runs once to catch up, never once per missed time. A job whose last scheduled run
-// still waits or runs is not started again; that is journalled too. Nothing here decides how a job runs: the run it
+// still waits or runs is not started again; that is journalled too. A last run that was cut off by a restart with no
+// journal line of its own gets a lost line, and the job counts as free. Nothing here decides how a job runs: the run it
 // starts goes through the gate, slots, refusals, skips, limits, journal and notices like any other.
 //
 // A due time is saved before its run is started, so a tick that cannot save starts nothing rather than the same run
@@ -14,8 +15,10 @@ import { dateTime } from "./clock.mjs";
 import { dueBetween } from "./cron.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { append, cmdString, isTickNote, parseLines, readLines, record } from "./journal.mjs";
+import { claimPending, lostReason } from "./lost.mjs";
 import { JOB_MARKER, NO_SKIP_MARKER, PARENT_MARKER } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
+import { snapshot } from "./slots.mjs";
 import { jobProblem, OWNER_ONLY, readSchedule, scheduleTrust, takeLock, writeSchedule } from "./timetable.mjs";
 import { MINUTE } from "./units.mjs";
 
@@ -62,7 +65,20 @@ export function stillGoing(job, isGone, now = 0, rows = () => []) {
     return !rows().some((r) => r.scheduled === job.id && !isTickNote(r) && Date.parse(r.queuedAt) >= started);
 }
 
-/** A journal line written by the tick itself, for a job it did not start as a run: missed, busy, or could-not-start. */
+/** Was the last run this job started cut off, with no journal line of its own? Its pid, saved, is gone (isGone), no
+ *  line of this job from a run with that pid exists (one queued more than a day before lastStart is from an earlier
+ *  process with the same pid), and no claim of its slot is still being settled (see lost.mjs; such a claim writes the
+ *  line itself). rows() gives the journal lines; the tick's own lines do not count. */
+export function lastRunLost(job, isGone, rows, files) {
+    if (!Number.isInteger(job.lastPid) || !isGone({ pid: job.lastPid, born: job.lastBorn })) return false;
+    const started = Date.parse(job.lastStart);
+    if (!Number.isFinite(started) || claimPending(files, job.lastPid)) return false;
+    const own = (r) => r.scheduled === job.id && !r.byTick && r.pid === job.lastPid && Date.parse(r.queuedAt) >= started - 24 * 60 * MINUTE;
+    return !rows().some(own);
+}
+
+/** A journal line written by the tick itself, for a job it did not start as a run: missed, busy, could-not-start, or
+ *  lost for a run it started that was cut off with no line of its own. */
 export function tickRow(job, outcome, now, extra = {}, exit = null) {
     return record({
         label: job.label, project: folderProject(job.cwd), cwd: job.cwd, priority: false, queuedAt: now, startedAt: null,
@@ -141,7 +157,9 @@ function trySave(files, jobs, deps) {
  *  Returns { saveError } when the first save failed, in which case nothing was journalled or started. */
 function tickJob(job, plan, now, jobs, files, deps) {
     const { print } = deps;
-    const busy = stillGoing(job, deps.isGone, now, () => parseLines(readLines(files.journal)));
+    const rows = () => parseLines(readLines(files.journal));
+    const busy = stillGoing(job, deps.isGone, now, rows);
+    const lost = !busy && lastRunLost(job, deps.isGone, rows, files);
     const head = `${job.id} "${job.label}"`;
     const before = { lastStart: job.lastStart, lastPid: job.lastPid, lastBorn: job.lastBorn };
     job.lastDue = iso(plan.due);
@@ -152,6 +170,11 @@ function tickJob(job, plan, now, jobs, files, deps) {
     }
     const saveError = trySave(files, jobs, deps);
     if (saveError) return { saveError };
+    if (lost) {
+        const facts = { lostPid: before.lastPid, lastStart: before.lastStart, reason: lostReason("tick") };
+        append(tickRow(job, "lost", now, facts), files.journal);
+        print(`schedule tick: lost ${head}, the last run, pid ${before.lastPid}, was cut off with no journal line; it counts as free`);
+    }
     if (plan.missed) {
         const { count, oldest, newest } = plan.missed;
         append(tickRow(job, "missed", now, { missed: count, missedFrom: iso(oldest), missedTo: iso(newest) }), files.journal);
@@ -210,6 +233,9 @@ export function runTick(files, deps) {
             return 1;
         }
         book.clear("broken");
+        // A run whose holder is gone after its command started is recorded as lost first, from its slot, so it has
+        // its line before its job is looked at.
+        snapshot({ dirs: files });
         let saved = false;
         for (const job of read.jobs) {
             if (!job?.enabled) continue;

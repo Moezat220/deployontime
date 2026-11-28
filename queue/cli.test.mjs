@@ -211,12 +211,12 @@ test("historyRow: how jobs ended, then how long they waited, then what held them
     };
     assert.equal(
         historyRow("shop-api", totals),
-        "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, flaky 0, scheduled 0; "
+        "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, lost 0, flaky 0, scheduled 0; "
             + "waited: jobs 4, sum 31.5 min, clock 18 min, clock with no job running 2.5 min, median 0.5 min, p90 11 min; "
             + "held by: slots 27 min, disk 4.5 min",
     );
     assert.equal(historyRow("docs-site", { ...totals, waitBy: {} }).endsWith("; held by: nothing"), true);
-    const flakyTwo = "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, flaky 2, scheduled 0; ";
+    const flakyTwo = "shop-api: jobs 9, failed 2, stopped 0, timed out 1, refused 3, gave up 1, lost 0, flaky 2, scheduled 0; ";
     assert.equal(historyRow("shop-api", totals, 2).startsWith(flakyTwo), true);
 });
 
@@ -227,7 +227,7 @@ test("historyRow: skipped jobs and the run time they saved follow the outcomes, 
     };
     assert.equal(
         historyRow("shop-api", totals),
-        "shop-api: jobs 5, failed 1, stopped 0, timed out 0, refused 0, gave up 0, skipped 3 (saved 13.5 min), flaky 0, scheduled 0; "
+        "shop-api: jobs 5, failed 1, stopped 0, timed out 0, refused 0, gave up 0, lost 0, skipped 3 (saved 13.5 min), flaky 0, scheduled 0; "
             + "waited: jobs 0, sum 0 min, clock 0 min, clock with no job running 0 min, median 0 min, p90 0 min; held by: nothing",
     );
     assert.equal(historyRow("shop-api", { ...totals, skipped: 0, savedMin: 0 }).includes("skipped"), false);
@@ -239,9 +239,9 @@ test("historyRow: the jobs the schedule tick started, then its missed and busy l
         gaveUp: 0, failed: 1, stopped: 0, timedOut: 0, refused: 1, scheduled: 3, missed: 2, busy: 1, waitBy: {},
     };
     assert.equal(historyRow("shop-api", totals, 1).split(";")[0],
-        "shop-api: jobs 4, failed 1, stopped 0, timed out 0, refused 1, gave up 0, flaky 1, scheduled 3, missed 2, busy 1");
+        "shop-api: jobs 4, failed 1, stopped 0, timed out 0, refused 1, gave up 0, lost 0, flaky 1, scheduled 3, missed 2, busy 1");
     assert.equal(historyRow("shop-api", { ...totals, missed: 0, busy: 0 }).split(";")[0],
-        "shop-api: jobs 4, failed 1, stopped 0, timed out 0, refused 1, gave up 0, flaky 0, scheduled 3");
+        "shop-api: jobs 4, failed 1, stopped 0, timed out 0, refused 1, gave up 0, lost 0, flaky 0, scheduled 3");
 });
 
 // ---- end to end ----
@@ -696,8 +696,8 @@ test("run: a check that passed on this clean commit is skipped, runs again once 
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit, line.clean]), [["ran", 0, true], ["skipped", 0, true], ["ran", 0, false]]);
     const rows = (await cli(box, ["history", "--days", "1"])).stdout.trimEnd().split("\n");
     assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]), [
-        "all projects: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min), flaky 0, scheduled 0",
-        "shop-api: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, skipped 1 (saved 0 min), flaky 0, scheduled 0",
+        "all projects: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, skipped 1 (saved 0 min), flaky 0, scheduled 0",
+        "shop-api: jobs 3, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, skipped 1 (saved 0 min), flaky 0, scheduled 0",
     ]);
 });
 
@@ -772,9 +772,9 @@ test("history: one row for all projects and one per project", async () => {
     assert.equal(today.code, 0);
     assert.equal(/^history: \d{4}-\d\d-\d\d so far, zone UTC, jobs 2$/.test(rows[0]), true);
     assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), [
-        "all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 0",
-        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 0",
-        "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 0",
+        "all projects: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 0",
+        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 0",
+        "shop-api: jobs 1, failed 1, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 0",
     ]);
     assert.equal((await cli(box, ["history", "--day", "2040-01-01"])).stdout, "history: 2040-01-01, zone UTC, jobs 0\n");
 });
@@ -798,9 +798,9 @@ test("flaky and history: a check that passed and failed on one clean commit is l
     assert.equal(listed.stdout, `shop-api: unit tests; mixed on 1 commit, 1 pass and 1 failure, last 0 min ago; command ${command}\n`);
     const rows = (await cli(box, ["history", "--days", "1"])).stdout.trimEnd().split("\n");
     assert.deepEqual(rows.slice(1).map((row) => row.split(";")[0]).sort(), [
-        "all projects: jobs 3, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 1, scheduled 0",
-        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 0",
-        "shop-api: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 1, scheduled 0",
+        "all projects: jobs 3, failed 1, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 1, scheduled 0",
+        "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 0, scheduled 0",
+        "shop-api: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, lost 0, flaky 1, scheduled 0",
     ]);
 });
 
@@ -830,7 +830,8 @@ test("reasons: a failed run with its output in a file is journalled with its cla
     ].join("\n"));
     const json = await cli(box, ["reasons", "--json"]);
     const report = JSON.parse(json.stdout);
-    assert.deepEqual(Object.keys(report), ["days", "from", "to", "classes", "total", "retry"]);
+    assert.deepEqual(Object.keys(report), ["days", "from", "to", "classes", "total", "retry", "lost"]);
+    assert.equal(report.lost, 0);
     assert.deepEqual([report.days, report.classes.map((c) => [c.class, c.failures, c.passedOnRerun])], [7, [["network", 1, 1]]]);
     assert.deepEqual(report.retry, [{ class: "network", reruns: 1, runMin: rerun }]);
     for (const days of ["0", "abc", "1.5", "-3"]) {

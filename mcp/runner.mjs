@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { writeJsonAtomic } from "../queue/files.mjs";
+import { RERUN_MARKER } from "../queue/lost.mjs";
 import { isMainModule } from "../queue/settings.mjs";
 import { jobFiles, readJob } from "./jobs.mjs";
 
@@ -35,7 +36,11 @@ export function runJobFromRequest(dir, id) {
     const startedAt = Date.now();
     let child;
     try {
-        child = spawn(process.execPath, [CLI, ...request.queueArgs], { cwd: request.cwd, stdio: ["ignore", log, log], env: process.env });
+        // The re-run of a lost job tells the queue so, and its journal line names the job it stands in for.
+        const env = { ...process.env };
+        delete env[RERUN_MARKER];
+        if (typeof request.rerunOf === "string") env[RERUN_MARKER] = request.rerunOf;
+        child = spawn(process.execPath, [CLI, ...request.queueArgs], { cwd: request.cwd, stdio: ["ignore", log, log], env });
     } catch (e) {
         finish({ exit: null, signal: null, error: `the queue could not be started (${e.message})` });
         return Promise.resolve(0);

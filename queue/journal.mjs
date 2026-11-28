@@ -47,8 +47,9 @@ export const isFailedRun = (row) => row.outcome === "ran" && row.exit !== 0 && !
 export const isSkipped = (row) => row.outcome === "skipped";
 
 const isoOrNull = (ms) => (ms ? new Date(ms).toISOString() : null);
-/** Builds a journal line. outcome: ran, stopped, timed-out, refused, skipped, gave-up, left or could-not-start, and
- *  for lines the schedule tick writes, missed and busy. */
+/** Builds a journal line. outcome: ran, stopped, timed-out, refused, skipped, gave-up, left or could-not-start, lost
+ *  for a run cut off by a restart or a dead queue process (see lost.mjs), and for lines the schedule tick writes,
+ *  missed and busy. */
 export function record(job) {
     const { label, project, cwd, priority, queuedAt, startedAt, endedAt, outcome, exit, tally } = job;
     const { cmd, head, clean, extra } = job;
@@ -203,6 +204,7 @@ function totals(all, until) {
         gaveUp: count((row) => row.outcome === "gave-up"), failed: count(isFailedRun), stopped: count(isStopped),
         timedOut: count((row) => row.outcome === "timed-out"),
         refused: count((row) => row.outcome === "refused"),
+        lost: count((row) => row.outcome === "lost"),
         skipped: count(isSkipped),
         // The run time of the passing run each skipped job relied on: about the time the skip saved.
         savedMin: oneDecimal(rows.filter(isSkipped).reduce((sum, row) => sum + (row.stamp?.runMin ?? 0), 0)),

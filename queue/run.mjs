@@ -20,6 +20,7 @@ import {
     blockReason, blockText, decide, extraInQuestion, gateBlocks, shouldGiveUp, slotRoom, startCrowded,
 } from "./gate.mjs";
 import { gitState as readGitState } from "./git.mjs";
+import { RERUN_MARKER, rerunOfEnv } from "./lost.mjs";
 import { healthVerdict } from "./health.mjs";
 import { NO_START_EXIT, readReason, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
 import { failReason } from "./failreason.mjs";
@@ -303,11 +304,13 @@ export function runJob(job, slot, deps) {
     // Only this job's own --no-skip, or the one it was handed as a nested run, reaches the runs nested in it.
     delete env[NO_SKIP_MARKER];
     if (job.noSkip) env[NO_SKIP_MARKER] = "1";
-    // The runs nested in a scheduled job were not started by the tick themselves.
+    // The runs nested in a scheduled job, or in the re-run of a lost MCP job, were not started that way themselves.
     delete env[SCHEDULED_MARKER];
+    delete env[RERUN_MARKER];
     const where = runIn ? { cwd: runIn } : {};
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env, ...where });
-    updateSlot(slot, pid, { pgid: child.pid, startedAt });
+    // The journal fields so far go into the slot, so a run cut off by a restart can still be recorded (lost.mjs).
+    updateSlot(slot, pid, { pgid: child.pid, startedAt, ...(journal.draft ? { run: journal.draft() } : {}) });
     const signalJob = (signal) => {
         if (signalGroup(child.pid, signal, deps.kill).sent) return;
         try { child.kill(signal); } catch { /* already gone */ }
@@ -449,7 +452,8 @@ export function viaNested(field, { pid, startedAt, journalFile, rows }) {
 
 /** The writer of a job's one journal line. note({ startedAt, commit, tally, details, extra }) fills in any of those
  *  as the job goes, where extra holds fields written after the details; addDetails(fields) adds to the details;
- *  finish() writes the line once and ignores later calls, and written() gives that line, or null before.
+ *  finish() writes the line once and ignores later calls, and written() gives that line, or null before. draft() gives
+ *  the fields of the line known so far, in the form record() takes, without endedAt, outcome and exit.
  *  pid, when given, is the pid of the `run` process, kept with the line so a caller that started that process can
  *  find its own line. */
 export function journalWriter({ label, folder, cwd, priority, queuedAt, command, details, file, now, pid }) {
@@ -457,6 +461,11 @@ export function journalWriter({ label, folder, cwd, priority, queuedAt, command,
     let written = null;
     return {
         written: () => written,
+        draft: () => ({
+            label, project: folder, cwd, priority, queuedAt, startedAt: known.startedAt, cmd: command,
+            head: known.commit.head, clean: known.commit.clean, tally: known.tally,
+            extra: { ...(pid ? { pid } : {}), ...known.details, ...known.extra },
+        }),
         note(fields) {
             for (const name of Object.keys(known)) if (fields[name] !== undefined) known[name] = fields[name];
         },
@@ -564,7 +573,9 @@ export async function runCommand(args, ctx, deps) {
     const outer = markers ? parentJob({ env: deps.env, pid, ...snapshot({ dirs: files }) }) : null;
     // A run that `schedule tick` started names its job; a run started any other way gets no such field.
     const scheduled = scheduledBy(deps.env);
-    const ownDetails = scheduled ? { ...plan.details, scheduled } : plan.details;
+    // The re-run of a lost MCP job names that job; see lost.mjs.
+    const rerunOf = rerunOfEnv(deps.env);
+    const ownDetails = { ...plan.details, ...(scheduled ? { scheduled } : {}), ...(rerunOf ? { rerunOf } : {}) };
     // A nested run names the queue process of its job, so a failure is counted once, on the run nested in it.
     const details = outer ? { ...ownDetails, nested: true, parentPid: outer.pid } : ownDetails;
     const journal = journalWriter({

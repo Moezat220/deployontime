@@ -7,6 +7,7 @@
 import { sameCheck } from "./failstop.mjs";
 import { CLASSES, ENV_CLASSES } from "./failreason.mjs";
 import { isFailedRun, isStopped, lineProject, parseLines } from "./journal.mjs";
+import { isLost } from "./lost.mjs";
 import { DAY, oneDecimal } from "./units.mjs";
 
 export const REASONS_DAYS = 7;
@@ -34,12 +35,13 @@ function nextRun(failure, rows) {
 const tally = (counts, key) => { counts[key] = (counts[key] ?? 0) + 1; };
 const ranked = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
-/** The report as data: { days, from, to, classes, total, retry }. classes, most failures first: { class, failures,
+/** The report as data: { days, from, to, classes, total, retry, lost }. classes, most failures first: { class, failures,
  *  clean, passedOnRerun, runMin, rerunMin, signs, alsoSaw }, where clean counts the failures from a clean tree on a
  *  commit, passedOnRerun those whose next run passed, runMin the run minutes of the failures and rerunMin those of
  *  the passing re-runs. total sums them and names in unrecorded the failures with no reason, journalled before the
  *  queue recorded one, and in nested the failures of jobs whose reason has via "nested": they are counted once, on
- *  the line of the run nested in them that failed. retry: per environment class with a passing re-run, { class, reruns, runMin }. */
+ *  the line of the run nested in them that failed. retry: per environment class with a passing re-run, { class, reruns, runMin }.
+ *  lost: the runs cut off by a restart or a dead queue process; they are no failure of the code and are in no class. */
 export function reasonsReport(lines, { now = Date.now(), days = REASONS_DAYS } = {}) {
     const from = now - days * DAY;
     const rows = parseLines(lines).filter((row) => row.endedAt && endOf(row) <= now);
@@ -78,7 +80,8 @@ export function reasonsReport(lines, { now = Date.now(), days = REASONS_DAYS } =
     };
     const retry = classes.filter((c) => ENV_CLASSES.includes(c.class) && c.passedOnRerun)
         .map((c) => ({ class: c.class, reruns: c.passedOnRerun, runMin: c.rerunMin }));
-    return { days, from: new Date(from).toISOString(), to: new Date(now).toISOString(), classes, total, retry };
+    const lost = rows.filter((row) => isLost(row) && endOf(row) >= from).length;
+    return { days, from: new Date(from).toISOString(), to: new Date(now).toISOString(), classes, total, retry, lost };
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -95,12 +98,15 @@ function body(c) {
 export function reasonsLines(report) {
     const { classes, total, retry, days } = report;
     const left = total.unrecorded ? `; ${plural(total.unrecorded, "failure", "failures")} from before reasons were recorded not counted` : "";
-    if (!classes.length) return [`reasons: ${total.unrecorded ? "no failure with a reason yet" : "no failures"} in ${plural(days, "day", "days")}${left}`];
+    const lost = report.lost ? [`lost: ${plural(report.lost, "run", "runs")} cut off by a restart or a dead queue process`] : [];
+    const none = total.unrecorded ? "no failure with a reason yet" : "no failures";
+    if (!classes.length) return [`reasons: ${none} in ${plural(days, "day", "days")}${left}`, ...lost];
     const lines = classes.map((c) => {
         const signs = Object.keys(c.signs).length ? `; signs ${counts(c.signs)}` : "";
         const also = Object.keys(c.alsoSaw).length ? `; also saw ${counts(c.alsoSaw)}` : "";
         return `${c.class}: ${body(c)}${signs}${also}`;
     });
+    lines.push(...lost);
     const inner = total.nested ? `; ${plural(total.nested, "outer job", "outer jobs")} counted on the run nested in it` : "";
     lines.push(`total in ${plural(days, "day", "days")}: ${body(total)}${inner}${left}`);
     lines.push(retry.length

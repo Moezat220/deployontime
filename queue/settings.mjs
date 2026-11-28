@@ -76,6 +76,7 @@ export function paths(env = process.env) {
         nested: join(home, "nested"),
         places: join(home, "places"),
         journal: join(home, "journal.jsonl"),
+        lost: join(home, "lost"),
         notices: join(home, "notices"),
         notifyLog: join(home, "notify.log"),
         reaperState: join(home, "reaper-state.json"),

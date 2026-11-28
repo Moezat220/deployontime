@@ -190,8 +190,8 @@ folder the server starts in, and its jobs are handed that absolute path.
 | `queue_status` | none | The lines of `dotime-queue status`, with the slot and line counts as fields, and `base`, `max` and `source` for how many slots the computer has and why |
 | `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
 | `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
-| `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix`, `isolate` | Starts `dotime-queue run` in the background and returns a job id at once |
-| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed or refused run of a flaky check), `reason` (the class of a failed, timed-out or stopped run), and the last lines of its output |
+| `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix`, `isolate`, `rerunIfLost` | Starts `dotime-queue run` in the background and returns a job id at once |
+| `queue_job` | `jobId`, `tailLines` (0 to 500, default 40) | `starting`, `waiting`, `running`, `finished` or `lost`; for a lost job `lostAt` (when the journal recorded it) and `rerunAs` (the job that started it again, or null); for a finished job its exit code and outcome (`ran`, `skipped`, `refused`, `timed-out`, `gave-up` and the others), `flaky` (null, or the counts and note for a failed or refused run of a flaky check), `reason` (the class of a failed, timed-out or stopped run), and the last lines of its output |
 
 `cwd` is an absolute path to an existing folder; without it, the folder the server was started in is used. The label
 is `"<project>: <task>"`. The command is a list of words and never goes through a shell. A job from `queue_run` waits
@@ -212,6 +212,12 @@ whose id is the job id. The client polls `tasks/get` itself and hands the agent 
 the same text and fields as `queue_job`, marked as an error unless the job passed or was skipped. `tasks/cancel`
 takes a waiting job out of the line or stops a running one, as a signal to `dotime-queue run` does.
 
+A job cut off by a restart or a dead queue process is [journalled as `lost`](queue/README.md#cut-off-runs); its task
+answers `failed` with `the run was cut off: the machine restarted or the queue process died; nothing ran to the end`
+and the time of its `lost` line. With `rerunIfLost: true` (default false), the server starts it again once, as a new
+job with the same request and `rerunOf` naming the old one, on its next request; the old task then ends with `started
+again as job <new id>`. A re-run that is cut off as well is not started again.
+
 Every other client gets the job id at once, exactly as before, and polls `queue_job` until the job is finished. The
 older tasks API of revision 2025-11-25 is not offered.
 
@@ -221,6 +227,13 @@ older tasks API of revision 2025-11-25 is not offered.
 <summary><strong>How do I know a long job has finished?</strong></summary>
 
 A job that ran 5 minutes or more sends a done notice, and MCP clients with tasks support get the result by themselves.
+</details>
+
+<details>
+<summary><strong>What happens to a job when the computer restarts?</strong></summary>
+
+It is journalled as `lost`, never silently dropped, and counts as no failure; see
+[Cut-off runs](queue/README.md#cut-off-runs).
 </details>
 
 <details>

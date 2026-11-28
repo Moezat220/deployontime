@@ -8,6 +8,7 @@ import { probeProcessAges } from "./probes.mjs";
 import { parseElapsed } from "./ps.mjs";
 import { alive } from "./proctree.mjs";
 import { dropOldTemp, readJson, tempName, writeJsonAtomic } from "./files.mjs";
+import { finishAbandoned, recordLost } from "./lost.mjs";
 
 // When this process started (wall clock, ms). Its own entries carry it, so a reader can tell this process from a newer
 // one that was given the same pid after it ended without cleaning up.
@@ -40,9 +41,14 @@ const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at 
  *  places lists the places nested runs hold. Entries of dead processes, and
  *  entries whose pid now belongs to a process that started later, are left out. Only with prune are their files, and
  *  abandoned temporary files, deleted and the slot and line folders created: a job that waits for a slot prunes, so
- *  the slot of a dead job comes free; `status` and other readers change nothing. */
-export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false }) {
+ *  the slot of a dead job comes free; `status` and other readers change nothing else. The one exception is a slot
+ *  whose holder is gone after its command had started: with lost (by default when dirs names the lost and journal
+ *  files, as paths() does) its run is recorded as lost, once, and its slot file goes (see lost.mjs). */
+export function snapshot({
+    dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false, lost = !!(dirs.lost && dirs.journal),
+}) {
     if (prune) makeDirs(dirs);
+    if (lost) finishAbandoned(dirs, now);
     const liveEntries = (dir) => {
         let names = [];
         try { names = readdirSync(dir); } catch { /* no folder yet */ }
@@ -63,7 +69,11 @@ export function snapshot({ dirs, isAlive = alive, ages = processAges, now = Date
         for (const { file, data, ok } of found) {
             const seconds = ok && Number.isFinite(data.born) ? known.get(data.pid) : undefined;
             if (ok && !pidReused(data, seconds, now)) entries.push({ file, ...data });
-            else if (prune) rmSync(file, { force: true });
+            else if (lost && dir === dirs.slots && Number.isFinite(data?.startedAt)) {
+                recordLost(file, data, dirs, now);
+                // Still there only when the claim could not be made; a newer holder's file is left alone.
+                if (prune && JSON.stringify(readJson(file)) === JSON.stringify(data)) rmSync(file, { force: true });
+            } else if (prune) rmSync(file, { force: true });
         }
         return entries;
     };
