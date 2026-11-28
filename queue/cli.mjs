@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
 // and gate; `passed` looks up a pass stamp; `history` sums up the journal; `flaky` lists the checks that passed and
-// failed on one commit; `setup` puts the queue instruction into a project's agent files; `integrate`, `discard` and
-// `worktrees` handle the worktrees of isolated runs; `schedule` adds, lists and changes scheduled jobs, starts the ones
-// that are due on each tick, and installs that tick. queue/README.md describes each in full.
+// failed on one commit; `reasons` counts the failures by why they failed; `setup` puts the queue instruction into a
+// project's agent files; `integrate`, `discard` and `worktrees` handle the worktrees of isolated runs; `schedule`
+// adds, lists and changes scheduled jobs, starts the ones that are due on each tick, and installs that tick. queue/README.md describes each in full.
 import { capacityOf, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
 import { extraInQuestion, gateReason, inExtraSlot, slotRoom, takenText } from "./gate.mjs";
@@ -11,6 +11,7 @@ import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health
 import { gitState, isRepository, repoTop } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
 import { flakyChecks, flakyCounts, flakyLines } from "./flaky.mjs";
+import { REASONS_DAYS, reasonsLines, reasonsReport } from "./reasons.mjs";
 import { notify } from "./notify.mjs";
 import { markerOf } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
@@ -184,6 +185,22 @@ export function cmdFlaky(args, { settings, files }, { print = console.log, warn 
     return 0;
 }
 
+/** `reasons`: the failures that ended in the last --days days (7 by default) by class, most first, with how many
+ *  passed on a plain re-run of the same clean commit; with --json the report as one JSON object. Exits 0, or 2 for a
+ *  bad --days. */
+export function cmdReasons(args, { files }, { print = console.log, warn = say, now = Date.now() } = {}) {
+    const daysText = opt(args, "--days");
+    if (daysText !== undefined && !/^[1-9]\d*$/.test(daysText)) {
+        warn(DAYS_ERROR);
+        return EXIT.usage;
+    }
+    const days = daysText === undefined ? REASONS_DAYS : Number(daysText);
+    const report = reasonsReport(readLines(files.journal), { now, days });
+    if (args.includes("--json")) print(JSON.stringify(report));
+    else for (const line of reasonsLines(report)) print(line);
+    return 0;
+}
+
 /** `setup`: shows, or with --write makes, the changes to the project's agent files, then with --mcp prints the MCP
  *  settings. Without --cwd the project folder is the top folder of the git repository the current folder is in, or
  *  the current folder outside git. Exits 0 when done, 1 when a file cannot be read or written (nothing is written
@@ -255,6 +272,7 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "passed") return cmdPassed(args, ctx);
     if (command === "history") return cmdHistory(args, ctx);
     if (command === "flaky") return cmdFlaky(args, ctx);
+    if (command === "reasons") return cmdReasons(args, ctx);
     if (command === "worktrees") return cmdWorktrees(ctx);
     if (command === "schedule") return cmdSchedule(args.slice(1), ctx.files, scheduleDeps(ctx, localZone()));
     if (command === "discard") return cmdDiscard(args, ctx, { say });

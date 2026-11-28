@@ -3,12 +3,16 @@
 // Because the job and everything it starts share that group, one signal reaches all of it. The wrapper ends the way
 // the job ended, and it stops the group when the queue process that started it is gone. When the command cannot be
 // started at all, the wrapper says so on file descriptor 3 if the queue opened one, so the queue can tell that apart
-// from a job that ran and exited 127.
+// from a job that ran and exited 127. The job's stdio is the wrapper's own, inherited as it is. After a failure, the
+// wrapper reads back what the job added to the file its stdout or stderr goes to, if it is a file (outputfile.mjs),
+// and sends on file descriptor 3 the class that output points to: never the output itself.
 import { spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { isMainModule, loadSettings } from "./settings.mjs";
 import { alive, signalGroup } from "./proctree.mjs";
+import { textReason } from "./failreason.mjs";
+import { outputSinks, readOutput, sourceOf } from "./outputfile.mjs";
 
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"];
 export const NO_START_EXIT = 127;
@@ -39,6 +43,31 @@ export function readStartFailure(text) {
         if (typeof sent?.startFailed === "string") return sent.startFailed;
     }
     return null;
+}
+
+/** The line the wrapper sends on file descriptor 3 after a failed job: seen says whether it read the output, found is
+ *  what textReason() made of it, and source, when it was not read, says why (see readOutput). */
+export const reasonLine = ({ seen, found, source }) =>
+    `${JSON.stringify({ seen, found: found ?? null, ...(seen ? {} : { source: source ?? null }) })}\n`;
+
+/** The { seen, found, source } of a reason line in the text read from file descriptor 3, or null when there is none. */
+export function readReason(text) {
+    for (const line of String(text).split("\n")) {
+        let sent;
+        try { sent = JSON.parse(line); } catch { continue; /* not a report line */ }
+        if (typeof sent?.seen === "boolean") {
+            return { seen: sent.seen, found: sent.found ?? null, ...(sent.seen ? {} : { source: sent.source ?? null }) };
+        }
+    }
+    return null;
+}
+
+/** What the wrapper sends after the job ended with code or signal: null for a pass. Only a job that exited with a
+ *  code other than 0 has its output read; a job ended by a signal is classed by the signal alone. */
+export function failureReport({ code, signal }, sinks, read = readOutput) {
+    if (code === 0 || (code === null && !signal)) return null;
+    const got = code === null ? { source: sourceOf(sinks) } : read(sinks);
+    return got.text !== undefined ? { seen: true, found: textReason(got.text, code) } : { seen: false, source: got.source };
 }
 
 /** How long the queue keeps reading the report after the wrapper has exited. */
@@ -83,6 +112,8 @@ function main() {
 
     // With default handlers the wrapper would die before the job and lose its exit status.
     for (const signal of FORWARDED) process.on(signal, ignore);
+    // Noted before the job writes anything: what it wrote before is never read.
+    const sinks = outputSinks();
     const job = spawn(program, args, { stdio: "inherit" });
 
     let orphaned = false;
@@ -105,6 +136,8 @@ function main() {
     });
     job.on("exit", (code, signal) => {
         if (orphaned) signalOwnGroup("SIGKILL");
+        const sent = failureReport({ code, signal }, sinks);
+        if (sent) try { writeSync(3, reasonLine(sent)); } catch { /* no report pipe: the queue records unknown */ }
         const plan = exitPlan({ code, signal });
         if (!plan.reraise) process.exit(plan.exit);
         for (const name of FORWARDED) process.off(name, ignore);

@@ -10,7 +10,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("run");
-const { EXIT, journalWriter, lowRoomHint, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
+const { EXIT, journalWriter, lowRoomHint, planJob, realDeps, reasonOf, runCommand, runJob, viaNested, waitForSlot } = await import("./run.mjs");
+const { reasonLine } = await import("./job-wrapper.mjs");
 const { cmdStatus, runDeps } = await import("./cli.mjs");
 const { readHealth } = await import("./health.mjs");
 const { DEFAULTS, paths } = await import("./settings.mjs");
@@ -798,6 +799,7 @@ test("run: exit 124 at the run limit stops the whole process group", async () =>
     assert.equal(d.said.some((line) => line.startsWith("timed out: exit 124, stopped after 3 min; hint: ")), true);
     await until(() => ended(jobChild), 10_000);
     assert.deepEqual([journal(box).map((line) => [line.outcome, line.exit]), slots(box)], [[["timed-out", 124]], []]);
+    assert.deepEqual(journal(box)[0].reason, { class: "run-limit" });
 });
 
 test("run: a run-limit stop whose KILL is refused is reported and journalled as a failed stop", async () => {
@@ -1202,6 +1204,8 @@ test("run: a failed run of a check that passed on the same clean commit prints t
     const failed = await runAt(box, args);
     assert.deepEqual([failed.code, failed.said], [5, [FLAKY_ONCE]]);
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 0], ["ran", 5]]);
+    // A failed run's line carries a reason; the passing run's line has no such field.
+    assert.deepEqual(journal(box).map((line) => line.reason?.class ?? ("reason" in line ? "present" : null)), [null, "unknown"]);
 });
 
 test("run: a failed run of a check that is not flaky prints nothing extra, and a pass never prints the note", async () => {
@@ -1343,4 +1347,37 @@ test("run: a refused scheduled run keeps scheduled, and the job of a scheduled r
         assert.equal((await runAt(box, args, { env: { DOTIME_SCHEDULED: "0a1b2c3d" } })).code, 0);
     } finally { delete process.env.DOTIME_SCHEDULED; }
     assert.equal(readFileSync(seen, "utf8"), "none", "a run nested in it would count as scheduled too");
+});
+
+test("reasonOf: a pass gets no reason; a failure the class the wrapper sent, or unknown with where the output went", () => {
+    const ran = { outcome: "ran" };
+    const sent = reasonLine({ seen: true, found: { class: "network", sign: "ECONNRESET" } });
+    assert.deepEqual(reasonOf(ran, { code: 0, signal: null, report: "" }), {});
+    assert.deepEqual(reasonOf(ran, { code: 1, signal: null, report: sent }), { reason: { class: "network", sign: "ECONNRESET" } });
+    assert.deepEqual(reasonOf(ran, { code: 1, signal: null, report: reasonLine({ seen: true, found: null }) }), { reason: { class: "unknown" } });
+    for (const source of ["tty", "pipe", "other", "unread"]) {
+        const got = reasonOf(ran, { code: 1, signal: null, report: reasonLine({ seen: false, source }) });
+        assert.deepEqual(got, { reason: { class: "unknown", source } }, source);
+    }
+    assert.deepEqual(reasonOf(ran, { code: 1, signal: null, report: reasonLine({ seen: false }) }), { reason: { class: "unknown", source: "lost" } });
+    assert.deepEqual(reasonOf(ran, { code: 1, signal: null, report: "" }), { reason: { class: "unknown", source: "lost" } });
+    const stopped = { outcome: "stopped", signal: "SIGTERM" };
+    assert.deepEqual(reasonOf(stopped, { code: null, signal: "SIGTERM", report: "" }), { reason: { class: "signal", sign: "SIGTERM" } });
+    const byExit = { outcome: "stopped", signal: "SIGKILL" };
+    const killed = reasonLine({ seen: true, found: { class: "memory", sign: "Killed" } });
+    assert.deepEqual(reasonOf(byExit, { code: 137, signal: null, report: killed }), { reason: { class: "memory", sign: "Killed" } });
+});
+
+test("viaNested: a job whose nested run failed while it ran gets via nested; other jobs and passes are left as they are", () => {
+    const started = Date.parse("2031-06-09T12:00:00.000Z");
+    const at = (minutes) => new Date(started + minutes * 60_000).toISOString();
+    const inner = { nested: true, parentPid: 4100, outcome: "ran", exit: 1, endedAt: at(2) };
+    const reason = { reason: { class: "test", sign: "# fail" } };
+    assert.deepEqual(viaNested(reason, { pid: 4100, startedAt: started, rows: [inner] }),
+        { reason: { class: "test", sign: "# fail", via: "nested" } });
+    assert.deepEqual(viaNested(reason, { pid: 4200, startedAt: started, rows: [inner] }), reason, "nested in another job");
+    assert.deepEqual(viaNested(reason, { pid: 4100, startedAt: started + 3 * 60_000, rows: [inner] }), reason, "before this job");
+    assert.deepEqual(viaNested(reason, { pid: 4100, startedAt: started, rows: [{ ...inner, exit: 0 }] }), reason, "it passed");
+    assert.deepEqual(viaNested({}, { pid: 4100, startedAt: started, rows: [inner] }), {});
+    assert.deepEqual(viaNested(reason, { pid: 4100, startedAt: started, journalFile: "/nonexistent/journal.jsonl" }), reason);
 });

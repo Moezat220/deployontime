@@ -4,7 +4,7 @@
 // run the same command in this process instead, in run.test.mjs. Signals are sent only to processes started here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -41,6 +41,17 @@ function start(box, args, { cwd = box.work, env = box.env } = {}) {
     return { child, seen, done: new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal, ...seen }))) };
 }
 const cli = (box, args, options) => start(box, args, options).done;
+/** Runs the cli with its stdout and stderr appended to files, as an agent's tool sends them, both to the same file
+ *  when err is not given. Resolves on exit, with ms the time it took and the files as text. */
+function cliToFiles(box, args, { cwd = box.work, out = join(tempDir("cli-sink"), "out.txt"), err = null } = {}) {
+    const fds = [openSync(out, "a"), err ? openSync(err, "a") : null];
+    const began = Date.now();
+    const child = track(spawn(NODE, [CLI, ...args], { cwd, env: box.env, stdio: ["ignore", fds[0], fds[1] ?? fds[0]] }));
+    for (const fd of fds) if (fd !== null) closeSync(fd);
+    return new Promise((resolve) => child.on("exit", (code, signal) => resolve({
+        code, signal, ms: Date.now() - began, out: readFileSync(out, "utf8"), err: err ? readFileSync(err, "utf8") : null,
+    })));
+}
 const journal = (box) => {
     try {
         return readFileSync(join(box.home, "journal.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -73,6 +84,7 @@ test("main: returns the exit code of each command instead of ending the process"
     assert.equal(await main(["passed", "--mach", "lint"]), 2);
     assert.equal(await main(["history", "--day", "2040-01-01"]), 0);
     assert.equal(await main(["flaky", "--days", "0"]), 2);
+    assert.equal(await main(["reasons", "--days", "0"]), 2);
 });
 
 test("statusLines: one line per running job, per waiting job and for the gate", () => {
@@ -790,6 +802,121 @@ test("flaky and history: a check that passed and failed on one clean commit is l
         "docs-site: jobs 1, failed 0, stopped 0, timed out 0, refused 0, gave up 0, flaky 0, scheduled 0",
         "shop-api: jobs 2, failed 1, stopped 0, timed out 0, refused 0, gave up 0, flaky 1, scheduled 0",
     ]);
+});
+
+test("reasons: a failed run with its output in a file is journalled with its class, and counted as passed once the same commit passes", async () => {
+    const box = sandbox(), repo = makeRepo(join(box.work, "shop-api"));
+    const none = await cli(box, ["reasons"], { cwd: repo });
+    assert.deepEqual([none.code, none.stdout, none.stderr], [0, "reasons: no failures in 7 days\n", ""]);
+    const runs = join(tempDir("cli-reasons"), "runs");
+    const script = `const fs = require("node:fs"); const seen = fs.existsSync(${JSON.stringify(runs)}); `
+        + `fs.writeFileSync(${JSON.stringify(runs)}, "x"); `
+        + `if (!seen) { console.error("Error: read ECONNRESET"); process.exit(1); }`;
+    const args = ["run", "--label", "shop-api: unit tests", "--", NODE, "-e", script];
+    // Through a file, as an agent's tool sends the output: the wrapper reads back what the run added to it.
+    assert.equal((await cliToFiles(box, args, { cwd: repo })).code, 1);
+    assert.equal((await cli(box, [...args.slice(0, 3), "--no-skip", ...args.slice(3)], { cwd: repo })).code, 0);
+    const [failed, passed] = journal(box);
+    assert.deepEqual(failed.reason, { class: "network", sign: "ECONNRESET" });
+    assert.equal("reason" in passed, false);
+    const listed = await cli(box, ["reasons", "--days", "1"], { cwd: tempDir("cli-elsewhere") });
+    assert.deepEqual([listed.code, listed.stderr], [0, ""]);
+    const min = failed.runMin, rerun = passed.runMin;
+    assert.equal(listed.stdout, [
+        `network: 1 failure, 1 on a clean tree, 1 passed on a plain re-run of the same commit (100%), ${min} run-min; signs ECONNRESET 1`,
+        `total in 1 day: 1 failure, 1 on a clean tree, 1 passed on a plain re-run of the same commit (100%), ${min} run-min`,
+        `a retry of the environment classes would have saved: network 1 re-run that passed (${rerun} run-min)`,
+        "",
+    ].join("\n"));
+    const json = await cli(box, ["reasons", "--json"]);
+    const report = JSON.parse(json.stdout);
+    assert.deepEqual(Object.keys(report), ["days", "from", "to", "classes", "total", "retry"]);
+    assert.deepEqual([report.days, report.classes.map((c) => [c.class, c.failures, c.passedOnRerun])], [7, [["network", 1, 1]]]);
+    assert.deepEqual(report.retry, [{ class: "network", reruns: 1, runMin: rerun }]);
+    for (const days of ["0", "abc", "1.5", "-3"]) {
+        const bad = await cli(box, ["reasons", `--days=${days}`]);
+        assert.deepEqual([bad.code, bad.stdout, bad.stderr], [2, "", "dotime-queue: --days: needs a whole number of days, 1 or more\n"], days);
+    }
+    const badFlag = await cli(box, ["reasons", "--all"]);
+    assert.deepEqual([badFlag.code, badFlag.stderr], [2, "dotime-queue: unknown option --all\n"]);
+});
+
+test("run: a process the command leaves behind keeps writing after the run returns, and the run does not wait for it", async () => {
+    const box = sandbox(), pidFile = join(tempDir("cli-ticker"), "pid");
+    const ticker = `${JSON.stringify(NODE)} -e "setInterval(() => console.log('tick'), 200)" & echo $! > ${JSON.stringify(pidFile)}`;
+    const began = Date.now();
+    // stdout is a pipe the test keeps reading, as an agent's tool does; the run's end is its exit, not the pipe's close.
+    const child = track(spawn(NODE, [CLI, "run", "--label", "docs-site: dev server", "--", "/bin/sh", "-c", ticker], {
+        cwd: box.work, env: box.env, stdio: ["ignore", "pipe", "ignore"],
+    }));
+    let ticks = 0;
+    child.stdout.on("data", (text) => { ticks += String(text).split("tick").length - 1; });
+    const code = await new Promise((resolve) => child.on("exit", resolve));
+    const ms = Date.now() - began, pid = Number(readFileSync(pidFile, "utf8"));
+    track(pid);
+    try {
+        assert.equal(code, 0);
+        assert.equal(ms < 600, true, `the run took ${ms} ms`);
+        const before = ticks;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        assert.equal(alive(pid), true, "the process left behind was ended");
+        assert.equal(ticks - before >= 5, true, `${ticks - before} ticks in 2 s after the run returned`);
+    } finally { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+});
+
+test("run: 5 MB written to stdout just before exit 1 all reach the file, and the reason is read from it", async () => {
+    const box = sandbox(), dir = tempDir("cli-big");
+    const script = "process.stdout.write(Buffer.alloc(5000000, 97)); process.stdout.write('\\nError: read ECONNRESET\\n'); process.exit(1)";
+    const ran = await cliToFiles(box, ["run", "--label", "shop-api: export", "--", NODE, "-e", script], {
+        out: join(dir, "out.txt"), err: join(dir, "err.txt"),
+    });
+    assert.equal(ran.code, 1);
+    assert.equal(ran.out.length, 5000000 + "\nError: read ECONNRESET\n".length);
+    assert.equal(ran.out.startsWith("a".repeat(5000000)), true);
+    assert.deepEqual(journal(box)[0].reason, { class: "network", sign: "ECONNRESET" });
+});
+
+test("run: stdout and stderr to one file keep their order, as when the command runs directly", async () => {
+    const box = sandbox(), dir = tempDir("cli-order");
+    const script = "for (let i = 0; i < 1000; i++) { process.stdout.write('out ' + i + '\\n'); process.stderr.write('err ' + i + '\\n'); }";
+    const directFile = join(dir, "direct.txt"), fd = openSync(directFile, "a");
+    spawnSync(NODE, ["-e", script], { stdio: ["ignore", fd, fd] });
+    closeSync(fd);
+    const ran = await cliToFiles(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", script], { out: join(dir, "queued.txt") });
+    const own = (line) => !line.startsWith("dotime-queue: ");
+    const lines = ran.out.split("\n").filter(own);
+    assert.equal(lines.length, 2001);
+    assert.deepEqual(lines, readFileSync(directFile, "utf8").split("\n"));
+});
+
+test("run: only what the run added to its file is read, never what the file held before", async () => {
+    const box = sandbox(), out = join(tempDir("cli-prefill"), "out.txt");
+    writeFileSync(out, "Error: listen EADDRINUSE: address already in use :::3000\n".repeat(50));
+    const quiet = await cliToFiles(box, ["run", "--label", "shop-api: smoke", "--", NODE, "-e", "process.exit(1)"], { out });
+    const noisy = await cliToFiles(box, ["run", "--label", "shop-api: smoke", "--no-skip", "--", NODE, "-e",
+        "console.error('Error: read ECONNRESET'); process.exit(1)"], { out });
+    assert.deepEqual([quiet.code, noisy.code], [1, 1]);
+    assert.deepEqual(journal(box).map((line) => line.reason), [{ class: "unknown" }, { class: "network", sign: "ECONNRESET" }]);
+});
+
+test("run: output to a pipe is not read: the reason comes from the exit alone, with source pipe", async () => {
+    const box = sandbox();
+    const ran = await cli(box, ["run", "--label", "shop-api: unit tests", "--", NODE, "-e", "console.error('Error: read ECONNRESET'); process.exit(1)"]);
+    assert.deepEqual([ran.code, ran.stderr.includes("Error: read ECONNRESET\n")], [1, true]);
+    assert.deepEqual(journal(box)[0].reason, { class: "unknown", source: "pipe" });
+});
+
+test("reasons: a failure inside a nested run counts once, and the outer job's reason says via nested", async () => {
+    const box = sandbox();
+    const inner = [CLI, "run", "--label", "shop-api: api tests", "--", NODE, "-e", "console.error('Error: read ECONNRESET'); process.exit(1)"];
+    const ran = await cliToFiles(box, ["run", "--label", "shop-api: all checks", "--", NODE, ...inner]);
+    assert.equal(ran.code, 1);
+    const [nested, outer] = journal(box);
+    assert.deepEqual([nested.label, nested.nested, nested.parentPid, nested.reason],
+        ["shop-api: api tests", true, outer.pid, { class: "network", sign: "ECONNRESET" }]);
+    assert.deepEqual([outer.label, outer.reason], ["shop-api: all checks", { class: "network", sign: "ECONNRESET", via: "nested" }]);
+    const report = JSON.parse((await cli(box, ["reasons", "--json"])).stdout);
+    assert.deepEqual([report.total.failures, report.total.nested, report.classes.map((c) => [c.class, c.failures])], [1, 1, [["network", 1]]]);
 });
 
 test("usage: exit 2 with a message for bad input, exit 0 for help", async () => {

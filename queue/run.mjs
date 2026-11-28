@@ -21,7 +21,9 @@ import {
 } from "./gate.mjs";
 import { gitState as readGitState } from "./git.mjs";
 import { healthVerdict } from "./health.mjs";
-import { NO_START_EXIT, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
+import { NO_START_EXIT, readReason, readStartFailure, wrapperEnd } from "./job-wrapper.mjs";
+import { failReason } from "./failreason.mjs";
+import { isFailure } from "./reasons.mjs";
 import {
     addWait, append, cmdString, isFailedRun, jobEnd, parseLines, readLines, record, SKIPPABLE_KINDS, skipStamp,
 } from "./journal.mjs";
@@ -357,7 +359,8 @@ export function runJob(job, slot, deps) {
         if (ended) return;
         const refused = killJob("SIGKILL").refused;
         const why = refused.length ? `KILL refused for ${refused.join(", ")}` : null;
-        journal.finish("timed-out", EXIT.timedOut, { ...stamps(), ...(why ? { stopFailed: why } : {}) });
+        const reason = failReason({ outcome: "timed-out", runLimitHit: true });
+        journal.finish("timed-out", EXIT.timedOut, { ...stamps(), ...(why ? { stopFailed: why } : {}), reason });
         const how = why ? `stop failed after ${limit.killMin} min, ${why}` : `stopped after ${limit.killMin} min`;
         say(`timed out: exit ${EXIT.timedOut}, ${how}; hint: the kind was taken as `
             + `${job.kind} (--kind <name> overrides it), and --max-run <min> sets the limit directly`);
@@ -404,9 +407,11 @@ export function runJob(job, slot, deps) {
         }
         const exit = code ?? (signal ? 1 : 0);
         const how = jobEnd({ code, signal, received });
+        const ended = { code, signal: signal ?? received, report };
         const stoppedAt = new Date(receivedAt ?? deps.now()).toISOString();
         const stopped = how.signal ? { signal: how.signal, stoppedAt } : {};
-        journal.finish(how.outcome, exit, { ...stamps(), ...stopped });
+        const reason = viaNested(reasonOf(how, ended), { pid, startedAt, journalFile: files.journal });
+        journal.finish(how.outcome, exit, { ...stamps(), ...stopped, ...reason });
         if (how.signal) {
             say(`stopped: signal ${how.signal}, ${minutesSince(startedAt, deps.now())} min run, `
                 + "journalled as stopped and not as failed");
@@ -420,6 +425,26 @@ export function runJob(job, slot, deps) {
         end(EXIT.noStart);
     });
     return result;
+}
+
+/** The reason field of a job that ran and ended: { reason } for a failure or a stop, {} for a pass. how: from
+ *  jobEnd(); code, signal and report: from wrapperEnd(), with signal also a signal the queue received. */
+export function reasonOf(how, { code, signal, report }) {
+    if (how.outcome === "ran" && code === 0) return {};
+    const sent = readReason(report);
+    const seen = sent ? (sent.seen ? { found: sent.found } : { source: sent.source ?? "lost" }) : { source: "lost" };
+    return { reason: failReason({ ...seen, exit: code, signal, stoppedBy: how.signal, outcome: how.outcome }) };
+}
+
+/** The reason field of reasonOf(), with via: "nested" added to the reason when a run nested in this job, the queue
+ *  process pid, failed after startedAt: that run's own line holds the failure, so `reasons` counts it there only. */
+export function viaNested(field, { pid, startedAt, journalFile, rows }) {
+    if (!field.reason) return field;
+    let lines = rows;
+    try { lines ??= parseLines(readLines(journalFile)); } catch { return field; }
+    const inner = lines.some((row) => row.nested === true && row.parentPid === pid && isFailure(row)
+        && Date.parse(row.endedAt) >= startedAt);
+    return inner ? { reason: { ...field.reason, via: "nested" } } : field;
 }
 
 /** The writer of a job's one journal line. note({ startedAt, commit, tally, details, extra }) fills in any of those
@@ -540,7 +565,8 @@ export async function runCommand(args, ctx, deps) {
     // A run that `schedule tick` started names its job; a run started any other way gets no such field.
     const scheduled = scheduledBy(deps.env);
     const ownDetails = scheduled ? { ...plan.details, scheduled } : plan.details;
-    const details = outer ? { ...ownDetails, nested: true } : ownDetails;
+    // A nested run names the queue process of its job, so a failure is counted once, on the run nested in it.
+    const details = outer ? { ...ownDetails, nested: true, parentPid: outer.pid } : ownDetails;
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now, pid,
     });

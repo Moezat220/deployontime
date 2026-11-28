@@ -385,6 +385,34 @@ check it prints one line, `flaky: none in 14 days`. `--days` takes a whole numbe
 shop-api: unit tests; mixed on 3 commits, 5 passes and 3 failures, last 2 h ago; command npm test
 ```
 
+### `reasons`
+
+```
+dotime-queue reasons [--days <n>] [--json]
+```
+
+Counts the failures of the last n days (default 7, by the time they ended) by their [failure
+reason](#failure-reasons), one line per class, most failures first, and exits 0. Each line gives the failures, how
+many began with a clean tree on a commit, how many of those passed on a plain re-run of the same commit (and what
+share of the clean ones that is), the run minutes of the failures and the signs seen. A failure counts as passed on a
+re-run when the next run of the same check, on the same commit, in the same folder and also from a clean tree, passed;
+checks are told apart as for the [repeated-failure stop](#repeated-failures). A run from a tree with uncommitted
+changes never counts either way. A total line follows, then one line that names, per environment class (`memory`,
+`disk`, `files`, `port`, `network`), the re-runs that passed and their run minutes: what a retry of that class would
+have saved. Failures journalled before reasons were recorded are named in the total line and left out of the classes,
+and so is the failure of a job that failed because a run nested in it failed (`total.nested` in `--json`): that
+failure is counted once, on the nested run.
+With no failure it prints one line, `reasons: no failures in 7 days`. `--json` prints the same report as one JSON
+object with `days`, `from`, `to`, `classes`, `total` and `retry`. `--days` takes a whole number of 1 or more; anything
+else exits 2. Nothing in the report changes how a run ends: it only measures.
+
+```
+network: 12 failures, 10 on a clean tree, 8 passed on a plain re-run of the same commit (80%), 31 run-min; signs ECONNRESET 8, ETIMEDOUT 4
+test: 9 failures, 6 on a clean tree, 1 passed on a plain re-run of the same commit (17%), 40.5 run-min; signs # fail 9; also saw network 2
+total in 7 days: 21 failures, 16 on a clean tree, 9 passed on a plain re-run of the same commit (56%), 71.5 run-min
+a retry of the environment classes would have saved: network 8 re-runs that passed (20.2 run-min)
+```
+
 ### `setup`
 
 ```
@@ -552,6 +580,44 @@ may not come from your change
 
 `3 times` counts the commits, and `once` stands for one. `dotime-queue flaky` lists the flaky checks, and `history`
 counts them per project.
+
+## Failure reasons
+
+A run that failed, hit its run limit or was stopped gets a `reason` in its journal line: `{ "class": ..., "sign": ...
+}`, with `alsoSaw` and `source` where they apply. A passing run and every other outcome get no such field. The reason
+only records: it changes no exit code, skip, stop, flaky flag or limit.
+
+The job's stdin, stdout and stderr are the queue's own, as they are without reasons: nothing comes between the job
+and its output, so a process it leaves behind keeps writing, and order and speed stay as they were. Before the job
+starts, the job wrapper notes what its stdout and its stderr are. After a run that exited with a code other than 0,
+and only then, it reads back what the run added to them where they are regular files, as when an agent's tool sends
+the output to a file: from the size the file had when the job started to its end, at most the last 64 KB, through a
+separate read-only open of the same file. The path is found from `/proc/self/fd` on Linux and with `lsof` on macOS,
+and is used only if it still names the same file. Output that was there before the run is never read, stdout and
+stderr in one file are read once, and the reading takes at most 2 s. Only the class is kept: the journal never holds
+output, so it holds no secret from it. A terminal, a pipe or anything else that is not a file is never read; a failure
+is then class `unknown` with `source` `tty`, `pipe` (a socket counts as one) or `other`, and `unread` when a file
+could not be read back. A run limit or a stop is known without the output.
+
+| Class | When |
+| --- | --- |
+| `run-limit` | The run limit stopped the job (outcome `timed-out`). |
+| `signal` | The job was stopped by a signal, named in `sign` (outcome `stopped`). |
+| `memory` | `ENOMEM`, `JavaScript heap out of memory`, or `Killed` with exit 137 (the memory killer; this wins over `signal`). |
+| `disk` | `ENOSPC`, `no space left on device`. |
+| `files` | `EMFILE`, `ENFILE`, `too many open files`. |
+| `port` | `EADDRINUSE`, `address already in use`. |
+| `network` | `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`, `ECONNREFUSED`, `socket hang up`, `getaddrinfo`. |
+| `test` | A test runner's failure summary: `# fail N` or `ℹ fail N` (node:test), `Tests: N failed` and `FAIL` (vitest, jest), `N failing` (mocha), `N failed` (pytest), `--- FAIL` (go), or an assertion error. |
+| `build` | `error TS` (tsc), or a compiler's `error:` with a file and line. |
+| `unknown` | None of these. `source` says why the output was not read (see above), or is `lost` when the wrapper sent no reading. |
+
+A run limit comes first, then a signal. A test or build summary wins over an environment sign, which is then named in
+`alsoSaw`: an environment error inside a failing test still counts as a test failure. Of two environment signs, the
+class higher in the table wins. `sign` is always one of the fixed words above, never text from the output.
+When a run nested in a job fails, the job's own reason gets `via: "nested"`: the nested run's line holds the failure,
+and `reasons` counts it there only. `dotime-queue reasons` sums the reasons up, and `queue_job` gives the reason of a
+finished job in its `reason` field.
 
 ## Isolated runs
 
@@ -1178,13 +1244,15 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`
 (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`, `limitMin`,
 `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`, `afterFix`,
-`signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested`, `isolate` (an isolated run), `stamp` (on a
-line with outcome `skipped`: the passing run it relied on), `scheduled` (the id of the scheduled job that started the
-run) or `extraSlot` (the job ran in an extra slot). The schedule tick also writes lines of its own, with `scheduled`
-and outcome `missed` (with `missed`, the number of missed times, and `missedFrom` and `missedTo`), `busy` (with
-`busyPid`, the last run that still went) or `could-not-start`. Lines written by `run` also carry `pid`, the pid of the
-`run` process, so whoever started that process can find its own line. Copies of the queue that share a state folder all
-read the same fields, so a field keeps its name; a new field is only ever added.
+`signal`, `stopFailed`, `stoppedAt`, `reason` (on a failed, timed-out or stopped run: see [Failure
+reasons](#failure-reasons)), `longRunAt`, `warnedAt`, `nested` with `parentPid` (the `pid` of the job it ran in),
+`isolate` (an isolated run), `stamp` (on a line with outcome `skipped`: the passing run it relied on), `scheduled` (the
+id of the scheduled job that started the run) or `extraSlot` (the job ran in an extra slot). The schedule tick also
+writes lines of its own, with `scheduled` and outcome `missed` (with `missed`, the number of missed times, and
+`missedFrom` and `missedTo`), `busy` (with `busyPid`, the last run that still went) or `could-not-start`. Lines written
+by `run` also carry `pid`, the pid of the `run` process, so whoever started that process can find its own line. Copies
+of the queue that share a state folder all read the same fields, so a field keeps its name; a new field is only ever
+added.
 
 The journal and the logs are only ever added to; nothing trims them. Delete or move them when they grow too large:
 the queue starts new ones. The run limits, the stamps and the repeated-failure stop then start again from no
@@ -1203,11 +1271,12 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
-| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup`, `run`, `integrate`, `discard`, `worktrees` or `schedule`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `reasons`, `setup`, `run`, `integrate`, `discard`, `worktrees` or `schedule`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `worktree.mjs` | Isolated runs: the checks before one, the worktree, branch, links and state file, and the commit after a pass. | library | Runs `git` that adds worktrees, branches and commits in them; writes `worktrees/`; makes links. |
 | `integrate.mjs` | The `integrate`, `discard` and `worktrees` commands. | library | Runs `git` that merges in a temporary worktree, fast-forwards your branch, removes worktrees and branches; removes `worktrees/` files. |
-| `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
+| `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended; after a failure, sends its reason class. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
+| `outputfile.mjs` | What a failed job added to the file its stdout or stderr goes to, read back for its reason class. | library | Reads the file again, read only; runs `lsof` on macOS. |
 | `schedule.mjs` | The `schedule` commands: add, list, remove, enable and disable, and the hand-over to the tick and to install. | library | Reads the journal; writes `schedule.json` through `timetable.mjs`. |
 | `timetable.mjs` | The scheduled jobs in `schedule.json`, the checks on a stored job, and the lock. | library | Reads and writes `schedule.json` and `schedule.lock`. |
 | `cron.mjs` | When a scheduled job is due: `every` steps, the five cron fields, next and due times on a wall clock. | library | None. |
@@ -1226,6 +1295,8 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `limits.mjs` | Run limits from the journal history. | library | None. |
 | `kinds.mjs` | Job kinds and command stems. | library | None. |
 | `failstop.mjs` | The stop for a check that failed twice on unchanged code, and the rule that tells two checks apart. | library | None. |
+| `failreason.mjs` | The class of a failure from the end of its output and how it ended. | library | None. |
+| `reasons.mjs` | The `reasons` report: failures by class and the ones that passed on a re-run of the same clean commit. | library | None. |
 | `flaky.mjs` | Flaky checks: the ones that passed and failed on one commit, the note `run` prints, and the `flaky` lines. | library | None. |
 | `fingerprint.mjs` | A short hash of the code under test. | library | Runs read-only git commands, reads files in the working tree. |
 | `journal.mjs` | Journal lines, pass stamps and `history` totals. | library | Reads and appends `journal.jsonl`. |

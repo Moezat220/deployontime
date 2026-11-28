@@ -316,6 +316,21 @@ test("queue_run: a failing command finishes with its own exit code, outcome ran,
     await server.close();
 });
 
+test("queue_job: a failed job carries the reason from its journal line, a passed one has none", async () => {
+    const box = sandbox();
+    const server = startServer(box);
+    const failedId = await runJob(server, box, {
+        label: "shop: fetch", command: nodeCommand("console.error('Error: read ECONNRESET'); process.exit(1)"),
+    });
+    const failed = await jobUntil(server, failedId);
+    assert.deepEqual(failed.structuredContent.reason, { class: "network", sign: "ECONNRESET" });
+    const passedId = await runJob(server, box, { label: "shop: fetch", command: nodeCommand("process.exit(0)") });
+    const passed = await jobUntil(server, passedId);
+    assert.equal(passed.structuredContent.exitCode, 0);
+    assert.equal("reason" in passed.structuredContent, false);
+    await server.close();
+});
+
 test("queue_job: a check that passed and then failed on the same clean commit is flaky; its pass is not", async () => {
     const box = sandbox();
     const server = startServer(box);
