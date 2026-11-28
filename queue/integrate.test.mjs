@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, git, isolateProcess, makeRepo, tempDir, track } from "./testkit.mjs";
+import { bootId, startTicks } from "./linux.mjs";
 
 isolateProcess("integrate");
 const { fastForward, worktreeLines } = await import("./integrate.mjs");
@@ -358,10 +359,12 @@ test("run --isolate: a node_modules folder, also one git does not ignore, and is
 test("discard: a job still marked running whose pid now names a process that started later is not running", async () => {
     const box = sandbox();
     const job = await isolated(box, "shop-api: look", PASS);
-    editState(box, job.id, { outcome: "running", exit: null, pid: process.pid, born: MY_BORN });
+    // The state names this test process, with its own start in clock ticks and boot on Linux (both null elsewhere).
+    const ticks = startTicks(process.pid);
+    editState(box, job.id, { outcome: "running", exit: null, pid: process.pid, born: MY_BORN, ticks, boot: bootId() });
     const busy = await cli(box, ["discard", job.id, "--force"]);
     assert.deepEqual([busy.code, busy.stderr], [2, `dotime-queue: discard: job ${job.id} is still running, pid ${process.pid}\n`]);
-    editState(box, job.id, { born: MY_BORN - 3_600_000 });
+    editState(box, job.id, { born: MY_BORN - 3_600_000, ticks: ticks === null ? null : ticks - 1 });
     const out = await cli(box, ["discard", job.id]);
     assert.equal(out.code, 0, out.stderr);
     assert.equal(existsSync(job.worktree), false);
