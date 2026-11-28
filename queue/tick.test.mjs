@@ -71,6 +71,10 @@ test("planTick: nothing before the first due time, the newest due time once one 
     assert.deepEqual([late.due, late.missed], [T0 + 10 * MINUTE, { count: 9, oldest: T0 + MINUTE, newest: T0 + 9 * MINUTE }]);
     assert.equal(planTick({ ...j, lastDue: iso(T0 + 10 * MINUTE) }, T0 + 10 * MINUTE + 30_000, UTC), null, "due times count from lastDue");
     assert.equal(planTick({ ...j, enabled: false }, T0 + 10 * MINUTE, UTC), null);
+    const quarter = job({ every: undefined, cron: "*/15 * * * *", lastDue: iso(Date.UTC(2031, 4, 7, 1, 0)) });
+    assert.deepEqual(planTick(quarter, Date.UTC(2031, 4, 7, 2, 1), UTC),
+        { due: Date.UTC(2031, 4, 7, 2, 0), missed: { count: 3, oldest: Date.UTC(2031, 4, 7, 1, 15), newest: Date.UTC(2031, 4, 7, 1, 45) } },
+        "a cron job: every due time before the newest is missed");
     const nightly = job({ every: undefined, cron: "0 2 * * *" });
     assert.equal(planTick(nightly, Date.UTC(2031, 4, 7, 1, 59), UTC), null);
     assert.deepEqual(planTick(nightly, Date.UTC(2031, 4, 7, 2, 0, 40), UTC), { due: Date.UTC(2031, 4, 7, 2, 0), missed: null });
@@ -147,6 +151,27 @@ test("tick: after a gap, one missed line, one notice and one catch-up run, never
     // The stand-in run wrote no journal line, as a run cut off by a restart would not: it is recorded as lost.
     assert.deepEqual([b.seen.starts.length, b.journal().length, b.seen.notices.length], [2, 2, 1], "then the normal cadence");
     assert.deepEqual(b.journal().map((r) => r.outcome), ["missed", "lost"]);
+});
+
+test("tick: the real launchd case — due :30 to :33 while the tick was off: :30, :31 and :32 missed in one line and one notice, :33 starts", () => {
+    const b = bench([job({ lastDue: iso(T0 + 29 * MINUTE) })]);
+    assert.equal(b.tick(T0 + 33 * MINUTE + 5000), 0);
+    const rows = b.journal();
+    assert.deepEqual(rows.map((r) => [r.outcome, r.missed, r.missedFrom, r.missedTo]), [["missed", 3, iso(T0 + 30 * MINUTE), iso(T0 + 32 * MINUTE)]]);
+    assert.deepEqual(b.seen.notices, [["dotime: missed shop-api: lint", "3 runs missed while the tick did not run; running once now"]]);
+    assert.equal(b.seen.starts.length, 1);
+    assert.equal(b.stored()[0].lastDue, iso(T0 + 33 * MINUTE));
+});
+
+test("tick: one due time missed by a tick a few seconds late gets its journal line but no notice", () => {
+    const b = bench([job({ lastDue: iso(T0 + 29 * MINUTE) })]);
+    assert.equal(b.tick(T0 + 31 * MINUTE + 3000), 0);
+    assert.deepEqual(b.journal().map((r) => [r.outcome, r.missed, r.missedFrom]), [["missed", 1, iso(T0 + 30 * MINUTE)]]);
+    assert.deepEqual(b.seen.notices, [], "a tick that drifted a few seconds is no gap worth a notice");
+    assert.equal(b.seen.starts.length, 1);
+    const far = bench([job({ every: "1h", lastDue: iso(T0) })]);
+    far.tick(T0 + 2 * 60 * MINUTE + 5 * MINUTE);
+    assert.equal(far.seen.notices.length, 1, "one missed time that is minutes old is a real gap, and is told");
 });
 
 test("tick: a gap with one due time only starts it, late, and reports nothing missed: that time was not skipped", () => {

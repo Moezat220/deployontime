@@ -1,10 +1,10 @@
 // The one-minute step of scheduled jobs, `dotime-queue schedule tick`. A system entry starts it every minute; it
 // reads schedule.json, starts each job that is due as a `dotime-queue run` of its own, and returns at once, so it never
 // waits for a slot. Due times that passed before the newest one mean the tick did not run for a while: they are
-// journalled and sent as one notice, and the job runs once to catch up, never once per missed time. A job whose last scheduled run
-// still waits or runs is not started again; that is journalled too. A last run that was cut off by a restart with no
-// journal line of its own gets a lost line, and the job counts as free. Nothing here decides how a job runs: the run it
-// starts goes through the gate, slots, refusals, skips, limits, journal and notices like any other.
+// journalled and sent as one notice, and the job runs once to catch up, never once per missed time. A job whose last
+// scheduled run still waits or runs is not started again; that is journalled too. A last run that was cut off by a
+// restart with no journal line of its own gets a lost line, and the job counts as free. Nothing here decides how a job
+// runs: the run it starts goes through the gate, slots, refusals, skips, limits, journal and notices like any other.
 //
 // A due time is saved before its run is started, so a tick that cannot save starts nothing rather than the same run
 // every minute. A problem that stops the tick each minute (a schedule that cannot be saved, read or trusted) is sent
@@ -22,7 +22,8 @@ import { snapshot } from "./slots.mjs";
 import { jobProblem, OWNER_ONLY, readSchedule, scheduleTrust, takeLock, writeSchedule } from "./timetable.mjs";
 import { MINUTE } from "./units.mjs";
 
-/** How late a due time may be found and still count as on time. */
+/** How recent one missed due time may be and still be a tick that came a few seconds late, which gets its journal line
+ *  but no notice; also how far ahead a lastDue may lie before it counts as odd. */
 export const GRACE_MS = 2 * MINUTE;
 /** The environment variable that tells `run` which scheduled job started it. */
 export const SCHEDULED_MARKER = "DOTIME_SCHEDULED";
@@ -180,9 +181,14 @@ function tickJob(job, plan, now, jobs, files, deps) {
         const { count, oldest, newest } = plan.missed;
         append(tickRow(job, "missed", now, { missed: count, missedFrom: iso(oldest), missedTo: iso(newest) }), files.journal);
         const next = busy ? "not started now: the last run is still going" : "running once now";
-        try {
-            deps.notify(`dotime: missed ${job.label}`, `${runs(count)} missed while the tick did not run; ${next}`);
-        } catch { /* a notice that fails changes nothing */ }
+        // One due time missed by a tick that came a few seconds late (a launchd StartInterval drifts against the clock)
+        // is journalled and printed, but is no notice: only a real gap is worth interrupting someone for.
+        const jitter = count === 1 && now - newest <= GRACE_MS;
+        if (!jitter) {
+            try {
+                deps.notify(`dotime: missed ${job.label}`, `${runs(count)} missed while the tick did not run; ${next}`);
+            } catch { /* a notice that fails changes nothing */ }
+        }
         print(`schedule tick: missed ${head}, ${runs(count)}, from ${dateTime(oldest, deps.zone)} to ${dateTime(newest, deps.zone)}`);
     }
     if (busy) {
