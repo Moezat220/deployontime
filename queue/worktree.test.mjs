@@ -180,7 +180,7 @@ test("run --isolate: an isolated job takes an extra slot like any job, and is jo
     takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - 60_000 }, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
     const ran = await start(box, ["run", "--isolate", "--label", "shop-api: rename", "--", ...editLine(1, "uno")]);
     assert.equal(ran.code, 0, ran.stderr);
-    assert.equal(ran.stderr.includes("dotime-queue: extra slot: starts beyond the 1 base slots while the CPU has room\n"), true, ran.stderr);
+    assert.equal(ran.stderr.includes("dotime-queue: extra slot: starts beyond the 1 base slot while the CPU has room\n"), true, ran.stderr);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.extraSlot, typeof line.isolate?.branch], ["ran", true, "string"]);
 });

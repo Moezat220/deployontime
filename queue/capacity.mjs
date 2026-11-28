@@ -20,7 +20,7 @@ const coresText = (cores) => `${cores} core${cores === 1 ? "" : "s"}`;
 
 /** The capacity plan. settings: { slots, maxSlots, extraSlotCpuPct, extraSlotSettleSec }, as loadSettings() gives
  *  them; maxSlots counts only when userSet.maxSlots is true. userSet: { slots, maxSlots }, true for each one the
- *  user's settings file sets to a value that was accepted. cores: the core count of the computer the plan is for.
+ *  user's settings file sets, as loadSettings() tells. cores: the core count of the computer the plan is for.
  *  Returns { base, max, source, reason, cores, cpuPct, settleSec }: base the base slots, max the most slots with
  *  extra ones, source "maxSlots", "slots" or "cores" for where max comes from, reason a few words on it for
  *  `status`, and cpuPct and settleSec the extra-slot rules, for extraSlotVerdict(). */

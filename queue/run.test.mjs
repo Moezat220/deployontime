@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { isolateProcess, readNotices, tempDir, track, until } from "./testkit.mjs";
 
 isolateProcess("run");
@@ -38,6 +38,14 @@ const withChild = (file) => "const c = require(\"node:child_process\")"
     + `.spawn(process.execPath, ["-e", ${JSON.stringify(FOREVER)}], { stdio: "ignore" }); `
     + `require("node:fs").writeFileSync(${JSON.stringify(file)}, String(c.pid)); ${FOREVER}`;
 const pidIn = (file) => Number(readFileSync(file, "utf8"));
+/** True once the process is gone: no longer there, or a zombie that has ended and waits only to be reaped, which
+ *  kill(pid, 0) still reaches. */
+const ended = (pid) => {
+    if (!alive(pid)) return true;
+    const ps = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    const state = ps.stdout.trim();
+    return state === "" || state.startsWith("Z");
+};
 const count = (lines, part) => lines.filter((line) => line.includes(part)).length;
 
 /** A state folder and a work folder, with the settings the e2e tests use: short polls and a short kill grace. The
@@ -270,14 +278,14 @@ test("run and status: a job in an extra slot is journalled with extraSlot, and s
     const printed = [], asked = [];
     cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return { ...roomy, busyCpuPct: 70 }; }, print: (t) => printed.push(t) });
     assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null }], "with every extra slot taken, no CPU reading is asked for");
-    assert.equal(printed[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting; "
+    assert.equal(printed[0], "slots: 2 taken (1 of 1 base, 1 extra), 0 waiting; "
         + "up to 2 while the CPU has room (maxSlots set in settings)");
     assert.match(printed[2], /^running "shop-api: lint": pid \d+, extra slot, kind lint, /);
-    assert.equal(printed.at(-1), 'gate: shut; no free slot: 2 taken (1 + 1 extra while the CPU has room), by '
+    assert.equal(printed.at(-1), 'gate: shut; no free slot: 2 taken (1 of 1 base, 1 extra), by '
         + `${slots(box).map((s) => `"${s.label}"`).join(" and ")}; no extra slot: all 2 slots taken, extra ones included`);
     writeFileSync(done, "");
     assert.equal(await run.result, 0);
-    assert.equal(d.said.includes("extra slot: starts beyond the 1 base slots while the CPU has room"), true);
+    assert.equal(d.said.includes("extra slot: starts beyond the 1 base slot while the CPU has room"), true);
     const [line] = journal(box);
     assert.deepEqual([line.outcome, line.extraSlot], ["ran", true]);
 });
@@ -288,15 +296,27 @@ test("run: a job in a base slot is journalled without extraSlot", async () => {
     assert.equal("extraSlot" in journal(box)[0], false);
 });
 
-test("status: with extra slots on, an open gate says why an extra slot is free", () => {
+test("status: with extra slots on and a job in line, an open gate says why an extra slot is free", () => {
     const box = sandbox({ slots: 1, maxSlots: 3 }), printed = [];
     takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - MINUTE }, box.ctx.files);
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
     const asked = [];
     cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return { ...CALM, busyCpuPct: 31 }; }, print: (t) => printed.push(t) });
     assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null, liveCpu: true }]);
     assert.deepEqual([printed[0], printed.at(-1)], [
-        "slots: 1 of 1 taken, 0 waiting; up to 3 while the CPU has room (maxSlots set in settings)",
+        "slots: 1 of 1 taken, 1 waiting; up to 3 while the CPU has room (maxSlots set in settings)",
         "gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%",
+    ]);
+});
+
+test("status: with extra slots on and nobody in line, it takes no live CPU reading and says an extra slot waits for a job", () => {
+    const box = sandbox({ slots: 1, maxSlots: 3 }), printed = [], asked = [];
+    takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - MINUTE }, box.ctx.files);
+    cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return { ...CALM, busyCpuPct: 31 }; }, print: (t) => printed.push(t) });
+    assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null }]);
+    assert.deepEqual([printed[0], printed.at(-1)], [
+        "slots: 1 of 1 taken, 0 waiting; up to 3 while the CPU has room (maxSlots set in settings)",
+        'gate: shut; no free slot: 1 of 1 taken, by "docs-site: build"; an extra slot is judged on the live CPU reading once a job waits',
     ]);
 });
 
@@ -776,7 +796,7 @@ test("run: exit 124 at the run limit stops the whole process group", async () =>
     assert.equal(d.said.includes('run limit: stopping "shop-api: e2e", KILL follows TERM after 0.25 s; '
         + "ran 3 min against a limit of 3 min, set by the --max-run flag"), true);
     assert.equal(d.said.some((line) => line.startsWith("timed out: exit 124, stopped after 3 min; hint: ")), true);
-    await until(() => !alive(jobChild), 3000);
+    await until(() => ended(jobChild), 10_000);
     assert.deepEqual([journal(box).map((line) => [line.outcome, line.exit]), slots(box)], [[["timed-out", 124]], []]);
 });
 

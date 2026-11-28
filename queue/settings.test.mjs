@@ -266,24 +266,40 @@ test("loadSettings: userSet names slots and maxSlots only when the file sets the
     assert.deepEqual(userSet({ slots: 2 }), { slots: true, maxSlots: false }, "the default value, but set in the file");
     assert.deepEqual(userSet({ slots: 3, maxSlots: 6 }), { slots: true, maxSlots: true });
     assert.deepEqual(userSet({ maxSlots: 6 }), { slots: false, maxSlots: true });
-    assert.deepEqual(userSet({ slots: 0, maxSlots: 2.5 }), { slots: false, maxSlots: false }, "values that do not fit are not set");
+    assert.deepEqual(userSet({ slots: 0 }), { slots: false, maxSlots: false }, "a slot count that does not fit is not set");
+    assert.deepEqual(userSet({ slots: 0, maxSlots: 2.5 }), { slots: false, maxSlots: true }, "a maxSlots that does not fit is set to slots");
     assert.deepEqual(load({ slots: 3 }).settings, { ...DEFAULTS, slots: 3 }, "userSet is not enumerable");
     assert.deepEqual(Object.keys(loadSettings({ DOTIME_HOME: tempDir("settings") }, { warn: () => {} })).includes("userSet"), false);
 });
 
-test("loadSettings: maxSlots needs a whole number of at least slots, else it is not set", () => {
+test("loadSettings: maxSlots needs a whole number of at least slots, else the most is slots, with no extra slots", () => {
     assert.deepEqual(load({ slots: 3, maxSlots: 3 }), { settings: { ...DEFAULTS, slots: 3, maxSlots: 3 }, warnings: [] });
     assert.equal(load({ slots: 2, maxSlots: 7 }).settings.maxSlots, 7);
     assert.deepEqual(load({ slots: 12 }), { settings: { ...DEFAULTS, slots: 12 }, warnings: [] });
     const below = load({ slots: 4, maxSlots: 3 });
-    assert.deepEqual([below.settings.maxSlots, below.settings.userSet.maxSlots], [null, false]);
-    assert.deepEqual(below.warnings, ["setting ignored: maxSlots is 3, needs a whole number of at least slots (4), not set"]);
-    for (const bad of [0, 2.5, -1, "4", null]) {
+    assert.deepEqual([below.settings.maxSlots, below.settings.userSet.maxSlots], [4, true]);
+    assert.deepEqual(below.warnings, [
+        "setting ignored: maxSlots is 3, needs a whole number of at least slots (4), so the most is slots: no extra slots until it is fixed",
+    ]);
+    // Without slots in the file, a maxSlots below the default slots is below slots too.
+    assert.deepEqual(load({ maxSlots: 1 }).warnings, [
+        "setting ignored: maxSlots is 1, needs a whole number of at least slots (2), so the most is slots: no extra slots until it is fixed",
+    ]);
+    for (const bad of [1, 0, 2.5, -1, "3", "4", null]) {
         const { settings, warnings } = load({ maxSlots: bad });
-        assert.equal(settings.maxSlots, null, String(bad));
-        assert.equal(settings.userSet.maxSlots, false, String(bad));
-        assert.deepEqual(warnings, [`setting ignored: maxSlots is ${JSON.stringify(bad)}, needs a whole number of 1 or more, not set`]);
+        assert.deepEqual([settings.maxSlots, settings.userSet.maxSlots], [2, true], String(bad));
+        assert.equal(warnings.length, 1, String(bad));
+        assert.match(warnings[0], new RegExp(`^setting ignored: maxSlots is ${JSON.stringify(bad)}, needs a whole number `
+            + "(of 1 or more|of at least slots \\(2\\)), so the most is slots: no extra slots until it is fixed$"), String(bad));
     }
+});
+
+test("capacityOf: a maxSlots in the file that does not fit gives no extra slots, never the automatic number", () => {
+    for (const bad of [1, 0, "3", 2.5, null]) {
+        const plan = capacityOf(load({ maxSlots: bad }).settings, 10);
+        assert.deepEqual([planFields(plan), plan.reason], [{ base: 2, max: 2, source: "maxSlots" }, "2, set in settings"], String(bad));
+    }
+    assert.deepEqual(planFields(capacityOf(load({ slots: 3, maxSlots: 2 }).settings, 16)), { base: 3, max: 3, source: "maxSlots" }, "below slots");
 });
 
 test("capacityOf: the plan of the loaded settings for a core count", () => {

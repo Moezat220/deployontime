@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { capacityPlan } from "./capacity.mjs";
 import {
-    baseTaken, blockReason, blockText, decide, extraInQuestion, gateBlocks, gateReason, shouldGiveUp, slotRoom, startCrowded,
-    takenText,
+    baseTaken, blockReason, blockText, decide, extraInQuestion, gateBlocks, gateReason, NOT_JUDGED, shouldGiveUp, slotRoom,
+    startCrowded, takenText,
 } from "./gate.mjs";
 
 const MINUTE = 60_000;
@@ -101,9 +101,12 @@ test("slotRoom: refuses an extra slot when a job started within the settle windo
     assert.deepEqual(slotRoom({ holders: [ran(40), ran(4)], busyCpuPct: 20, now: NOW }, ROOMY), {
         max: 2, extra: false, why: "no extra slot: a job started 4 s ago, extra slots wait 10 s after a start", waitMs: 6000,
     });
-    // A job that has taken its slot but not started yet counts from when it took the slot.
-    const justTaken = { label: "docs-site: build", at: NOW - 2000 };
-    assert.equal(slotRoom({ holders: [ran(40), justTaken], busyCpuPct: 20, now: NOW }, ROOMY).extra, false);
+    // A job that has taken its slot but not started yet counts as starting now, however long ago it took the slot:
+    // an isolated run makes its worktree in between.
+    const claimed = { label: "docs-site: build", at: NOW - 30_000 };
+    assert.deepEqual(slotRoom({ holders: [ran(40), claimed], busyCpuPct: 20, now: NOW }, ROOMY), {
+        max: 2, extra: false, why: "no extra slot: a job started 0 s ago, extra slots wait 10 s after a start", waitMs: 10_000,
+    });
     const nested = [{ startedAt: NOW - 3000 }, { waiting: true, at: NOW }];
     assert.equal(slotRoom({ holders: [ran(40), ran(30)], nested, busyCpuPct: 20, now: NOW }, ROOMY).extra, false);
     assert.equal(slotRoom({ holders: [ran(40), ran(30)], nested: nested.slice(1), busyCpuPct: 20, now: NOW }, ROOMY).extra, true,
@@ -169,6 +172,9 @@ test("startCrowded: a job in an extra slot gives it back when another job took a
     assert.equal(startCrowded({ holders: [inSlot(0, 40), inSlot(1, 30), own], mine, now: NOW }, ROOMY), false);
     const nested = [{ startedAt: NOW - 1000 }];
     assert.equal(startCrowded({ holders: [inSlot(0, 40), inSlot(1, 30), own], nested, mine, now: NOW }, ROOMY), true);
+    const claimed = { label: "docs-site: build", at: NOW - 30_000, file: "/state/slots/slot-0.json" };
+    assert.equal(startCrowded({ holders: [claimed, inSlot(1, 40), own], mine, now: NOW }, ROOMY), true,
+        "a job that claimed its slot first but has not started yet counts as starting now");
     const base = { ...own, file: "/state/slots/slot-0.json" };
     assert.equal(startCrowded({ holders: [quick, base], mine: base.file, now: NOW }, ROOMY), false, "a base slot is never given back");
 });
@@ -179,20 +185,33 @@ test("gateBlocks: full slots say why no extra slot is given, and count the extra
     assert.equal(gateReason({ holders, health: { ok: true, blocks: [] }, room, base: 2 }, room.max),
         'no free slot: 2 of 2 taken, by "shop-api: lint" and "docs-site: build"; '
             + "no extra slot: a job started 4 s ago, extra slots wait 10 s after a start");
-    const three = [...holders, ran(2, "mobile-app: bundle")];
+    const three = [inSlot(0, 40), { ...inSlot(1, 4), label: "docs-site: build" }, { ...inSlot(2, 2), label: "mobile-app: bundle" }];
     const hot = slotRoom({ holders: three, busyCpuPct: 75, now: NOW }, ROOMY);
     assert.deepEqual(blockReason({ holders: three, health: null, room: hot, base: 2 }, hot.max), [{
         gate: "slots",
-        text: 'no free slot: 3 taken (2 + 1 extra while the CPU has room), by "shop-api: lint" and "docs-site: build" and '
+        text: 'no free slot: 3 taken (2 of 2 base, 1 extra), by "shop-api: lint" and "docs-site: build" and '
             + '"mobile-app: bundle"; no extra slot: CPU 75% busy now, extra slots only below 60%',
     }]);
     const open = slotRoom({ holders: [ran(40), ran(30)], busyCpuPct: 20, now: NOW }, ROOMY);
     assert.equal(gateReason({ holders: [ran(40), ran(30)], health: { ok: true, blocks: [] }, room: open, base: 2 }, open.max), "");
 });
 
-test("takenText: the plain count, or the base and extra slots apart", () => {
-    assert.equal(takenText(1, 2), "1 of 2 taken");
-    assert.equal(takenText(2, 2), "2 of 2 taken");
-    assert.equal(takenText(3, 2), "3 taken (2 + 1 extra while the CPU has room)");
-    assert.equal(takenText(5, 5, 2), "5 taken (2 + 3 extra while the CPU has room)");
+test("takenText: the plain count, or the base and extra slots apart, counted by slot file", () => {
+    const held = (...numbers) => numbers.map((n) => inSlot(n, 40));
+    assert.equal(takenText(held(0), 2), "1 of 2 taken");
+    assert.equal(takenText(held(1, 0), 2), "2 of 2 taken");
+    assert.equal(takenText(held(0, 1, 2), 2), "3 taken (2 of 2 base, 1 extra)", "no word on the CPU, which may be busy by now");
+    assert.equal(takenText(held(0, 1, 2, 3, 4), 2), "5 taken (2 of 2 base, 3 extra)");
+    assert.equal(takenText(held(1, 2), 2), "2 taken (1 of 2 base, 1 extra)", "a base slot free while a job holds an extra one");
+    assert.equal(takenText([ran(40), ran(30)], 2), "2 of 2 taken", "holders without a slot file count as in base slots");
+});
+
+test("slotRoom: with the live CPU reading left out on purpose, an extra slot in question is neither given nor refused", () => {
+    const holders = [inSlot(0, 40), inSlot(1, 30)];
+    assert.deepEqual(slotRoom({ holders, cpuAsked: false, now: NOW }, ROOMY), { max: 2, extra: false, why: NOT_JUDGED });
+    assert.equal(NOT_JUDGED, "an extra slot is judged on the live CPU reading once a job waits");
+    const full = [...holders, inSlot(2, 20), inSlot(3, 15)];
+    assert.equal(slotRoom({ holders: full, cpuAsked: false, now: NOW }, ROOMY).why, "no extra slot: all 4 slots taken, extra ones included");
+    assert.deepEqual(slotRoom({ holders: [inSlot(1, 40), inSlot(2, 1)], cpuAsked: false, now: NOW }, ROOMY),
+        { max: 3, limit: 2, extra: false, why: null }, "a free base slot needs no CPU reading");
 });

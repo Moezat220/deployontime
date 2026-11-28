@@ -127,6 +127,10 @@ function misfit(name, fallback, value) {
     if (typeof value !== "string" || value === "") return "a regular expression as text";
     try { new RegExp(value); return null; } catch { return "a valid regular expression"; }
 }
+// What a maxSlots in the file that does not fit gives instead: never the automatic number, which may be higher than the
+// user wanted.
+const NO_EXTRA = "so the most is slots: no extra slots until it is fixed";
+
 /** The settings of defaults, each replaced by the one in given when it fits. accepted gets the name of each one. */
 function overlay(defaults, given, prefix, warn, accepted = new Set()) {
     const out = {};
@@ -140,7 +144,7 @@ function overlay(defaults, given, prefix, warn, accepted = new Set()) {
         }
         const needs = value === undefined ? null : misfit(name, fallback, value);
         if (needs) {
-            const kept = fallback === null ? "not set" : `default ${JSON.stringify(fallback)} kept`;
+            const kept = name === "maxSlots" ? NO_EXTRA : fallback === null ? "not set" : `default ${JSON.stringify(fallback)} kept`;
             warn(`setting ignored: ${name} is ${JSON.stringify(value)}, needs ${needs}, ${kept}`);
         }
         if (value !== undefined && !needs) accepted.add(name);
@@ -152,9 +156,10 @@ function overlay(defaults, given, prefix, warn, accepted = new Set()) {
     return out;
 }
 
-/** The settings in force. A value that does not fit is replaced by its default, with one warning per process. The
- *  settings also carry userSet, { slots, maxSlots }, true for each of the two that the settings file sets to a value
- *  that fits, so capacityOf() can tell a slot count the user chose from the default. It is not enumerable, so the
+/** The settings in force. A value that does not fit is replaced by its default, with one warning per process; a
+ *  maxSlots that does not fit, also one below slots, is replaced by slots instead. The settings also carry userSet,
+ *  { slots, maxSlots }: slots true when the settings file sets slots to a value that fits, maxSlots true when the
+ *  file has maxSlots at all, so capacityOf() can tell a slot count the user chose from the default. It is not enumerable, so the
  *  settings still compare equal to DEFAULTS when the file sets nothing. */
 export function loadSettings(env = process.env, { configText, warn = warnOnce } = {}) {
     const problem = (kind, code) => warn(kind === "invalid"
@@ -169,11 +174,13 @@ export function loadSettings(env = process.env, { configText, warn = warnOnce } 
     const settings = overlay(DEFAULTS, given, "", warn, accepted);
     settings.slots = Math.floor(settings.slots);
     if (settings.maxSlots !== null && settings.maxSlots < settings.slots) {
-        warn(`setting ignored: maxSlots is ${settings.maxSlots}, needs a whole number of at least slots (${settings.slots}), not set`);
-        settings.maxSlots = null;
+        warn(`setting ignored: maxSlots is ${settings.maxSlots}, needs a whole number of at least slots (${settings.slots}), ${NO_EXTRA}`);
         accepted.delete("maxSlots");
     }
-    const userSet = { slots: accepted.has("slots"), maxSlots: accepted.has("maxSlots") };
+    // A maxSlots in the file counts as set, also one that does not fit: that one is slots, so no extra slots.
+    const maxGiven = Object.hasOwn(given, "maxSlots");
+    if (maxGiven && !accepted.has("maxSlots")) settings.maxSlots = settings.slots;
+    const userSet = { slots: accepted.has("slots"), maxSlots: maxGiven };
     Object.defineProperty(settings, "userSet", { value: userSet, enumerable: false });
     return settings;
 }

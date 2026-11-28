@@ -714,7 +714,7 @@ async function runInLine(job, waitDeps, deps) {
         rmSync(ticket, { force: true });
         if (waited.extra) {
             journal.addDetails({ extraSlot: true });
-            deps.say(`extra slot: starts beyond the ${settings.slots} base slots while the CPU has room`);
+            deps.say(`extra slot: starts beyond the ${settings.slots} base slot${settings.slots === 1 ? "" : "s"} while the CPU has room`);
         }
         return await runJob({ ...job, waitFrom: waited.waitFrom }, slot, deps);
     } finally {

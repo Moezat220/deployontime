@@ -7,20 +7,29 @@ import { extraInQuestion as extraAsked, extraSlotVerdict, tooSoonAfter } from ".
 import { slotNumber } from "./slots.mjs";
 import { MINUTE } from "./units.mjs";
 
-/** How many holders are in base slots. A holder without a slot file name counts as one in a base slot. */
-export const baseTaken = (holders, base) => holders.filter((h) => !(slotNumber(h.file) >= base)).length;
+/** True when the holder is in an extra slot: its slot file is numbered base or higher. A holder without a slot file
+ *  name counts as one in a base slot. */
+export const inExtraSlot = (holder, base) => slotNumber(holder.file) >= base;
+
+/** How many holders are in base slots. */
+export const baseTaken = (holders, base) => holders.filter((h) => !inExtraSlot(h, base)).length;
 
 /** True when the base slots are all taken and an extra slot is left, so the live CPU reading decides. holders: the
  *  slot holders as snapshot() gives them. plan: from capacityPlan(). */
 export const extraInQuestion = (holders, plan) =>
     extraAsked({ plan, taken: holders.length, baseTaken: baseTaken(holders, plan.base) });
 
-/** The newest start among the slot holders and the running nested runs, in ms, or null when there is none. */
-function lastStart(holders, nested) {
-    const starts = [...holders.map((h) => h.startedAt ?? h.at), ...nested.filter((n) => !n.waiting).map((n) => n.startedAt)];
+/** The newest start among the slot holders and the running nested runs, in ms, or null when there is none. A holder
+ *  that has claimed its slot but not started yet counts as starting now: an isolated run first makes its worktree,
+ *  which can take longer than the settle time. */
+function lastStart(holders, nested, now) {
+    const starts = [...holders.map((h) => h.startedAt ?? now), ...nested.filter((n) => !n.waiting).map((n) => n.startedAt)];
     const known = starts.filter(Number.isFinite);
     return known.length ? Math.max(...known) : null;
 }
+
+// What slotRoom() says of an extra slot when the live CPU reading was left out on purpose.
+export const NOT_JUDGED = "an extra slot is judged on the live CPU reading once a job waits";
 
 /** How many slots may be filled now. Returns { max, extra, why }: max is the slot count for decide() and gateBlocks();
  *  extra is true when the next slot to be taken is an extra one; why says why an extra slot is or is not given, or is
@@ -29,13 +38,16 @@ function lastStart(holders, nested) {
  *  judged apart from this and applies to every slot. A base slot that is free while jobs hold extra slots is taken
  *  as a base slot: the answer then also carries limit, the number of slots takeSlot() may look at, so only a base
  *  slot is claimed. While only the settle time holds an extra slot back, the answer carries waitMs, the time until
- *  it has passed. plan: from capacityPlan(). */
-export function slotRoom({ holders, nested = [], busyCpuPct = null, now }, plan) {
+ *  it has passed. cpuAsked: false when the live CPU reading was left out on purpose, as `status` does while nobody
+ *  waits; an extra slot that is in question is then neither given nor refused, and why says so. plan: from
+ *  capacityPlan(). */
+export function slotRoom({ holders, nested = [], busyCpuPct = null, cpuAsked = true, now }, plan) {
     const { base } = plan;
     const taken = holders.length;
     if (taken < base || plan.max <= base) return { max: base, extra: false, why: null };
     if (baseTaken(holders, base) < base) return { max: taken + 1, limit: base, extra: false, why: null };
-    const verdict = extraSlotVerdict({ plan, taken, cpuBusyPct: busyCpuPct, lastStartMs: lastStart(holders, nested), now });
+    if (!cpuAsked && taken < plan.max) return { max: taken, extra: false, why: NOT_JUDGED };
+    const verdict = extraSlotVerdict({ plan, taken, cpuBusyPct: busyCpuPct, lastStartMs: lastStart(holders, nested, now), now });
     if (!verdict.allowed) {
         const wait = verdict.waitMs ? { waitMs: verdict.waitMs } : {};
         return { max: Math.min(taken, plan.max), extra: false, why: verdict.reason, ...wait };
@@ -56,7 +68,7 @@ export function startCrowded({ holders, nested = [], mine, now }, plan) {
     const first = (h) => h.at < own.at || (h.at === own.at && slotNumber(h.file) < slotNumber(own.file));
     const before = holders.filter((h) => h !== own && first(h));
     const nestedBefore = nested.filter((n) => !n.waiting && n.startedAt <= own.at);
-    return tooSoonAfter({ plan, lastStartMs: lastStart(before, nestedBefore), now });
+    return tooSoonAfter({ plan, lastStartMs: lastStart(before, nestedBefore, now), now });
 }
 
 /** Returns { go, position }: go when this pid is first in line and a slot is free. */
@@ -66,11 +78,12 @@ export function decide({ holders, queue }, pid, max) {
     return { go: position === 1 && index === 0 && holders.length < max, position };
 }
 
-/** "2 of 2 taken", or "3 taken (2 + 1 extra while the CPU has room)" while jobs hold extra slots. base: the base slot
- *  count, max when not given. */
-export function takenText(taken, max, base = max) {
-    if (taken <= base) return `${taken} of ${max} taken`;
-    return `${taken} taken (${base} + ${taken - base} extra while the CPU has room)`;
+/** "2 of 2 taken", or "3 taken (2 of 2 base, 1 extra)" while jobs hold extra slots, counted by slot file as
+ *  inExtraSlot() does, so a base slot that is free while jobs hold extra slots shows as free. base: the base slot
+ *  count. */
+export function takenText(holders, base) {
+    const taken = holders.length, extra = taken - baseTaken(holders, base);
+    return extra ? `${taken} taken (${taken - extra} of ${base} base, ${extra} extra)` : `${taken} of ${base} taken`;
 }
 
 /** Everything that keeps a new job from starting, as [{ gate, text }]. ahead = waiters in front of the caller. room,
@@ -80,7 +93,7 @@ export function gateBlocks({ holders, health, ahead = 0, room = null, base }, ma
     if (holders.length >= max) {
         const names = holders.map((h) => `"${h.label}"`).join(" and ");
         const why = room?.why ? `; ${room.why}` : "";
-        blocks.push({ gate: "slots", text: `no free slot: ${takenText(holders.length, max, base)}, by ${names}${why}` });
+        blocks.push({ gate: "slots", text: `no free slot: ${takenText(holders, base ?? max)}, by ${names}${why}` });
     }
     if (health && !health.ok) blocks.push(...health.blocks);
     if (!blocks.length && ahead > 0) blocks.push({ gate: "line", text: `not first in line: ${ahead} ahead` });

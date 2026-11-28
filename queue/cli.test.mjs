@@ -16,7 +16,7 @@ import {
 isolateProcess("cli");
 const { historyRow, main, statusLines } = await import("./cli.mjs");
 const { USAGE } = await import("./args.mjs");
-const { takeSlot } = await import("./slots.mjs");
+const { takeSlot, updateSlot } = await import("./slots.mjs");
 const { alive } = await import("./proctree.mjs");
 const { DEFAULTS } = await import("./settings.mjs");
 
@@ -100,13 +100,22 @@ test("statusLines: one line per running job, per waiting job and for the gate", 
     ]);
 });
 
-test("statusLines: a job in an extra slot says so only while more jobs than the base slots hold slots", () => {
+test("statusLines: a job in an extra slot says so, and the count names a free base slot while jobs hold extra slots", () => {
     const now = Date.UTC(2031, 5, 9, 10, 0);
-    const base = { label: "docs-site: build", pid: 3101, startedAt: now - 23 * MINUTE };
-    const extra = { label: "shop-api: lint", pid: 3103, startedAt: now - 2 * MINUTE, extra: true };
-    const line = (holders) => statusLines({ holders, queue: [], gate: "", max: 1, now }).find((l) => l.includes("shop-api: lint"));
-    assert.match(line([base, extra]), /: pid 3103, extra slot, /);
-    assert.doesNotMatch(line([extra]), /extra slot/, "once the base job ended, its job is the only one and in no extra slot by count");
+    const inSlot = (n, fields) => ({ file: `/state/slots/slot-${n}.json`, startedAt: now - 2 * MINUTE, ...fields });
+    const first = inSlot(0, { label: "docs-site: build", pid: 3101 });
+    const second = inSlot(1, { label: "mobile-app: bundle", pid: 3102 });
+    const extra = inSlot(2, { label: "shop-api: lint", pid: 3103, extra: true });
+    const show = (holders) => statusLines({ holders, queue: [], gate: "", max: 2, now });
+    const line = (holders) => show(holders).find((l) => l.includes("shop-api: lint"));
+    assert.match(line([first, second, extra]), /: pid 3103, extra slot, /);
+    assert.equal(show([first, second, extra])[0], "slots: 3 taken (2 of 2 base, 1 extra), 0 waiting");
+    assert.doesNotMatch(show([first, second])[1], /extra slot/);
+    // The job in slot-0 ended: a base slot is free, and the line says so next to an open gate.
+    assert.deepEqual([show([second, extra])[0], line([second, extra]), show([second, extra]).at(-1)], [
+        "slots: 2 taken (1 of 2 base, 1 extra), 0 waiting", 'running "shop-api: lint": pid 3103, extra slot, 2 min so far, limit unknown',
+        "gate: open",
+    ]);
 });
 
 test("statusLines: a nested run is shown under the job it runs in and is not counted as taking a slot", () => {
@@ -313,12 +322,12 @@ test("run: with the base slot taken and the CPU reading low, the next job starts
     const job = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", untilFile(release)]);
     await until(() => slots(box).some((s) => s.extra && s.pgid));
     const status = (await cli(box, ["status"])).stdout.split("\n");
-    assert.equal(status[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting; "
+    assert.equal(status[0], "slots: 2 taken (1 of 1 base, 1 extra), 0 waiting; "
         + "up to 2 while the CPU has room (maxSlots set in settings)");
     assert.match(status.find((line) => line.startsWith('running "shop-api: lint"')), /: pid \d+, extra slot, kind lint, /);
     writeFileSync(release, "");
     assert.equal((await job.done).code, 0);
-    assert.equal(job.seen.stderr, "dotime-queue: extra slot: starts beyond the 1 base slots while the CPU has room\n");
+    assert.equal(job.seen.stderr, "dotime-queue: extra slot: starts beyond the 1 base slot while the CPU has room\n");
     assert.deepEqual(journal(box).map((line) => [line.label, line.outcome, line.extraSlot]), [["shop-api: lint", "ran", true]]);
 });
 
@@ -335,13 +344,16 @@ test("run: with the base slot taken and the CPU reading high, the next job waits
 });
 
 test("run: right after a job started, the next one waits for the settle time before it takes an extra slot", async (t) => {
-    // A settle time of 4 s leaves the new job time to start and say why it waits, also on a busy computer.
-    const box = sandbox({ config: { ...EXTRA, pollMs: 200, extraSlotSettleSec: 4 } }), release = join(box.work, "release");
+    // A settle time far longer than a slow start, so the new job surely waits; the test then moves the start back.
+    const box = sandbox({ config: { ...EXTRA, pollMs: 200, extraSlotSettleSec: 600 } }), release = join(box.work, "release");
     t.after(feedCpuReading(box.home, 12));
-    takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() }, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
+    const dirs = { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") };
+    const held = takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() }, dirs);
     const job = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", untilFile(release)]);
-    await until(() => job.seen.stderr.includes("in line"));
-    assert.match(job.seen.stderr, /no extra slot: a job started [0-3] s ago, extra slots wait 4 s after a start\n$/);
+    const waits = /in line: .*; no extra slot: a job started \d+ s ago, extra slots wait 600 s after a start$/m;
+    await until(() => waits.test(job.seen.stderr), 20_000);
+    assert.equal(slots(box).length, 1, "it waits");
+    assert.equal(updateSlot(held, process.pid, { startedAt: Date.now() - 20 * MINUTE }), true);
     await until(() => slots(box).some((s) => s.extra && s.pgid));
     writeFileSync(release, "");
     assert.equal((await job.done).code, 0);
@@ -359,6 +371,8 @@ test("run: six light jobs at once fill the base slots, then extra slots one sett
     await until(() => started().length === 4, 20_000);
     const held = slots(box).sort((a, b) => a.startedAt - b.startedAt);
     assert.deepEqual(held.map((s) => !!s.extra), [false, false, true, true], "two base slots, then two extra slots");
+    // A slot claimed but not started counts as a start, so each extra slot is claimed only a settle time after the job
+    // before it started, and that job had started by then.
     assert.equal(held[2].at - held[1].startedAt >= 1500, true, "the first extra slot waits the settle time after the last start");
     assert.equal(held[3].at - held[2].startedAt >= 1500, true, "the second extra slot waits the settle time after the first");
     // With the CPU now busy, no extra slot is given, but the base slot a job frees is taken at once.

@@ -303,17 +303,19 @@ cores or fewer, `up to 8 while the CPU has room (half of 16 cores)` on a larger 
 `up to 6 while the CPU has room (maxSlots set in settings)` when the settings file sets the number; see
 [Extra slots](#extra-slots). For example `slots: 1 of 2 taken, 0 waiting; 2, this computer has 4 cores`.
 
-While jobs hold [extra slots](#extra-slots), the first line counts them apart, for example
-`slots: 3 taken (2 + 1 extra while the CPU has room), 1 waiting; up to 8 while the CPU has room (half of 16 cores)`,
-and each job in an extra slot says `extra slot`.
-Once the base slots are taken, the gate line also says why an extra slot is or is not given, for example
-`gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%` or
+While jobs hold [extra slots](#extra-slots), the first line counts the base and extra slots apart, for example
+`slots: 3 taken (2 of 2 base, 1 extra), 1 waiting; up to 8 while the CPU has room (half of 16 cores)`, or
+`2 taken (1 of 2 base, 1 extra)` when a base slot is free again, and each job in an extra slot says `extra slot`.
+Once the base slots are taken and a job waits in line, the gate line also says why an extra slot is or is not given,
+for example `gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%` or
 `gate: shut; no free slot: 2 of 2 taken, by "shop-api: lint" and "docs-site: build"; no extra slot: a job started 4 s
-ago, extra slots wait 5 s after a start`.
+ago, extra slots wait 5 s after a start`. While nobody waits, no extra slot is in question, so `status` takes no live
+CPU reading for one and the gate line ends with `an extra slot is judged on the live CPU reading once a job waits`.
 
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
-its limit, or the base slots are all taken and an extra slot is left, memory, disk and battery do not already hold a
+its limit, or a job waits while the base slots are all taken and an extra slot is left, memory, disk and battery do
+not already hold a
 job, and `health.json` holds no usable CPU times up to 5 seconds old, that reading takes about a second longer, while
 the CPU is measured. With a base slot free and the load inside its limit, `status` does not measure the CPU. CPU times
 younger than half a second make it wait only for the rest of the half second.
@@ -836,17 +838,22 @@ slots the computer has, but only when at that moment:
   `extraSlotCpuPct` percent busy; and
 - no job has started in the last `extraSlotSettleSec` seconds, so a job that just started has time to show its real
   load before another one joins. Every start counts: in a base slot, in an extra slot, and of a nested run, which
-  counts from the moment it starts to run.
+  counts from the moment it starts to run. A job that has taken its slot but not started yet, such as an isolated
+  run that is still making its worktree, counts as starting now.
 
 The most slots comes from one of three places, in this order:
 
-- `maxSlots` set in the settings file: that number, which must be at least `slots`.
+- `maxSlots` set in the settings file: that number, which must be at least `slots`. A `maxSlots` that does not fit,
+  such as `0`, `"3"` or a number below `slots`, gives exactly `slots`, with a warning: no extra slots until it is
+  fixed, never the automatic number.
 - `slots` set in the settings file, without `maxSlots`: exactly `slots`, so no extra slots. A slot count you chose is
   never raised, also when it is the same number as the default.
 - Neither set: half the cores, at least 2. A computer with 5 cores or fewer therefore has exactly the 2 default slots
   and no extra slots, and runs as if extra slots did not exist: no live CPU reading for them, no other messages.
 
-What counts is whether the file sets the key to a value that fits, not whether the value equals the default.
+What counts is whether the file sets the key, not whether the value equals the default. Inside a container whose CPU
+share is limited, the core count and the CPU reading may describe the host, so set `slots` (and `maxSlots`) yourself
+there.
 `status` names the source at the end of its first line, and `queue_status` of the
 [MCP server](../README.md#use-with-an-mcp-client) gives it as `base` (the base slots), `max` (the most slots) and
 `source` (`maxSlots`, `slots` or `cores`). The rules live in `capacity.mjs`, which is handed only numbers, so the
@@ -1076,7 +1083,7 @@ default. Only a missing file is silent.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `slots` | 2 | Jobs that may run at once: the base slots, always there. Set in this file without `maxSlots`, it is the exact number: no extra slots. At least 1; a fraction is rounded down. |
-| `maxSlots` | not set | The most jobs that may run at once, [extra slots](#extra-slots) included. Not set, it is half the cores, at least 2, while `slots` is not set either, and exactly `slots` when it is. The same number as `slots` turns extra slots off. A whole number, at least `slots`. |
+| `maxSlots` | not set | The most jobs that may run at once, [extra slots](#extra-slots) included. Not set, it is half the cores, at least 2, while `slots` is not set either, and exactly `slots` when it is. The same number as `slots` turns extra slots off. A whole number, at least `slots`. A value that does not fit gives exactly `slots`, with a warning. |
 | `extraSlotCpuPct` | 60 | An extra slot is given only while the live CPU reading is below this percent busy. From 1 to 100. |
 | `extraSlotSettleSec` | 5 | An extra slot is given only when no job has started in this many seconds. |
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |

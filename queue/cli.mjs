@@ -6,7 +6,7 @@
 // that are due on each tick, and installs that tick. queue/README.md describes each in full.
 import { capacityOf, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
-import { extraInQuestion, gateReason, slotRoom, takenText } from "./gate.mjs";
+import { extraInQuestion, gateReason, inExtraSlot, slotRoom, takenText } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
 import { gitState, isRepository, repoTop } from "./git.mjs";
 import { findStamp, historyWindow, readLines, summarize } from "./journal.mjs";
@@ -37,20 +37,21 @@ const insideOf = (entry, h) => !!h.file && entry.outer === markerOf(h.file) && e
 
 /** The lines `status` prints. gate: the reason the gate is shut, or "". max: the base slot count. capacity, when
  *  given, is the plan of capacityPlan(): the slots line then ends with its reason. room, when given,
- *  is the slotRoom() answer: an open gate then also says why an extra slot is free. A job in an extra slot says so
- *  while more jobs than max hold slots, and the count names the extra slots then. nested: the nested runs, each
+ *  is the slotRoom() answer: an open gate then also says why an extra slot is free. A job in an extra slot, one whose
+ *  slot file is numbered max or higher, says so, and the count names the base and extra slots apart while any job
+ *  holds one. nested: the nested runs, each
  *  shown under the job whose slot or note, pid and start time it names in outer, outerPid and outerBorn, so a nested
  *  run inside a nested run is shown one step further in; they hold no slot and are not counted. One that waits for a
  *  place under its parent says so; its minutes count from when it began to wait, and once it runs, from when it
  *  started. */
 export function statusLines({ holders, queue, nested = [], gate, max, room = null, capacity = null, now = Date.now() }) {
     const why = capacity ? `; ${capacity.reason}` : "";
-    const lines = [`slots: ${takenText(holders.length, max)}, ${queue.length} waiting${why}`];
+    const lines = [`slots: ${takenText(holders, max)}, ${queue.length} waiting${why}`];
     for (const h of holders) {
         const began = h.startedAt ?? h.at;
         const ranMin = (now - began) / MINUTE;
         const facts = [`pid ${h.pid}`];
-        if (h.extra && holders.length > max) facts.push("extra slot");
+        if (inExtraSlot(h, max)) facts.push("extra slot");
         if (h.kind) facts.push(`kind ${h.kind}`);
         facts.push(`${minutesSince(began, now)} min so far`);
         if (h.limitMin == null) facts.push("limit unknown");
@@ -115,17 +116,18 @@ const DAYS_ERROR = "--days: needs a whole number of days, 1 or more";
 /** What `status` and `queue_status` show: { holders, queue, nested, gate, capacity, lines }. ctx: { settings, files,
  *  capacity }; capacity is the plan of capacityPlan(), capacityOf(settings) when not given. read is the health
  *  reading; it is handed { limits }, as for `run`, and the CPU times saved with the shared reading as cpuSince, which
- *  status reads but never writes. Only while the base slots are taken and an extra slot is left is it also handed
- *  liveCpu, so the live CPU reading, which can take a second, is taken only when it decides whether the next job may
- *  start. */
+ *  status reads but never writes. Only while a job waits in line, the base slots are taken and an extra slot is left
+ *  is it also handed liveCpu, so the live CPU reading, which can take a second, is taken only when it decides whether
+ *  the next job may start. While nobody waits, no extra slot is in question, and the gate line says it is judged
+ *  once a job waits. */
 export function statusView({ settings, files, capacity = capacityOf(settings) }, read = readHealth, now = Date.now) {
     const { holders, queue, nested } = snapshot({ dirs: files });
     const cpuSince = savedCpuTimes(files.healthCache);
-    const extra = extraInQuestion(holders, capacity);
+    const extra = queue.length > 0 && extraInQuestion(holders, capacity);
     const reading = read({ limits: settings.health, cpuSince, ...(extra ? { liveCpu: true } : {}) });
     const health = healthVerdict(reading, settings.health);
     const busyCpuPct = extra ? reading.busyCpuPct : null;
-    const room = slotRoom({ holders, nested, busyCpuPct, now: now() }, capacity);
+    const room = slotRoom({ holders, nested, busyCpuPct, cpuAsked: extra, now: now() }, capacity);
     const gate = gateReason({ holders, health, room, base: capacity.base }, room.max);
     const lines = statusLines({ holders, queue, nested, gate, max: capacity.base, room, capacity, now: now() });
     return { holders, queue, nested, gate, capacity, lines };
