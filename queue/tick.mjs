@@ -183,7 +183,7 @@ function tickJob(job, plan, now, jobs, files, deps) {
         const next = busy ? "not started now: the last run is still going" : "running once now";
         // One due time missed by a tick that came a few seconds late (a launchd StartInterval drifts against the clock)
         // is journalled and printed, but is no notice: only a real gap is worth interrupting someone for.
-        const jitter = count === 1 && now - newest <= GRACE_MS;
+        const jitter = count === 1 && now - newest < GRACE_MS;
         if (!jitter) {
             try {
                 deps.notify(`dotime: missed ${job.label}`, `${runs(count)} missed while the tick did not run; ${next}`);

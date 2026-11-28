@@ -172,6 +172,9 @@ test("tick: one due time missed by a tick a few seconds late gets its journal li
     const far = bench([job({ every: "1h", lastDue: iso(T0) })]);
     far.tick(T0 + 2 * 60 * MINUTE + 5 * MINUTE);
     assert.equal(far.seen.notices.length, 1, "one missed time that is minutes old is a real gap, and is told");
+    const two = bench([job({ every: "2m", lastDue: iso(T0) })]);
+    two.tick(T0 + 4 * MINUTE);
+    assert.equal(two.seen.notices.length, 1, "a 2-minute job off for one step is told, even on the exact minute");
 });
 
 test("tick: a gap with one due time only starts it, late, and reports nothing missed: that time was not skipped", () => {
