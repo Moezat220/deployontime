@@ -856,7 +856,7 @@ test("run: a process the command leaves behind keeps writing after the run retur
     let ticks = 0;
     child.stdout.on("data", (text) => { ticks += String(text).split("tick").length - 1; });
     const code = await new Promise((resolve) => child.on("exit", resolve));
-    const ms = Date.now() - began, pid = Number(readFileSync(pidFile, "utf8"));
+    const ms = Date.now() - began, pid = pidIn(pidFile);
     track(pid);
     try {
         assert.equal(code, 0);
