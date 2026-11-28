@@ -54,7 +54,7 @@ export function processGone(entry, {
     if (!holderPid(entry?.pid) || !isAlive(entry.pid)) return true;
     const same = sameTicks(entry.pid, entry, { readTicks, readBoot });
     if (same !== null) return !same;
-    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now, hasGroup, { readTicks: () => null });
+    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now, hasGroup, { readTicks: () => null, readBoot });
 }
 // Frees the file of a holder that is gone through the same claim as a lost run (lost.mjs), so a reader with an old
 // reading never removes the file of a newer holder; a file that could not be read is freed by freeBroken(). Without a
