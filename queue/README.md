@@ -1289,7 +1289,8 @@ started later, and when its pid is not a whole number above 1. On Linux each of 
 start in clock ticks since boot (`ticks`) and the boot it belongs to (`boot`, from `/proc/sys/kernel/random/boot_id`);
 while the boot is this one and the pid's own can be read, the ticks alone tell whether it is the same process, so a
 change of the wall clock cannot make a live holder look gone, and a new process after a restart that got the same pid
-and ticks is never taken for it.
+and ticks is never taken for it. A file whose boot is known and is not this one names a process that has ended,
+whatever its age says.
 
 Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`, `cwd`,
 `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`

@@ -3,7 +3,7 @@
 // lost on the way.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,8 @@ import { cleanEnv, git, isolateProcess, makeRepo, tempDir, track } from "./testk
 import { bootId, startTicks } from "./linux.mjs";
 
 isolateProcess("integrate");
-const { fastForward, worktreeLines } = await import("./integrate.mjs");
-const { gitRun } = await import("./worktree.mjs");
+const { cmdDiscard, cmdIntegrate, fastForward, worktreeLines } = await import("./integrate.mjs");
+const { gitRun, worktreesDir } = await import("./worktree.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url)), NODE = process.execPath;
 const WIDE_OPEN = { loadPerCore: 1000, minFreeMemPct: 0, minFreeDiskGB: 0, minBatteryPct: 0 };
@@ -368,6 +368,36 @@ test("discard: a job still marked running whose pid now names a process that sta
     const out = await cli(box, ["discard", job.id]);
     assert.equal(out.code, 0, out.stderr);
     assert.equal(existsSync(job.worktree), false);
+});
+
+test("integrate: the owner file of its temporary worktree keeps the start marks of the process, ticks and boot", async () => {
+    const box = sandbox();
+    const job = await isolated(box, "shop-api: edit", editLine(2, "TWO"));
+    const marks = { ticks: 41_000, boot: "1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b" };
+    const owners = [];
+    const run = async () => {
+        const dir = worktreesDir(box.home);
+        for (const name of readdirSync(dir).filter((n) => n.endsWith(".owner.json"))) owners.push(JSON.parse(readFileSync(join(dir, name), "utf8")));
+        return 0;
+    };
+    const said = [];
+    const code = await cmdIntegrate(["integrate", job.id, "--", ...PASS], { settings: {}, files: { home: box.home }, cwd: box.repo },
+        { say: (text) => said.push(text), run, env: box.env, marks });
+    assert.equal(code, 0, said.join("\n"));
+    assert.equal(owners.length, 1);
+    assert.deepEqual([owners[0].pid, owners[0].ticks, owners[0].boot], [process.pid, marks.ticks, marks.boot]);
+});
+
+test("discard: the running check is given the ticks and boot the job state keeps", async () => {
+    const box = sandbox();
+    const job = await isolated(box, "shop-api: look", PASS);
+    const kept = { ticks: 63_000, boot: "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d" };
+    editState(box, job.id, { outcome: "running", exit: null, pid: 4300, born: MY_BORN, ...kept });
+    const asked = [], said = [];
+    const same = (pid, born, marks) => { asked.push([pid, born, marks]); return true; };
+    const code = cmdDiscard(["discard", job.id, "--force"], { files: { home: box.home } }, { say: (text) => said.push(text), env: box.env, same });
+    assert.deepEqual([code, said], [2, [`discard: job ${job.id} is still running, pid 4300`]]);
+    assert.deepEqual(asked, [[4300, MY_BORN, kept]]);
 });
 
 test("integrate and discard never touch what an isolateLinks link points to", async () => {

@@ -44,7 +44,8 @@ function findJob(id, home) {
  *  passed on. When it passes, the checkout is fast-forwarded to the checked commit, or, when its HEAD moved in the
  *  meantime, left alone with exit 1. Only then are the temporary worktree, the job's worktree and its branch removed,
  *  the branch with `git branch -d`. A job whose branch is already in the checkout's HEAD is just removed. Every
- *  failure keeps the job. ctx: { settings, files, cwd }. deps: { say, run, env, now }. */
+ *  failure keeps the job. ctx: { settings, files, cwd }. deps: { say, run, env, now, marks }; marks: the start
+ *  marks the owner file keeps, this process's own (MARKS) when not given. */
 export async function cmdIntegrate(args, ctx, deps) {
     const { say } = deps;
     const env = deps.env ?? process.env;
@@ -145,7 +146,7 @@ export async function cmdIntegrate(args, ctx, deps) {
         rmSync(ownerFile(ctx.files.home, name), { force: true });
     };
     try {
-        writeJsonAtomic(ownerFile(ctx.files.home, name), { pid: process.pid, born: BORN, ...MARKS, top: here.top, job: job.id });
+        writeJsonAtomic(ownerFile(ctx.files.home, name), { pid: process.pid, born: BORN, ...(deps.marks ?? MARKS), top: here.top, job: job.id });
     } catch (e) {
         say(`integrate: the owner file of the temporary worktree could not be written: ${e.message}; nothing was changed`);
         return 1;
@@ -201,7 +202,8 @@ export async function cmdIntegrate(args, ctx, deps) {
 /** `discard <id> [--force]`: removes the job's worktree and branch. Without --force it refuses, with exit 2 and
  *  nothing removed, while the branch has commits that are not in the job's base branch (or base commit), or the
  *  worktree has uncommitted changes, or the folder is there but git no longer knows it as a worktree. A folder git
- *  still lists but that is gone is forgotten (that one folder only). ctx: { files }. deps: { say, env }. */
+ *  still lists but that is gone is forgotten (that one folder only). ctx: { files }. deps: { say, env, same }; same:
+ *  sameProcess when not given. */
 export function cmdDiscard(args, ctx, deps) {
     const { say } = deps;
     const env = deps.env ?? process.env;

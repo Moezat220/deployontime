@@ -18,10 +18,14 @@ export function alive(pid) {
 }
 
 /** Whether the process with this pid started at the given clock tick since boot (see startTicks) of the given boot
- *  (see bootId): true or false, or null when ticks or boot is not given, when the boot is not this one (a pid and its
- *  ticks may come again after a restart), or when the pid's own ticks cannot be read, as on macOS. */
+ *  (see bootId): false when the given boot and this one are both known and differ, since a process of another boot
+ *  has ended (a pid and its ticks may come again after a restart); else true or false, or null when ticks or boot is
+ *  not given, when this boot cannot be read, or when the pid's own ticks cannot be read, as on macOS. */
 export function sameTicks(pid, { ticks, boot } = {}, { readTicks = startTicks, readBoot = bootId } = {}) {
-    if (!Number.isInteger(ticks) || typeof boot !== "string" || !boot || readBoot() !== boot) return null;
+    const known = (id) => typeof id === "string" && id !== "";
+    const here = readBoot();
+    if (known(boot) && known(here) && here !== boot) return false;
+    if (!Number.isInteger(ticks) || !known(boot) || !known(here)) return null;
     const own = readTicks(pid);
     return Number.isInteger(own) ? own === ticks : null;
 }
@@ -34,7 +38,8 @@ export function sameTicks(pid, { ticks, boot } = {}, { readTicks = startTicks, r
  *  a live pid whose age alone disagrees still counts as the same while its group has a member (hasGroup). ticks: the
  *  start of the process in clock ticks since boot, kept on Linux (startTicks), and boot the boot they count from
  *  (bootId); when both are given, the boot is this one (readBoot) and the pid's own ticks can be read (readTicks), the
- *  ticks alone decide, whatever the wall clock says. */
+ *  ticks alone decide, whatever the wall clock says. A process kept with another boot than this one is gone, also when
+ *  strict and whatever its age; only when either boot is unknown does the age decide. */
 export function sameProcess(pid, startedAt, {
     isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)), strict = false, group, hasGroup = (pgid) => alive(-pgid), now = Date.now(),
     ticks, boot, readTicks = startTicks, readBoot = bootId,

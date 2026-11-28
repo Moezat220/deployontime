@@ -285,12 +285,14 @@ test("snapshot, processGone: other ticks are a reused pid even when the age agre
     assert.deepEqual(readdirSync(dirs.slots), [], "the reused pid's slot is free");
 });
 
-test("snapshot, processGone: after a restart equal pid and ticks name another process; without a boot the old rule decides", () => {
+test("snapshot, processGone: a holder kept with another boot is gone even when the age agrees; without a boot the old rule decides", () => {
     const born = 50_000_000, rebooted = { readBoot: () => "9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4", readTicks: () => 777_000 };
     const entry = claimed(born, 777_000);
-    // Another boot: the ticks say nothing, and a wall-clock age far off is a gone holder.
+    // Another boot: the holder ended with it, whatever its wall-clock age says.
     assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), ...rebooted }), true, "another boot, the age disagrees");
-    assert.equal(processGone(entry, { ...clockStep(entry, 0), ...rebooted }), false, "another boot, the age agrees");
+    assert.equal(processGone(entry, { ...clockStep(entry, 0), ...rebooted }), true, "another boot, the age agrees");
+    assert.equal(processGone({ ...entry, pgid: 4300 }, { ...clockStep(entry, 3_600_000), ...rebooted, hasGroup: () => true }), true,
+        "another boot, a group of that number lives");
     const dirs = newDirs();
     fs.mkdirSync(dirs.slots, { recursive: true });
     writeFileSync(join(dirs.slots, "slot-0.json"), JSON.stringify(entry));
