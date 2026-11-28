@@ -729,7 +729,10 @@ or `systemctl` call fails, `install` says so, removes the files it wrote and exi
 add with `crontab -e` and exits 1: the queue never edits your crontab. A `%` in a path is written as `%%` in the systemd
 units and as `\%` in the crontab line, and a `$` as `$$` in `ExecStart=`, so each means itself. The entry names the
 absolute paths of `node` and `cli.mjs` and passes on `PATH`, the state folder, and `DOTIME_TZ`, `DOTIME_NOTIFY` and
-`DOTIME_NOTIFY_CMD` when they are set, so run `install` from a shell in which your job commands are found. The tick's
+`DOTIME_NOTIFY_CMD` when they are set, so run `install` from a shell in which your job commands are found. For `node`
+it takes a `node` on `PATH` that leads to the running one, such as Homebrew's `/opt/homebrew/bin/node`, rather than
+the folder named for its version, so a node upgrade does not leave the entry pointing at nothing; after you switch to
+another node, run `install` again. The tick's
 own lines go to `schedule.log` in the state folder. **`uninstall`** stops and removes the entry; a crontab line is left
 for you to remove.
 

@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { localWall, localZone } from "./cron.mjs";
 import { cmdSchedule, newId } from "./schedule.mjs";
 import { BORN, processGone, snapshot } from "./slots.mjs";
-import { makeLog, runProgram, tickEnv, tickInstalled } from "./tick-install.mjs";
+import { makeLog, runProgram, stableNode, tickEnv, tickInstalled } from "./tick-install.mjs";
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 
@@ -254,7 +254,7 @@ export function scheduleDeps({ files }, zone, env = process.env) {
     const node = process.execPath;
     const install = {
         platform: process.platform, userHome: homedir(), uid: process.getuid?.(), run: runProgram, makeLog,
-        where: { node, cli: CLI_FILE, env: tickEnv(env, files.home), log: files.tickLog },
+        where: { node: stableNode(node, env.PATH), cli: CLI_FILE, env: tickEnv(env, files.home), log: files.tickLog },
     };
     return {
         now: Date.now, wall: localWall, zone, uid: process.getuid?.(), owner: { pid: process.pid, born: BORN },

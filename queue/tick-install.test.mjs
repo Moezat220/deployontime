@@ -4,11 +4,11 @@
 import { isolateProcess, tempDir } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 isolateProcess("tick-install");
-const { AGENT_LABEL, cmdInstall, cmdUninstall, cronLine, installPlan, makeLog, systemdUnits, tickEnv, tickInstalled, UNIT } =
+const { AGENT_LABEL, cmdInstall, cmdUninstall, cronLine, installPlan, makeLog, stableNode, systemdUnits, tickEnv, tickInstalled, UNIT } =
     await import("./tick-install.mjs");
 
 const WHERE = {
@@ -215,4 +215,19 @@ test("install on another platform: refused with a message and exit 1", () => {
 test("launchdPlist: values are escaped for XML", () => {
     const plan = installPlan({ ...WHERE, cli: "/opt/a&b/<cli>.mjs" }, stand("darwin").deps);
     assert.match(plan.files[0].text, /<string>\/opt\/a&amp;b\/&lt;cli&gt;\.mjs<\/string>/);
+});
+
+test("stableNode: the entry names a node on PATH that leads to the same file, as a package manager links it, so an upgrade keeps it working", () => {
+    const box = tempDir("tick-install-node");
+    const cellar = join(box, "Cellar", "node", "22.1.0", "bin");
+    const bin = join(box, "bin"), other = join(box, "other");
+    for (const dir of [cellar, bin, other]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(cellar, "node"), "");
+    writeFileSync(join(other, "node"), "");
+    symlinkSync(join(cellar, "node"), join(bin, "node"));
+    const real = join(cellar, "node");
+    assert.equal(stableNode(real, [other, "relative/bin", bin].join(":")), join(bin, "node"), "another node and a relative folder are passed over");
+    assert.equal(stableNode(real, other), real, "no node on PATH leads to it: the file itself");
+    assert.equal(stableNode(real, ""), real);
+    assert.equal(stableNode(join(box, "gone", "node"), bin), join(box, "gone", "node"), "a path that does not resolve is kept as it is");
 });

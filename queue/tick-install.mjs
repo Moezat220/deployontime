@@ -3,8 +3,8 @@
 // add to the crontab by hand, which is never edited here. The texts are pure functions; files and commands go through
 // deps, so tests use a made-up home folder and stand-ins for launchctl and systemctl.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { shellWord } from "./args.mjs";
 import { OWNER_ONLY } from "./timetable.mjs";
 
@@ -17,6 +17,21 @@ const PASSED_ON = ["PATH", "DOTIME_TZ", "DOTIME_NOTIFY", "DOTIME_NOTIFY_CMD"];
 export function runProgram(program, args) {
     const ran = spawnSync(program, args, { encoding: "utf8", timeout: 10_000 });
     return { status: ran.error ? null : ran.status, stdout: ran.stdout ?? "", stderr: ran.stderr ?? ran.error?.message ?? "" };
+}
+
+/** The node the system entry names. process.execPath is the resolved file, which a package manager may keep in a folder
+ *  named for its version (Homebrew: Cellar/node/<version>/bin/node), so an upgrade would leave the entry pointing at
+ *  nothing. A node on PATH that resolves to the same file keeps working after an upgrade, so the first such one is
+ *  used; when there is none, execPath. deps: { real } resolves a path, or throws. */
+export function stableNode(execPath, pathVar = "", { real = realpathSync } = {}) {
+    let target;
+    try { target = real(execPath); } catch { return execPath; }
+    for (const dir of String(pathVar).split(delimiter)) {
+        if (!dir || !isAbsolute(dir)) continue;
+        const candidate = join(dir, "node");
+        try { if (real(candidate) === target) return candidate; } catch { /* not there */ }
+    }
+    return execPath;
 }
 
 /** The environment the tick gets: PATH and the DOTIME_ variables that are set, and always the state folder. */
