@@ -15,7 +15,7 @@
 // that ran.
 import { randomBytes } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { readJson, STALE_TEMP_MS } from "./files.mjs";
 import { append, parseLines, readLines, record } from "./journal.mjs";
 
@@ -70,7 +70,8 @@ function journalled(entry, journalFile) {
 const part = (value) => (Number.isFinite(value) ? String(Math.round(value)) : "x");
 /** The claim name of the holder an entry names, the same for every process that claims it: its pid, start time, and
  *  the time its command started, or for a holder that never started, the time it took the slot. */
-const claimBase = (entry) => `${part(entry.pid)}-${part(entry.born)}-${Number.isFinite(entry.startedAt) ? part(entry.startedAt) : `at${part(entry.at)}`}`;
+export const claimBase = (entry) =>
+    `${part(entry.pid)}-${part(entry.born)}-${Number.isFinite(entry.startedAt) ? part(entry.startedAt) : `at${part(entry.at)}`}`;
 const baseOf = (file) => file.replace(/(\.claim|\.done|\.taken-[^/]*)$/, "");
 const sameEntry = (a, b) => !!a && !!b && a.pid === b.pid && a.born === b.born && a.at === b.at && a.startedAt === b.startedAt;
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
@@ -178,7 +179,11 @@ export function finishAbandoned(dirs, now = Date.now()) {
             if (!(name.endsWith(CLAIM_END) || name.includes(TAKEN)) || age <= STALE_TEMP_MS) continue;
             const mine = `${baseOf(file)}${TAKEN}${process.pid}-${randomBytes(4).toString("hex")}`;
             renameSync(file, mine);
-            const row = settle(mine, readJson(mine), dirs.journal, now);
+            // A claimer that died between its link and its own check can leave a claim named after a dead run that
+            // holds another, live holder's entry: such a claim is only removed, never settled as that run.
+            const entry = readJson(mine);
+            if (!entry || claimBase(entry) !== basename(baseOf(name))) { rmSync(mine, { force: true }); continue; }
+            const row = settle(mine, entry, dirs.journal, now);
             if (row) rows.push(row);
         } catch { /* another process finished it */ }
     }

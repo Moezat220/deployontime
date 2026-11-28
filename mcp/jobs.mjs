@@ -66,8 +66,9 @@ export function claimRerun(dir, id, next, now = Date.now(), notStarted = null) {
  *  START_GRACE_MS and its runner has not written a pid file yet. */
 export function runnerActive(job, now = Date.now(), check = sameProcess) {
     if (job.exit) return false;
-    // The runner leads a process group of its own, so its group is its pid.
-    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt, { group: job.pid.runnerPid });
+    // No group escape here: the runner's group is its own pid, so a reused pid that leads any group would bring a dead
+    // runner back to life. A clock step can only make a live runner look gone, which the caller treats as lost.
+    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt);
     return now - (Number(job.request?.createdAt) || 0) < START_GRACE_MS;
 }
 

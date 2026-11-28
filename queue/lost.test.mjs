@@ -10,7 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 isolateProcess("lost");
-const { claimPending, finishAbandoned, freeBroken, isLost, lostRow, recordLost, rerunOfEnv } = await import("./lost.mjs");
+const { claimBase, claimPending, finishAbandoned, freeBroken, isLost, lostRow, recordLost, rerunOfEnv } = await import("./lost.mjs");
 const { processGone, snapshot } = await import("./slots.mjs");
 const { sameProcess } = await import("./proctree.mjs");
 const { paths, DEFAULTS } = await import("./settings.mjs");
@@ -89,7 +89,7 @@ test("finishAbandoned: a claim left by a claimer that died is finished once it i
     const files = home();
     const { file } = putSlot(files, 0, 4247);
     mkdirSync(files.lost, { recursive: true });
-    const claim = join(files.lost, `4247-slot-0-1-ffff.claim`);
+    const claim = join(files.lost, `${claimBase(JSON.parse(readFileSync(file, "utf8")))}.claim`);
     renameSync(file, claim);
     assert.equal(claimPending(files, 4247), true);
     assert.deepEqual(finishAbandoned(files, Date.now()), [], "a young claim is a claimer still at work");
@@ -371,4 +371,15 @@ test("acceptance: status during a live run writes no line and moves no file", as
     assert.deepEqual(rowsOf(box.files.journal), []);
     assert.deepEqual(existsSync(box.files.lost) ? readdirSync(box.files.lost) : [], []);
     cutOff(run);
+});
+
+test("finishAbandoned: a stale claim named after a dead run but holding another holder's entry is removed, never journalled", () => {
+    const files = home();
+    const { file } = putSlot(files, 0, 4247);
+    mkdirSync(files.lost, { recursive: true });
+    const claim = join(files.lost, "9999-slot-0-1-ffff.claim");
+    renameSync(file, claim);
+    assert.deepEqual(finishAbandoned(files, Date.now() + 61_000), []);
+    assert.deepEqual(readdirSync(files.lost), []);
+    assert.deepEqual(rowsOf(files.journal), []);
 });

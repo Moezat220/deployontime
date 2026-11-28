@@ -893,3 +893,10 @@ test("sameProcess: strict answers false when the start time or the age cannot be
     assert.equal(sameProcess(4242, undefined, { isAlive, ages: noAge, strict: true }), false);
     assert.equal(sameProcess(4242, Date.now() - 2000, { isAlive, ages: () => new Map([[4242, 2]]), strict: true }), true);
 });
+
+test("runnerActive: a dead runner whose pid now leads some other process group is not brought back to life", async () => {
+    const { runnerActive } = await import("./jobs.mjs");
+    const groupOnly = (pid, born, opts) => Boolean(opts?.group);
+    assert.equal(runnerActive({ request: { createdAt: 0 }, pid: { runnerPid: 4321, runnerStartedAt: 1 } }, Date.now(), groupOnly), false);
+    assert.equal(runnerActive({ request: { createdAt: 0 }, pid: { runnerPid: 4321, runnerStartedAt: 1 } }, Date.now(), () => true), true);
+});
