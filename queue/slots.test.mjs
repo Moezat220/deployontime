@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { addNested, enqueue, processGone, releaseSlot, snapshot, takePlace, takeSlot, TICKS, updateSlot } = await import("./slots.mjs");
-const { startTicks } = await import("./linux.mjs");
+const { addNested, enqueue, MARKS, processGone, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } = await import("./slots.mjs");
+const { bootId, startTicks } = await import("./linux.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), waitingLine: join(home, "line") }; };
@@ -231,20 +231,30 @@ test("processGone: a pid that is not a whole number above 1 names no process, wh
     assert.equal(processGone({ pid: process.pid }), false, "a live pid without a start time stays");
 });
 
-test("takeSlot, enqueue: on Linux this process's entries keep its start in clock ticks since boot; elsewhere none", () => {
+test("takeSlot, enqueue, takePlace, addNested: on Linux this process's entries keep its start in clock ticks and the boot; elsewhere none", () => {
     const dirs = newDirs();
+    Object.assign(dirs, { nested: join(dirs.slots, "..", "nested"), places: join(dirs.slots, "..", "places") });
     const slot = read(takeSlot(process.pid, "docs-site: build", 1, {}, dirs));
     const ticket = read(enqueue(process.pid, "docs-site: build", false, dirs, 9_000));
-    const expected = startTicks(process.pid);
-    assert.equal(TICKS, expected);
-    assert.deepEqual([slot.ticks, ticket.ticks], expected === null ? [undefined, undefined] : [expected, expected]);
-    assert.equal(read(takeSlot(4101, "docs-site: lint", 2, {}, dirs)).ticks, undefined, "another process's entry has none");
+    const place = read(takePlace(process.pid, "docs-site: build", "p", 1, dirs));
+    const nested = read(addNested(process.pid, "docs-site: build", { marker: "slot-0", pid: 4101, born: 1 }, dirs));
+    const ticks = startTicks(process.pid), boot = bootId();
+    const expected = ticks === null ? {} : { ticks, ...(boot ? { boot } : {}) };
+    assert.deepEqual(MARKS, expected);
+    for (const entry of [slot, ticket, place, nested]) {
+        assert.deepEqual({ ticks: entry.ticks, boot: entry.boot }, { ticks: expected.ticks, boot: expected.boot });
+    }
+    const other = read(takeSlot(4101, "docs-site: lint", 2, {}, dirs));
+    assert.deepEqual([other.ticks, other.boot], [undefined, undefined], "another process's entry has none");
 });
 
 // A holder that has claimed a slot but not started its command: no pgid, so before ticks only its age could tell.
-const claimed = (born, ticks) => ({ pid: 4401, label: "shop-api: e2e", at: born + 500, born, ...(ticks === undefined ? {} : { ticks }) });
+const BOOT = "5d1c7e2a-0b4f-4c8e-9a61-3f2b8d7c6e10";
+const claimed = (born, ticks, boot = BOOT) => ({
+    pid: 4401, label: "shop-api: e2e", at: born + 500, born, ...(ticks === undefined ? {} : { ticks }), ...(boot === null ? {} : { boot }),
+});
 const clockStep = (entry, stepMs) => ({
-    isAlive: allAlive, now: entry.born + 10 * MINUTE + stepMs, ages: (pids) => new Map(pids.map((pid) => [pid, 600])),
+    isAlive: allAlive, now: entry.born + 10 * MINUTE + stepMs, ages: (pids) => new Map(pids.map((pid) => [pid, 600])), readBoot: () => BOOT,
 });
 
 test("snapshot, processGone: after a clock step of an hour either way, equal ticks keep a claimed holder that has not started", () => {
@@ -273,4 +283,23 @@ test("snapshot, processGone: other ticks are a reused pid even when the age agre
     assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), readTicks: () => null }), true, "unreadable: the age disagrees");
     assert.deepEqual(snapshot({ dirs, ...agrees, readTicks: () => 777_001, prune: true }).holders, []);
     assert.deepEqual(readdirSync(dirs.slots), [], "the reused pid's slot is free");
+});
+
+test("snapshot, processGone: after a restart equal pid and ticks name another process; without a boot the old rule decides", () => {
+    const born = 50_000_000, rebooted = { readBoot: () => "9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4", readTicks: () => 777_000 };
+    const entry = claimed(born, 777_000);
+    // Another boot: the ticks say nothing, and a wall-clock age far off is a gone holder.
+    assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), ...rebooted }), true, "another boot, the age disagrees");
+    assert.equal(processGone(entry, { ...clockStep(entry, 0), ...rebooted }), false, "another boot, the age agrees");
+    const dirs = newDirs();
+    fs.mkdirSync(dirs.slots, { recursive: true });
+    writeFileSync(join(dirs.slots, "slot-0.json"), JSON.stringify(entry));
+    assert.deepEqual(snapshot({ dirs, ...clockStep(entry, 3_600_000), ...rebooted, prune: true }).holders, []);
+    // The same boot: the ticks decide.
+    assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), readTicks: () => 777_000 }), false, "the same boot");
+    // No boot on either side: the old rule, the age.
+    const noBoot = claimed(born, 777_000, null);
+    assert.equal(processGone(noBoot, { ...clockStep(entry, 3_600_000), readTicks: () => 777_000 }), true, "the entry has no boot");
+    assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), readTicks: () => 777_000, readBoot: () => null }), true, "this boot unread");
+    assert.equal(processGone(noBoot, { ...clockStep(entry, 0), readTicks: () => 777_001 }), false, "no boot, the age agrees");
 });

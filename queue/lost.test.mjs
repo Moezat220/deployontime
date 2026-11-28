@@ -178,18 +178,34 @@ test("sameProcess: a live pid whose age alone disagrees is the same process whil
     assert.equal(sameProcess(4300, at, { ...opts, ages: () => new Map([[4300, 3600]]) }), true, "an age that agrees");
 });
 
+const BOOT = "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d";
 test("sameProcess: equal ticks are the same process after a clock step either way, also when strict; other ticks never", () => {
     const at = Date.UTC(2031, 4, 6, 10, 0);
     for (const step of [3_600_000, -3_600_000]) {
-        const opts = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000 + step, ticks: 52_000, readTicks: () => 52_000 };
+        const opts = {
+            isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000 + step,
+            ticks: 52_000, readTicks: () => 52_000, boot: BOOT, readBoot: () => BOOT,
+        };
         assert.equal(sameProcess(4300, at, opts), true, `step ${step}`);
         assert.equal(sameProcess(4300, at, { ...opts, strict: true }), true, `strict, step ${step}`);
     }
-    const agrees = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000, ticks: 52_000 };
+    const agrees = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000, ticks: 52_000, boot: BOOT, readBoot: () => BOOT };
     assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => 52_001 }), false, "other ticks, the age agrees");
     assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => 52_001, group: 4300, hasGroup: () => true }), false, "nor its group");
     assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => null }), true, "unreadable: the age decides");
     assert.equal(sameProcess(4300, at, { ...agrees, isAlive: () => false, readTicks: () => 52_000 }), false, "a dead pid");
+});
+
+test("sameProcess: after a restart the same pid and ticks name another process; without a boot the age decides", () => {
+    const at = Date.UTC(2031, 4, 6, 10, 0);
+    const far = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000 + 3_600_000, ticks: 52_000, readTicks: () => 52_000 };
+    const other = { ...far, boot: BOOT, readBoot: () => "0d1c2b3a-4f5e-4d6c-9b8a-7f6e5d4c3b2a" };
+    assert.equal(sameProcess(4300, at, { ...other, strict: true }), false, "another boot, strict: never signalled");
+    assert.equal(sameProcess(4300, at, other), false, "another boot, the age far off: gone");
+    assert.equal(sameProcess(4300, at, { ...other, now: at + 1000 }), true, "another boot, the age agrees: the old rule");
+    assert.equal(sameProcess(4300, at, { ...far, boot: BOOT, readBoot: () => BOOT, strict: true }), true, "the same boot: the ticks decide");
+    assert.equal(sameProcess(4300, at, { ...far, readBoot: () => BOOT, strict: true }), false, "no boot kept: the age decides");
+    assert.equal(sameProcess(4300, at, { ...far, boot: BOOT, readBoot: () => null, strict: true }), false, "this boot unread: the age decides");
 });
 
 test("claim race: finders with old readings of dead holders, in a loop, never free the slot of a live holder", async () => {

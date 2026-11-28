@@ -9,7 +9,7 @@ import { flagError } from "./args.mjs";
 import { minutesSince } from "./clock.mjs";
 import { sameProcess } from "./proctree.mjs";
 import {
-    BORN, branchExists, changesIn, checkoutOf, dropLeftovers, dropState, forgetWorktree, gitError, gitRun, hasIdentity, ID_RE,
+    BORN, MARKS, marksOf, branchExists, changesIn, checkoutOf, dropLeftovers, dropState, forgetWorktree, gitError, gitRun, hasIdentity, ID_RE,
     knownWorktrees, linkIgnored, listStates, NO_LIMIT, ownerFile, readState, removeWorktree, tempName, untrackedFiles, worktreesDir,
 } from "./worktree.mjs";
 
@@ -145,7 +145,7 @@ export async function cmdIntegrate(args, ctx, deps) {
         rmSync(ownerFile(ctx.files.home, name), { force: true });
     };
     try {
-        writeJsonAtomic(ownerFile(ctx.files.home, name), { pid: process.pid, born: BORN, top: here.top, job: job.id });
+        writeJsonAtomic(ownerFile(ctx.files.home, name), { pid: process.pid, born: BORN, ...MARKS, top: here.top, job: job.id });
     } catch (e) {
         say(`integrate: the owner file of the temporary worktree could not be written: ${e.message}; nothing was changed`);
         return 1;
@@ -213,7 +213,8 @@ export function cmdDiscard(args, ctx, deps) {
     if (found.error) return usage(found.error);
     const job = found.state;
     // A pid that now names a process that started at another time, as after a restart, is not the job's.
-    if (job.outcome === "running" && (deps.same ?? sameProcess)(job.pid, job.born)) return usage(`job ${job.id} is still running, pid ${job.pid}`);
+    const running = job.outcome === "running" && (deps.same ?? sameProcess)(job.pid, job.born, marksOf(job));
+    if (running) return usage(`job ${job.id} is still running, pid ${job.pid}`);
     dropLeftovers(ctx.files.home, env);
     const top = existsSync(job.top) ? job.top : job.common;
     const there = existsSync(job.worktree);
@@ -259,7 +260,7 @@ export function cmdDiscard(args, ctx, deps) {
 export function worktreeLines(states, now, isAlive = sameProcess) {
     if (!states.length) return ["worktrees: none"];
     return states.map((s) => {
-        const ended = s.outcome === "running" && !isAlive(s.pid, s.born) ? "ended without a result" : s.outcome;
+        const ended = s.outcome === "running" && !isAlive(s.pid, s.born, marksOf(s)) ? "ended without a result" : s.outcome;
         const exit = s.exit != null && s.outcome !== "passed" ? `, exit ${s.exit}` : "";
         const missing = existsSync(s.worktree) ? "" : ", folder missing";
         return `worktree ${s.id}: "${s.label}", branch ${s.branch}, folder ${s.worktree}${missing}, ${ended}${exit}, `

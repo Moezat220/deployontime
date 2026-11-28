@@ -91,20 +91,23 @@ test("stillGoing: only the pid of the last start counts, and only while it is th
     assert.equal(processGone({ pid: process.pid, born: BORN - 3_600_000 }), true, "the same pid with another start time");
 });
 
-test("stillGoing: the start in clock ticks of the last run is kept and decides, whatever the clock says", () => {
+test("stillGoing: the start in clock ticks of the last run and its boot are kept and decide, whatever the clock says", () => {
     const b = bench([job()]);
+    const boot = "3c2b1a09-8f7e-4d6c-b5a4-0e9d8c7b6a51";
     b.deps.startTicks = (pid) => (pid === 5001 ? 88_000 : null);
+    b.deps.bootId = () => boot;
     assert.equal(b.tick(T0 + MINUTE), 0);
     const [stored] = b.stored();
-    assert.deepEqual([stored.lastPid, stored.lastTicks], [5001, 88_000]);
+    assert.deepEqual([stored.lastPid, stored.lastTicks, stored.lastBoot], [5001, 88_000, boot]);
     const asked = [];
     stillGoing(stored, (owner) => asked.push(owner));
-    assert.deepEqual(asked, [{ pid: 5001, born: T0 + MINUTE, ticks: 88_000 }]);
-    const stepped = (ticks) => (entry) => processGone(entry, {
-        isAlive: () => true, ages: () => new Map([[5001, 1]]), now: T0 + MINUTE + 3_600_000, readTicks: () => ticks,
+    assert.deepEqual(asked, [{ pid: 5001, born: T0 + MINUTE, ticks: 88_000, boot }]);
+    const stepped = (ticks, readBoot = () => boot) => (entry) => processGone(entry, {
+        isAlive: () => true, ages: () => new Map([[5001, 1]]), now: T0 + MINUTE + 3_600_000, readTicks: () => ticks, readBoot,
     });
     assert.equal(stillGoing(stored, stepped(88_000)), true, "an hour's clock step, equal ticks: still going");
     assert.equal(stillGoing(stored, stepped(88_001)), false, "other ticks: the pid was reused");
+    assert.equal(stillGoing(stored, stepped(88_000, () => "a1b2c3d4-0000-4000-8000-000000000000")), false, "another boot: the age decides");
     assert.equal(stillGoing(job({ lastPid: 0, lastBorn: T0 }), processGone), false, "pid 0 is never a run");
     assert.equal(stillGoing(job({ lastPid: 1, lastBorn: T0 }), processGone), false, "nor pid 1");
 });

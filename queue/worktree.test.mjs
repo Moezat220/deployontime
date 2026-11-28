@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 import { cleanEnv, feedCpuReading, git, isolateProcess, makeRepo, tempDir, track } from "./testkit.mjs";
 
 isolateProcess("worktree");
-const { labelSlug, makeWorktree, prepareIsolate, readState } = await import("./worktree.mjs");
+const { dropLeftovers, labelSlug, makeWorktree, MARKS, prepareIsolate, readState } = await import("./worktree.mjs");
+const { sameProcess } = await import("./proctree.mjs");
+const { startMarks } = await import("./linux.mjs");
 const { takeSlot } = await import("./slots.mjs");
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url)), NODE = process.execPath;
@@ -229,4 +231,35 @@ test("makeWorktree: a branch, folder or state file that is already there makes i
     const none = makeWorktree({ label: "docs-site: build", checkout, home, links: [], pid: 1, command: "make", now: 0 },
         { id: () => "aaaaaaaa" });
     assert.deepEqual(none, { error: "no free id for the worktree after 8 tries" });
+});
+
+test("dropLeftovers: after a clock step a live integrate's temporary worktree is kept by its ticks and boot; without them the age decides", () => {
+    const home = tempDir("iso-leftovers"), dir = join(home, "worktrees"), born = 40_000_000;
+    const boot = "4b3a2918-0f7e-4d6c-a5b4-c3d2e1f0a9b8";
+    const plant = (suffix, marks) => {
+        const name = `0a1b2c3d-integrate-${process.pid}-${suffix}`;
+        mkdirSync(join(dir, name), { recursive: true });
+        writeFileSync(join(dir, `${name}.owner.json`), JSON.stringify({ pid: process.pid, born, ...marks, top: "/nowhere", job: "0a1b2c3d" }));
+        return join(dir, name);
+    };
+    const kept = plant("11111111", { ticks: 91_000, boot });
+    const old = plant("22222222", {});
+    const otherBoot = plant("33333333", { ticks: 91_000, boot: "a9b8c7d6-e5f4-4321-8fed-cba987654321" });
+    // The integrate runs on, but the wall clock was set an hour ahead, so its age alone says it is gone.
+    const stepped = (pid, at, opts) => sameProcess(pid, at, {
+        ...opts, isAlive: () => true, ages: () => new Map([[pid, 30]]), now: born + 30_000 + 3_600_000, readTicks: () => 91_000, readBoot: () => boot,
+    });
+    assert.deepEqual(dropLeftovers(home, {}, { same: stepped }).sort(), [old, otherBoot].sort());
+    assert.deepEqual([existsSync(kept), existsSync(`${kept}.owner.json`)], [true, true], "the live integrate's worktree stays mid-merge");
+});
+
+test("makeWorktree: the state of this process's job keeps its start in clock ticks and the boot (Linux); another pid's none", () => {
+    const home = tempDir("iso-marks"), repo = makeRepo(join(tempDir("iso-marks-repo"), "docs-site"));
+    const { checkout } = prepareIsolate(repo);
+    assert.deepEqual(MARKS, startMarks(process.pid));
+    const job = { label: "docs-site: build", checkout, home, links: [], command: "make", now: 0 };
+    const own = makeWorktree({ ...job, pid: process.pid }, { id: () => "aaaaaaaa" }).state;
+    assert.deepEqual({ ticks: own.ticks, boot: own.boot }, { ticks: MARKS.ticks, boot: MARKS.boot });
+    const other = makeWorktree({ ...job, pid: 4101 }, { id: () => "bbbbbbbb" }).state;
+    assert.deepEqual([other.ticks, other.boot], [undefined, undefined]);
 });

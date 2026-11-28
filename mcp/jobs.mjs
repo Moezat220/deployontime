@@ -68,8 +68,8 @@ export function runnerActive(job, now = Date.now(), check = sameProcess) {
     if (job.exit) return false;
     // No group escape here: the runner's group is its own pid, so a reused pid that leads any group would bring a dead
     // runner back to life. A clock step can only make a live runner look gone, which the caller treats as lost; on
-    // Linux the runner keeps its start in clock ticks too (runnerTicks), which a clock step cannot move.
-    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt, { ticks: job.pid.runnerTicks });
+    // Linux the runner keeps its start in clock ticks too (runnerTicks) with their boot, which a clock step cannot move.
+    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt, { ticks: job.pid.runnerTicks, boot: job.pid.boot });
     return now - (Number(job.request?.createdAt) || 0) < START_GRACE_MS;
 }
 

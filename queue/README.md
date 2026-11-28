@@ -855,8 +855,9 @@ Its worktree may remain under `$DOTIME_HOME/worktrees`; `dotime-queue worktrees`
 On Linux `ps` counts the age of a process from the boot, so when the clock is set by more than a few seconds every
 live process seems to have started at another time. A holder whose pid is alive and whose age alone disagrees is
 therefore taken for gone only once its job's process group is gone too, and `status` writes nothing for a live run.
-On Linux the slot also keeps the process start in clock ticks since boot, so a clock change cannot make a live holder
-look gone; the same goes for the other files below, the schedule lock, the tick's last run and the MCP runner.
+On Linux the slot also keeps the process start in clock ticks since boot and the boot it belongs to, so a clock change
+cannot make a live holder look gone; the same goes for the other files below, the schedule lock, the tick's last run,
+the MCP runner and the owner files of `integrate`.
 
 A `lost` line means the machine or the queue process died, not the code. It counts in no failure rule: not for the
 [repeated-failure stop](#repeated-failures), [flaky checks](#flaky-checks), [run limits](#run-limits), pass stamps or
@@ -1285,8 +1286,10 @@ Environment variables:
 
 A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
 started later, and when its pid is not a whole number above 1. On Linux each of these files also keeps its process's
-start in clock ticks since boot (`ticks`); while the pid's own can be read, the two alone tell whether it is the same
-process, so a change of the wall clock cannot make a live holder look gone.
+start in clock ticks since boot (`ticks`) and the boot it belongs to (`boot`, from `/proc/sys/kernel/random/boot_id`);
+while the boot is this one and the pid's own can be read, the ticks alone tell whether it is the same process, so a
+change of the wall clock cannot make a live holder look gone, and a new process after a restart that got the same pid
+and ticks is never taken for it.
 
 Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`, `cwd`,
 `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`

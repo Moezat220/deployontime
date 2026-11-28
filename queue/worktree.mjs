@@ -12,6 +12,7 @@ import { readJson, writeJsonAtomic } from "./files.mjs";
 import { porcelainClean, readOnlyGit, repoName } from "./git.mjs";
 import { UNLABELLED } from "./kinds.mjs";
 import { sameProcess } from "./proctree.mjs";
+import { startMarks } from "./linux.mjs";
 
 /** How many new ids a job tries when its branch or folder is already there. */
 export const ID_TRIES = 8;
@@ -21,6 +22,11 @@ export const ID_RE = /^[0-9a-f]{8}$/;
 export const NO_LIMIT = 0;
 // When this process started (wall clock, ms), kept with a job so a later process given the same pid is told apart.
 export const BORN = Math.round(Date.now() - process.uptime() * 1000);
+/** On Linux its start in clock ticks and the boot they count from, { ticks, boot } (startMarks), kept next to BORN so a
+ *  change of the wall clock cannot make it look gone; an empty object elsewhere. */
+export const MARKS = startMarks(process.pid);
+/** The start fields of a state or owner file that sameProcess takes besides the pid and the start time. */
+export const marksOf = (data) => ({ ticks: data?.ticks, boot: data?.boot });
 
 /** Runs `git -C <cwd> <args>` and returns { ok, code, stdout, stderr }; unlike git() in git.mjs it may change the
  *  repository and it keeps git's own error text. No watcher program named in the repository's settings is started. */
@@ -201,7 +207,7 @@ export const ownerFile = (home, name) => join(worktreesDir(home), `${name}.owner
 /** Removes the temporary integrate worktrees whose integrate process is gone, as after a kill during the merge step:
  *  the process is gone when its pid is not alive or now names a process that started at another time than the owner
  *  file says. Each is removed from git with forgetWorktree, never with prune. Returns the folders removed. same:
- *  sameProcess(pid, born). */
+ *  sameProcess(pid, born, { ticks, boot }). */
 export function dropLeftovers(home, env, { same = sameProcess } = {}) {
     const dir = worktreesDir(home);
     let names = [];
@@ -214,7 +220,7 @@ export function dropLeftovers(home, env, { same = sameProcess } = {}) {
         // Integrate writes the owner file before it makes the worktree, so a folder without one, or with one that names
         // another job, is not a temporary worktree: a job folder <repo>-<id> of a repo named like one stays.
         if (owner?.job !== id) continue;
-        if (same(Number(pid), owner.born)) continue;
+        if (same(Number(pid), owner.born, marksOf(owner))) continue;
         const folder = join(dir, name);
         const top = [owner?.top, gitDirOf(folder)].find((path) => path && existsSync(path));
         if (top) forgetWorktree(top, folder, env);
@@ -278,7 +284,8 @@ export function makeWorktree(job, { env, id: pickId = newId } = {}) {
         const state = {
             v: 1, id, label: job.label, command: job.command, branch, worktree: folder, base: checkout.head,
             baseBranch: checkout.branch, top: checkout.top, common: checkout.common, prefix: checkout.prefix, links,
-            linkPaths: job.links ?? [], pid: job.pid, born: job.born ?? BORN, createdAt: job.now, outcome: "running", exit: null, endedAt: null,
+            linkPaths: job.links ?? [], pid: job.pid, born: job.born ?? BORN, ...(job.pid === process.pid && job.born === undefined ? MARKS : {}),
+            createdAt: job.now, outcome: "running", exit: null, endedAt: null,
         };
         try {
             writeState(home, state);

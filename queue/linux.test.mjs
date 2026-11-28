@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tempDir } from "./testkit.mjs";
 import {
-    meminfoFreePct, meminfoSwapPct, parseMeminfo, parseStartTicks, POWER_SUPPLY_DIR, readPowerSupplies, readText, startTicks,
-    supplyBattery,
+    BOOT_ID_FILE, bootId, meminfoFreePct, meminfoSwapPct, parseBootId, parseMeminfo, parseStartTicks, POWER_SUPPLY_DIR, readBootId,
+    readPowerSupplies, readText, startMarks, startTicks, supplyBattery,
 } from "./linux.mjs";
 
 const MEMINFO = [
@@ -153,4 +153,30 @@ test("startTicks: this process has a start in clock ticks that stays the same", 
     const first = startTicks(process.pid);
     assert.equal(Number.isInteger(first) && first > 0, true, String(first));
     assert.equal(startTicks(process.pid), first);
+});
+
+const BOOT = "5f0c2a1e-7b3d-4e9a-8c61-2d4f6a8b0c1e";
+test("parseBootId, readBootId: the boot id from /proc on Linux only, trimmed; anything else is none", () => {
+    assert.equal(parseBootId(`${BOOT}\n`), BOOT);
+    assert.equal(parseBootId(BOOT.toUpperCase()), BOOT);
+    for (const text of ["", "\n", "not a boot id", undefined]) assert.equal(parseBootId(text), null, String(text));
+    const asked = [];
+    const read = (file) => { asked.push(file); return `${BOOT}\n`; };
+    assert.equal(readBootId({ platform: "linux", read }), BOOT);
+    assert.deepEqual(asked, [BOOT_ID_FILE]);
+    assert.equal(readBootId({ platform: "darwin", read }), null);
+    assert.equal(readBootId({ platform: "linux", read: () => "" }), null, "unreadable");
+});
+
+test("startMarks: ticks and the boot together, the boot left out when unread, nothing without ticks", () => {
+    assert.deepEqual(startMarks(4101, { readTicks: () => 98_765, readBoot: () => BOOT }), { ticks: 98_765, boot: BOOT });
+    assert.deepEqual(startMarks(4101, { readTicks: () => 98_765, readBoot: () => null }), { ticks: 98_765 });
+    assert.deepEqual(startMarks(4101, { readTicks: () => null, readBoot: () => BOOT }), {}, "macOS: no ticks, so no boot either");
+});
+
+test("bootId: read once per process and the same every time; on Linux a real id", () => {
+    const first = bootId();
+    assert.equal(bootId(), first);
+    if (process.platform === "linux") assert.match(String(first), /^[0-9a-f-]{36}$/);
+    else assert.equal(first, null);
 });

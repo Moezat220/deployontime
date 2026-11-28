@@ -224,6 +224,9 @@ test("worktreeLines: a job still marked running whose process is gone ended with
     const lines = worktreeLines([{ ...state, outcome: "running", pid: 99, createdAt: 0, exit: null }], 12 * 60_000, () => false);
     assert.deepEqual(lines, ['worktree 0a1b2c3d: "docs: build", branch dotime/docs-build-0a1b2c3d, folder /nowhere/docs-0a1b2c3d, '
         + "folder missing, ended without a result, 12 min old"]);
+    const asked = [];
+    worktreeLines([{ ...state, outcome: "running", pid: 99, born: 5, ticks: 91_000, boot: "b", createdAt: 0 }], 0, (...args) => asked.push(args));
+    assert.deepEqual(asked, [[99, 5, { ticks: 91_000, boot: "b" }]], "the ticks and boot of the job are passed on");
 });
 
 /** A node script that writes each file of files (path to text), making folders, then exits 0. */

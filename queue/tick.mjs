@@ -15,7 +15,7 @@ import { dateTime } from "./clock.mjs";
 import { dueBetween } from "./cron.mjs";
 import { readJson, writeJsonAtomic } from "./files.mjs";
 import { append, cmdString, isTickNote, parseLines, readLines, record } from "./journal.mjs";
-import { startTicks } from "./linux.mjs";
+import { bootId, startMarks, startTicks } from "./linux.mjs";
 import { claimPending, lostReason } from "./lost.mjs";
 import { JOB_MARKER, NO_SKIP_MARKER, PARENT_MARKER } from "./nested.mjs";
 import { folderProject } from "./project.mjs";
@@ -57,11 +57,15 @@ export function oddLastDue(job, now) {
     return due > now + GRACE_MS ? "lies ahead of now" : null;
 }
 
-// The identity of the last run a job started, as isGone takes it: lastTicks is its start in clock ticks (Linux).
-const lastRunOf = (job) => ({ pid: job.lastPid, born: job.lastBorn, ...(Number.isInteger(job.lastTicks) ? { ticks: job.lastTicks } : {}) });
+// The identity of the last run a job started, as isGone takes it: lastTicks is its start in clock ticks and lastBoot
+// the boot they count from (Linux).
+const lastRunOf = (job) => ({
+    pid: job.lastPid, born: job.lastBorn,
+    ...(Number.isInteger(job.lastTicks) ? { ticks: job.lastTicks } : {}), ...(typeof job.lastBoot === "string" ? { boot: job.lastBoot } : {}),
+});
 
 /** Is the last run this job started still waiting or running? Its pid must be alive and belong to the process
- *  that was started then. isGone({ pid, born, ticks }) is the same check the slots use. A run started without its pid saved
+ *  that was started then. isGone({ pid, born, ticks, boot }) is the same check the slots use. A run started without its pid saved
  *  counts as going until a journal line of this job from then on comes, or NO_PID_MS has passed; rows() gives the
  *  journal lines. */
 export function stillGoing(job, isGone, now = 0, rows = () => []) {
@@ -167,13 +171,14 @@ function tickJob(job, plan, now, jobs, files, deps) {
     const busy = stillGoing(job, deps.isGone, now, rows);
     const lost = !busy && lastRunLost(job, deps.isGone, rows, files);
     const head = `${job.id} "${job.label}"`;
-    const before = { lastStart: job.lastStart, lastPid: job.lastPid, lastBorn: job.lastBorn, lastTicks: job.lastTicks };
+    const before = { lastStart: job.lastStart, lastPid: job.lastPid, lastBorn: job.lastBorn, lastTicks: job.lastTicks, lastBoot: job.lastBoot };
     job.lastDue = iso(plan.due);
     if (!busy) {
         job.lastStart = iso(now);
         delete job.lastPid;
         delete job.lastBorn;
         delete job.lastTicks;
+        delete job.lastBoot;
     }
     const saveError = trySave(files, jobs, deps);
     if (saveError) return { saveError };
@@ -209,8 +214,8 @@ function tickJob(job, plan, now, jobs, files, deps) {
         Object.assign(job, before);
         for (const key of Object.keys(before)) if (job[key] === undefined) delete job[key];
     } else {
-        const ticks = (deps.startTicks ?? startTicks)(started.pid);
-        Object.assign(job, { lastPid: started.pid, lastBorn: now, ...(Number.isInteger(ticks) ? { lastTicks: ticks } : {}) });
+        const { ticks, boot } = startMarks(started.pid, { readTicks: deps.startTicks ?? startTicks, readBoot: deps.bootId ?? bootId });
+        Object.assign(job, { lastPid: started.pid, lastBorn: now, ...(ticks === undefined ? {} : { lastTicks: ticks }), ...(boot ? { lastBoot: boot } : {}) });
         print(`schedule tick: started ${head}, pid ${started.pid}, due ${dateTime(plan.due, deps.zone)}`);
     }
     const late = trySave(files, jobs, deps);

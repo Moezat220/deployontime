@@ -7,19 +7,19 @@ import { join } from "node:path";
 import { probeProcessAges } from "./probes.mjs";
 import { parseElapsed } from "./ps.mjs";
 import { alive, sameTicks } from "./proctree.mjs";
-import { startTicks } from "./linux.mjs";
+import { bootId, startMarks, startTicks } from "./linux.mjs";
 import { dropOldTemp, readJson, tempName, writeJsonAtomic } from "./files.mjs";
 import { claimHolder, finishAbandoned, freeBroken, recordLost } from "./lost.mjs";
 
 // When this process started (wall clock, ms). Its own entries carry it, so a reader can tell this process from a newer
 // one that was given the same pid after it ended without cleaning up.
 export const BORN = Math.round(Date.now() - process.uptime() * 1000);
-/** On Linux, when this process started in clock ticks since boot (startTicks), or null: its own entries carry it as
- *  ticks too, which a change of the wall clock cannot move. */
-export const TICKS = startTicks(process.pid);
+/** On Linux, when this process started in clock ticks since boot and the boot they count from, { ticks, boot }
+ *  (startMarks); an empty object elsewhere. Its own entries carry them, which a change of the wall clock cannot move. */
+export const MARKS = startMarks(process.pid);
 const SAME_START_MS = 5000;
-const bornOf = (pid) => (pid === process.pid ? { born: BORN, ...(TICKS === null ? {} : { ticks: TICKS }) } : {});
-/** The identity fields of this process, { pid, born, ticks? }, as its entries and the schedule lock carry them. */
+const bornOf = (pid) => (pid === process.pid ? { born: BORN, ...MARKS } : {});
+/** The identity fields of this process, { pid, born, ticks?, boot? }, as its entries and the schedule lock carry them. */
 export const OWNER = { pid: process.pid, ...bornOf(process.pid) };
 // Only a pid above 1 can name a holder: 0 and 1 are never a job, and a kill sent to 0 reaches the sender's own group.
 const holderPid = (pid) => Number.isInteger(pid) && pid > 1;
@@ -37,23 +37,24 @@ export const groupAlive = (pgid) => alive(-pgid);
 // An entry whose pid now belongs to a process that started at another time than the entry says. On Linux `ps` counts
 // a process's age from the boot, so after the wall clock is set by more than a few seconds every live process seems
 // to have started at another time: an entry of a job that started its command (it has the job's process group, pgid)
-// counts as reused only once that group is gone too. An entry that keeps ticks (Linux) is judged by them alone while the
-// pid's own can be read: equal ticks are the same process whatever the clock says, other ticks a reused pid.
-function pidReused(data, seconds, now, hasGroup = groupAlive, readTicks = startTicks) {
-    const same = sameTicks(data.pid, data.ticks, readTicks);
+// counts as reused only once that group is gone too. An entry that keeps ticks and their boot (Linux) is judged by the
+// ticks alone while the boot is this one and the pid's own can be read: equal ticks are the same process whatever the
+// clock says, other ticks a reused pid. read: { readTicks, readBoot }.
+function pidReused(data, seconds, now, hasGroup = groupAlive, read = {}) {
+    const same = sameTicks(data.pid, data, read);
     if (same !== null) return !same;
     if (seconds === undefined || Math.abs(now - seconds * 1000 - data.born) <= SAME_START_MS) return false;
     return !(Number.isInteger(data.pgid) && data.pgid > 1 && hasGroup(data.pgid));
 }
-/** True when the process an entry ({ pid, born, ticks?, pgid? }) names has ended, or its pid now names a process that
+/** True when the process an entry ({ pid, born, ticks?, boot?, pgid? }) names has ended, or its pid now names a process that
  *  started at another time (see pidReused). A pid that is not a whole number above 1 names no process. */
 export function processGone(entry, {
-    isAlive = alive, ages = processAges, now = Date.now(), hasGroup = groupAlive, readTicks = startTicks,
+    isAlive = alive, ages = processAges, now = Date.now(), hasGroup = groupAlive, readTicks = startTicks, readBoot = bootId,
 } = {}) {
     if (!holderPid(entry?.pid) || !isAlive(entry.pid)) return true;
-    const same = sameTicks(entry.pid, entry.ticks, readTicks);
+    const same = sameTicks(entry.pid, entry, { readTicks, readBoot });
     if (same !== null) return !same;
-    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now, hasGroup, () => null);
+    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now, hasGroup, { readTicks: () => null });
 }
 // Frees the file of a holder that is gone through the same claim as a lost run (lost.mjs), so a reader with an old
 // reading never removes the file of a newer holder; a file that could not be read is freed by freeBroken(). Without a
@@ -75,11 +76,12 @@ const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at 
  *  whose holder is gone after its command had started: with lost (by default when dirs names the lost and journal
  *  files, as paths() does) its run is recorded as lost, once, and its slot file goes (see lost.mjs). Slot and place
  *  files are freed through the same claim, so an old reading never frees the file of a newer holder. hasGroup: whether
- *  a process group still has a member, and readTicks the start of a pid in clock ticks (see pidReused). An entry
+ *  a process group still has a member, readTicks the start of a pid in clock ticks and readBoot this boot's id (see
+ *  pidReused). An entry
  *  whose pid is not a whole number above 1 names no holder and is freed like one that is gone. */
 export function snapshot({
     dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false, lost = !!(dirs.lost && dirs.journal), hasGroup = groupAlive,
-    readTicks = startTicks,
+    readTicks = startTicks, readBoot = bootId,
 }) {
     if (prune) makeDirs(dirs);
     if (lost) finishAbandoned(dirs, now);
@@ -102,7 +104,7 @@ export function snapshot({
         const entries = [];
         for (const { file, data, ok } of found) {
             const seconds = ok && Number.isFinite(data.born) ? known.get(data.pid) : undefined;
-            if (ok && !pidReused(data, seconds, now, hasGroup, readTicks)) entries.push({ file, ...data });
+            if (ok && !pidReused(data, seconds, now, hasGroup, { readTicks, readBoot })) entries.push({ file, ...data });
             else if (lost && dir === dirs.slots && Number.isFinite(data?.startedAt)) recordLost(file, data, dirs, now);
             // A slot and a place are taken again under the same name, so they are freed through a claim.
             else if (prune && (dir === dirs.slots || dir === dirs.places)) freeHolder(file, data, dirs, now);

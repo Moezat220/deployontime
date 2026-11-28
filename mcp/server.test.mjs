@@ -894,18 +894,55 @@ test("sameProcess: strict answers false when the start time or the age cannot be
     assert.equal(sameProcess(4242, Date.now() - 2000, { isAlive, ages: () => new Map([[4242, 2]]), strict: true }), true);
 });
 
+const BOOT = "6f5e4d3c-2b1a-4098-8f7e-6d5c4b3a2918";
 test("runnerActive: after a clock step a live runner with equal ticks is active; other ticks are a dead runner", async () => {
     const { runnerActive, sameProcess: same } = await import("./jobs.mjs");
     const now = Date.now();
-    const job = { request: { createdAt: now - 60_000 }, pid: { runnerPid: 4321, runnerStartedAt: now - 60_000, runnerTicks: 61_000 } };
+    const job = { request: { createdAt: now - 60_000 }, pid: { runnerPid: 4321, runnerStartedAt: now - 60_000, runnerTicks: 61_000, boot: BOOT } };
     for (const step of [3_600_000, -3_600_000]) {
-        const shifted = (ticks) => (pid, at, opts) => same(pid, at, {
-            ...opts, isAlive: () => true, ages: () => new Map([[4321, 60]]), now: now + step, readTicks: () => ticks,
+        const shifted = (ticks, boot = BOOT) => (pid, at, opts) => same(pid, at, {
+            ...opts, isAlive: () => true, ages: () => new Map([[4321, 60]]), now: now + step, readTicks: () => ticks, readBoot: () => boot,
         });
         assert.equal(runnerActive(job, now, shifted(61_000)), true, `step ${step}`);
         assert.equal(runnerActive(job, now, shifted(61_999)), false, `step ${step}`);
         assert.equal(runnerActive({ ...job, pid: { ...job.pid, runnerTicks: undefined } }, now, shifted(61_000)), false, "no ticks: the age decides");
+        assert.equal(runnerActive(job, now, shifted(61_000, "1e2d3c4b-5a69-4788-9a6b-5c4d3e2f1a0b")), false, "another boot: the age decides");
     }
+});
+
+test("runner pid file: it keeps runnerTicks, queueTicks and the boot, and cancel and rerunLost go by them", async () => {
+    const { pidFields } = await import("./runner.mjs");
+    const { cancelTask } = await import("./tasks.mjs");
+    const { sameProcess } = await import("../queue/proctree.mjs");
+    const ticksOf = new Map([[7001, 61_000], [7002, 61_050]]);
+    const readers = { readTicks: (pid) => ticksOf.get(pid) ?? null, readBoot: () => BOOT };
+    assert.deepEqual(pidFields(7001, 7002, 9_000, { ...readers, born: 8_000 }), {
+        runnerPid: 7001, runnerStartedAt: 8_000, runnerTicks: 61_000, queuePid: 7002, startedAt: 9_000, queueTicks: 61_050, boot: BOOT,
+    });
+    assert.deepEqual(pidFields(7001, 7002, 9_000, { readTicks: () => null, readBoot: () => null, born: 8_000 }),
+        { runnerPid: 7001, runnerStartedAt: 8_000, queuePid: 7002, startedAt: 9_000 }, "macOS: no ticks, no boot");
+    // Both processes are alive, but the clock was set an hour ahead, so their ages alone say gone.
+    const box = lostJob();
+    const pidFile = jobFiles(box.dir, box.id).pid;
+    writeFileSync(pidFile, JSON.stringify(pidFields(7001, 7002, box.now - 59_000, { ...readers, born: box.now - 59_000 })));
+    const live = (ticks) => (pid, at, opts) => sameProcess(pid, at, {
+        ...opts, isAlive: () => true, ages: (pids) => new Map(pids.map((p) => [p, 59])), now: box.now + 3_600_000,
+        readTicks: (p) => ticks.get(p) ?? null, readBoot: () => BOOT, hasGroup: () => false,
+    });
+    const sent = [];
+    const cancelCtx = (ticks) => ({ ...box.ctx, sameProcess: live(ticks), kill: (pid, signal) => sent.push([pid, signal]) });
+    assert.deepEqual(cancelTask({ taskId: box.id }, cancelCtx(ticksOf)), { result: {} });
+    assert.deepEqual(sent, [[7001, "SIGTERM"]], "equal ticks: the runner counts as alive and is stopped");
+    box.ctx.sameProcess = live(ticksOf);
+    assert.deepEqual(rerunLost(box.ctx, box.now), [], "equal ticks: not lost, so not started again");
+    box.ctx.sameProcess = live(new Map([[7001, 62_000], [7002, 61_050]]));
+    assert.deepEqual(rerunLost(box.ctx, box.now), [], "the runner gone, its queue process alive by its ticks: not started again");
+    const others = new Map([[7001, 62_000], [7002, 62_050]]);
+    sent.length = 0;
+    cancelTask({ taskId: box.id }, cancelCtx(others));
+    assert.deepEqual(sent, [], "other ticks: the runner is gone and nothing is signalled");
+    box.ctx.sameProcess = live(others);
+    assert.equal(rerunLost(box.ctx, box.now).length, 1, "other ticks: lost, so started again");
 });
 
 test("runnerActive: a dead runner whose pid now leads some other process group is not brought back to life", async () => {

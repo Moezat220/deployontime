@@ -29,6 +29,38 @@ export function startTicks(pid, { platform = process.platform, read = readText }
     return parseStartTicks(read(`/proc/${pid}/stat`));
 }
 
+export const BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id";
+
+/** The boot id from the text of BOOT_ID_FILE, trimmed, or null when the text is not one. */
+export function parseBootId(text) {
+    const id = String(text ?? "").trim();
+    return /^[0-9a-f-]{8,64}$/i.test(id) ? id.toLowerCase() : null;
+}
+
+/** The id the kernel gave this boot, or null when not on Linux or when it cannot be read. Clock ticks count from the
+ *  boot, so they name a process only together with the boot they belong to: after a restart a new process may get
+ *  the same pid and the same ticks. The boot id is new at every boot, and unlike the boot time it does not move with
+ *  the wall clock. */
+export function readBootId({ platform = process.platform, read = readText } = {}) {
+    return platform === "linux" ? parseBootId(read(BOOT_ID_FILE)) : null;
+}
+
+let ownBoot;
+/** readBootId(), read once per process: the boot cannot change while a process runs. */
+export function bootId() {
+    if (ownBoot === undefined) ownBoot = readBootId();
+    return ownBoot;
+}
+
+/** The start of a process as kept next to its pid on Linux: { ticks, boot }, boot only when it could be read; an empty
+ *  object when the ticks cannot be read, as on macOS. */
+export function startMarks(pid, { readTicks = startTicks, readBoot = bootId } = {}) {
+    const ticks = readTicks(pid);
+    if (!Number.isInteger(ticks)) return {};
+    const boot = readBoot();
+    return { ticks, ...(typeof boot === "string" && boot ? { boot } : {}) };
+}
+
 /** Parses /proc/meminfo into a Map from field name to its value in kB. */
 export function parseMeminfo(text) {
     const fields = new Map();
