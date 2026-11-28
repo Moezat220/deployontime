@@ -26,7 +26,7 @@
 **You built it with AI, but is it actually done?** When several coding agents run their checks on one computer, they
 fail each other's test suites, and an agent then spends rounds fixing code that was never broken. DeployOnTime starts
 with the part that makes those results trustworthy: **the machine queue** (macOS and Linux), which lets several agents
-share one computer without overloading it, and records every run, with why it failed when it did.
+share one computer without overloading it, and records every run, giving each failed run a reason class.
 
 Current release: **0.3.2** on npm. On main, in the next release: the macOS schedule tick fires at the start of every
 minute. See the [changelog](CHANGELOG.md).
@@ -68,7 +68,8 @@ The queue runs and records the heavy commands your agents start. It does not jud
 - no code review, security review or performance review;
 - no deploys or releases;
 - it does not fix a failing test or decide what "done" means for your project;
-- it does not retry a failure for you: it records why a run failed, so you can see which failures were real.
+- it does not retry a failure for you: it records why a run failed, so you can see which failures were real. The one
+  exception: a run cut off by a restart can be started once more, with the MCP argument `rerunIfLost`.
 
 ## How it works
 
