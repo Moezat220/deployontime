@@ -77,7 +77,8 @@ The queue, `run`, `status`, `passed`, `history`, `flaky` and the reaper work the
 other places: free memory and swap from `/proc/meminfo`, the battery from `/sys/class/power_supply`, and desktop
 notices go through `notify-send` (see [Health gate](#health-gate) and [Notices](#notices)). A server or desktop
 without a battery has no battery limit. The [scheduled-job report](#scheduled-job-report) reads launchd jobs and
-works on macOS only for now.
+works on macOS only for now. [Scheduled jobs](#scheduled-jobs) work on both: `schedule install` makes a systemd user
+timer on Linux, or prints the crontab line to add where `systemctl --user` does not work.
 
 ## Quick start
 
@@ -268,6 +269,21 @@ an ancestor of the new run. A nested run that still waits for a place is not tru
 variables in another shell, or one left in a program that outlived its job, fails that check, and that run queues as
 usual. The variables therefore cannot be used to skip the line from outside a job.
 
+### `schedule`
+
+```
+dotime-queue schedule add --label "<project>: <task>" (--every <step> | --cron "<expr>") [--isolate] [--no-skip] [--cwd <dir>] -- <command>
+dotime-queue schedule list
+dotime-queue schedule remove <id>
+dotime-queue schedule enable <id>
+dotime-queue schedule disable <id>
+dotime-queue schedule tick
+dotime-queue schedule install [--dry]
+dotime-queue schedule uninstall [--dry]
+```
+
+Runs jobs on a schedule through `run`. See [Scheduled jobs](#scheduled-jobs).
+
 ### `status`
 
 ```
@@ -326,8 +342,11 @@ dotime-queue history [--days <n> | --day <YYYY-MM-DD>]
 
 Sums up the journal: one row for all projects and one per project, with outcome counts, waiting time and the gates
 that caused the waiting. Once a row has skipped jobs, its outcome counts end with `skipped N (saved M min)`, where M
-is the run time of the passing runs those jobs relied on. The outcome counts close with `flaky N`: the [flaky
-checks](#flaky-checks) of that row whose runs ended in the range. The waiting columns answer three questions. `sum`:
+is the run time of the passing runs those jobs relied on. Then come `flaky N`, the [flaky checks](#flaky-checks) of
+that row whose runs ended in the range, and `scheduled N`, the jobs of the row that the [schedule
+tick](#scheduled-jobs) started. Once there are any, `missed N` and `busy N` follow: the tick's lines for a gap in which
+it did not run, and for a due time it did not start because the last run still went. Those lines are not jobs and
+count in nothing else. The waiting columns answer three questions. `sum`:
 how much waiting all jobs did together. `clock`: how long the line was not empty. `clock with no job running`: how
 much of that time jobs were waiting while none of this row's jobs ran, for example because the health gate was shut.
 `--days` covers the last n calendar days including today (default 7); `--day` covers one day. Days are counted in
@@ -611,6 +630,111 @@ Nothing here ever stashes, resets or force-pushes, and no branch with unmerged c
 `--force`. The state of each kept job is a file `worktrees/<id>.json` in the state folder, so `integrate` and
 `discard` work after a restart.
 
+## Scheduled jobs
+
+A scheduled job is a `run` that the queue starts by itself at set times, such as the full suite every night or a lint
+every hour. Nothing of the queue keeps running for it. One small system entry starts `dotime-queue schedule tick`
+every minute; the tick reads `$DOTIME_HOME/schedule.json`, starts each job that is due, and ends at once. The rules for
+when a job is due live in the queue itself, so they are the same on macOS and on Linux.
+
+```
+dotime-queue schedule add --label "shop-api: suite" --cron "0 2 * * *" --no-skip -- npm test
+dotime-queue schedule add --label "shop-api: lint" --every 1h --cwd ~/code/shop-api -- npm run lint
+dotime-queue schedule install --dry     # show the system entry it would write
+dotime-queue schedule install
+```
+
+**A scheduled run is a normal run.** The tick starts `dotime-queue run --label <label> [--isolate] -- <command>` in the
+job's folder, as a process of its own that it does not wait for, so the tick never waits for a slot. That run waits in
+line, passes the health gate, runs under its learned limit and is journalled like any other; a check that already
+passed on the commit is skipped, two failures on unchanged code refuse the next start with exit 3, the flaky note and
+the done notice work as usual. A scheduled run and a manual run with the same label are one check to all of these. Its
+journal line carries `scheduled` with the job id, which a manual run's line never has. Its output replaces the last one
+in `schedule-runs/<id>.log` in the state folder.
+
+**`add`** prints the new id, 8 hex digits, and the next run time. It needs a label and exactly one of:
+
+- `--every <step>`: a whole number with `m`, `h` or `d`, such as `15m`, `2h` or `1d`, at least `1m`. The job is due
+  at the moment it was added plus whole steps.
+- `--cron "<expr>"`: the standard five fields, minute (0-59), hour (0-23), day of month (1-31), month (1-12) and day of
+  week (0-7, where 0 and 7 are Sunday). Each field takes `*`, a number, a range `a-b`, a list `a,b` and steps `*/n`
+  and `a-b/n`; names such as `MON` and the `@daily` forms are not taken. When both day fields are restricted, a day
+  that fits either one counts, as in every cron; as in Vixie cron and cronie, a day field that starts with `*`, such
+  as `*/2`, counts as unrestricted, so `0 9 */1 * 1-5` runs on weekdays only. The times are read in **this computer's
+  own time zone**, not in `DOTIME_TZ`, and `add` and `list` print them in that zone. When the clock shifts, the queue
+  does as cronie does. A fixed time (minute and hour fields that do not start with `*`) that the clock skips when it
+  moves ahead runs once, right after the jump; one it repeats when it moves back runs once, the first time. A job
+  with `*` in its minute or hour field, such as `*/15 * * * *`, follows the clock: it runs at the times the clock
+  shows, also twice in a repeated hour, and not in a skipped one. An `every` job steps in real time and does not see
+  a shift. An expression that names a day that never comes, such as the 30th of February, is refused.
+
+The job runs in the current folder, or in `--cwd`. `--isolate` makes each run an [isolated run](#isolated-runs).
+`--no-skip` starts each run with `run --no-skip`, as in the nightly example above. Without it, a nightly suite on a
+commit that has not changed is skipped after its first pass, so a break that comes from outside the code, such as a new
+dependency version, the date, or an outside service, is never caught. A missing label, a bad step or expression, a
+missing command after `--`, a folder that does not exist and any other flag exit 2 and store nothing. Without the tick
+installed, `add` prints one hint on how to install it.
+
+**`list`** prints one line per job, or `schedule: none`:
+
+```
+schedule 0a1b2c3d: "shop-api: suite", cron 0 2 * * *, no-skip, enabled; next: <date and time> CET; last: ran, exit 0
+schedule 4e5f6a7b: "shop-api: lint", every 1h, disabled; next: none; last: missed 3 runs
+```
+
+`no-skip` shows a job added with `--no-skip`. `last` is the newest journal line of the job. **`remove`**, **`enable`**
+and **`disable`** take the id; an unknown id exits 2. A disabled job is never started; once enabled again, its due times
+count from that moment, so the time it was disabled is not reported as missed.
+
+**`tick`** prints nothing and exits 0 when nothing is due. A tick that finds another tick at work, by the lock file
+`schedule.lock`, exits 0 at once; so a slow tick never runs twice at the same time. For each enabled job it looks at
+the due times since the last one it handled:
+
+- the newest one within the last 2 minutes: the job is started, once;
+- one or more older than that, because the computer slept or the tick was not installed: one journal line with
+  outcome `missed`, the number of missed times and the oldest and newest of them, and one notice, `dotime: missed
+  <label>` / `<n> runs missed while the tick did not run; running once now`. Then the job runs **once** to catch up,
+  never once per missed time, and goes on at its normal times;
+- its last scheduled run still waits or runs (its process is alive and is the one that was started, checked the way
+  slots are): no second start, and one journal line with outcome `busy` for that due time. Runs never pile up. A run
+  whose pid could not be saved counts as still going until a journal line of the job from its start on comes, for at
+  most a day.
+
+The tick saves the due time, and that a start is under way, in `schedule.json` before it starts the run, and the
+run's pid after. When that first save fails, for example on a full disk, it starts nothing, journals nothing and
+exits 1, so the same run is never started each minute. A job whose folder is gone gets a `could-not-start` line with
+exit 127; those lines are left out of the wait median and p90 of `history`. A `lastDue` that is not a time, or lies
+more than 2 minutes ahead, is said once, and the job's due times count from now.
+
+`schedule.json`, its lock, `schedule.log`, `schedule-notes.json` and the run logs are written for their owner alone
+(mode 600). The tick runs nothing, and exits 1, while `schedule.json` belongs to another user or its group or other
+users may write it: the file names the commands it runs. `schedule add`, `remove`, `enable` and `disable` refuse
+such a file the same way, with exit 1, so they never rewrite it as yours. The tick also exits 1 when
+`schedule.json` cannot be read or is not valid; its jobs are kept as they are. It skips, with a message, a job in
+the file that is not complete. Each of these problems, and a save that fails, is sent as one notice, `dotime: schedule not run`, `dotime: schedule cannot
+be used` or `dotime: schedule tick stopped`, with the fix, such as `chmod 600 <file>`; `schedule-notes.json` keeps
+which ones were sent, so the next ticks do not send them again. A broken file is told again once it changes, and a
+problem that went away and comes back is told again. A notice is sent only once that record is saved, so it is never
+sent each minute; when even that file cannot be written, the line in `schedule.log` is all that says it.
+
+**`install`** writes the one system entry and starts it; `--dry` prints what it would write and run, and changes
+nothing. On macOS it is the LaunchAgent `~/Library/LaunchAgents/com.deployontime.schedule-tick.plist`, with
+`StartInterval` 60, loaded with `launchctl bootstrap`. On Linux, when `systemctl --user` works, it is the user service
+and timer `dotime-schedule-tick` in `~/.config/systemd/user`, enabled with `systemctl --user enable --now`; a user timer
+runs only while you are logged in, unless `loginctl enable-linger` is on for your account. The service has
+`KillMode=process` so the runs the tick starts outlive it; while one still runs, systemd may log `Found left-over
+process ... in control group while starting unit` at the next tick, which is expected and harmless. When the `launchctl`
+or `systemctl` call fails, `install` says so, removes the files it wrote and exits 1. Elsewhere it prints the line to
+add with `crontab -e` and exits 1: the queue never edits your crontab. A `%` in a path is written as `%%` in the systemd
+units and as `\%` in the crontab line, and a `$` as `$$` in `ExecStart=`, so each means itself. The entry names the
+absolute paths of `node` and `cli.mjs` and passes on `PATH`, the state folder, and `DOTIME_TZ`, `DOTIME_NOTIFY` and
+`DOTIME_NOTIFY_CMD` when they are set, so run `install` from a shell in which your job commands are found. The tick's
+own lines go to `schedule.log` in the state folder. **`uninstall`** stops and removes the entry; a crontab line is left
+for you to remove.
+
+Not the same as the [scheduled-job report](#scheduled-job-report): that report only reads the launchd jobs you made
+yourself and tells whether they ran well. `schedule` runs jobs of its own through the queue.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -623,6 +747,11 @@ Nothing here ever stashes, resets or force-pushes, and no branch with unmerged c
 | 124 | Stopped at the run limit. |
 | 127 | The job's command could not be started. Journalled as `could-not-start`, not as a failure. |
 | 130 | Left the line because of a signal. |
+
+`schedule add`, `remove`, `enable` and `disable` exit 2 for words they do not understand and for an unknown id, and 1
+when `schedule.json` cannot be read or written, or its lock stays taken for 5 seconds; `schedule tick` exits 0 also when
+another tick is at work, and 1 when `schedule.json` cannot be read, saved or trusted; `schedule install` exits 1 when it
+could not install, also when it can only print the crontab line.
 
 `integrate` exits 0 once your branch holds the job, 1 for a merge conflict or a branch that moved during the check, and
 the check's own code when the check fails; see [Isolated runs](#isolated-runs). `discard` exits 1 when git could not
@@ -798,7 +927,8 @@ lines go to the journal: `journalctl --user --unit dotime-reaper`. For `DOTIME_H
 node queue/schedule-check.mjs [--dry] [--json]
 ```
 
-An optional extra, separate from the queue: a health report on your own scheduled jobs. It reads every job file in
+An optional extra, separate from the queue: a health report on your own scheduled jobs. It runs nothing itself; to
+have the queue run jobs on a schedule, see [Scheduled jobs](#scheduled-jobs). It reads every job file in
 `~/Library/LaunchAgents`, not only ones made for this project, and checks each job: loaded, last exit code
 accepted, scripts present, log as recent as the schedule implies. It changes no job; it only adds to its own log
 files in the state folder. Problems go out as one notice; `--dry` only prints. It exits 1 when it cannot read the
@@ -934,6 +1064,7 @@ Environment variables:
 | `DOTIME_NOTIFY_CMD` | not set | Shell command that receives each notice. |
 | `DOTIME_JOB` | set by `run` | Given to each job; names the slot of the outermost job, also inside nested runs. Not a setting: see nested runs under [`run`](#run). |
 | `DOTIME_PARENT` | set by `run` | Given to each job; names its direct parent: the slot it holds, or for the job of a nested run that run itself. Not a setting: see nested runs under [`run`](#run). |
+| `DOTIME_SCHEDULED` | set by `schedule tick` | Given to each run the tick starts: the id of its job, which `run` puts in `scheduled` in the journal line. Not handed on to the job's own command. Not a setting. |
 | `DOTIME_NO_SKIP` | set by `run` | `1` in a job started with `--no-skip`, in a job that could not be skipped itself (such as a build), and in any job nested in either; the runs nested in it are then never skipped. Not a setting: see **Checks that already passed** under [`run`](#run). |
 
 ## Files in the state folder
@@ -950,6 +1081,11 @@ Environment variables:
 | `reaper-state.json` | CPU samples between reaper runs. |
 | `health.json` | The last health reading of a waiting job, with the live CPU reading when one was taken, the time the reading ended and the CPU times it ended on. Other waiting jobs reuse the reading for up to `pollMs`, and never once it is 5 seconds old; the next reading measures the CPU from the saved CPU times. A temporary `health.json.tmp-<pid>` that a process left behind when it died while writing is removed by the next saved reading once it is a minute old. |
 | `schedule-check.json`, `schedule-check.jsonl` | Rules and results of the scheduled-job report. |
+| `schedule.json` | The [scheduled jobs](#scheduled-jobs): `{ "v": 1, "jobs": [...] }`, each with `id`, `label`, `cwd`, `command` (the words), `every` or `cron`, `enabled`, `isolate` and `noSkip` when given, `createdAt`, and once handled `lastDue`, `lastStart`, `lastPid` and `lastBorn`. Written whole, under the lock, with mode 600; the tick runs nothing from it while another user owns it or others may write it. |
+| `schedule.lock` | Held by a tick or a `schedule` change while it works; the lock of a process that is gone is taken over, after it is first moved to a name of the taker's own (`schedule.lock.stale-<pid>-<random>`), so only one of two takers wins. |
+| `schedule-notes.json` | The problems of the tick that were sent as a notice, so each is sent once. |
+| `schedule-runs/` | The output of the last run of each scheduled job, `<id>.log`. |
+| `schedule.log` | The lines of the tick, when the system entry that `schedule install` wrote starts it. |
 | `worktrees/` | The worktrees of [isolated runs](#isolated-runs), `<repo>-<id>`, with one state file `<id>.json` per kept job, and the temporary worktrees of `integrate` while it runs. |
 | `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`) and its output (`.log`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
 
@@ -960,8 +1096,11 @@ Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `l
 `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`
 (minutes waited per gate), `cmd`, `head` and `clean` (the commit and whether the tree was clean), `kind`, `limitMin`,
 `limitBasis` and `fp` (the hash of the code, used by the repeated-failure stop). Some lines add `stem`, `afterFix`,
-`signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested`, `isolate` (an isolated run) or `stamp` (on a
-line with outcome `skipped`: the passing run it relied on). Lines written by `run` also carry `pid`, the pid of the
+`signal`, `stopFailed`, `stoppedAt`, `longRunAt`, `warnedAt`, `nested`, `isolate` (an isolated run), `stamp` (on a
+line with outcome `skipped`: the passing run it relied on) or `scheduled` (the id of the scheduled job that started the
+run). The schedule tick also writes lines of its own, with `scheduled` and outcome `missed` (with `missed`, the number
+of missed times, and `missedFrom` and `missedTo`), `busy` (with `busyPid`, the last run that still went) or
+`could-not-start`. Lines written by `run` also carry `pid`, the pid of the
 `run` process, so whoever started that process can find its own line. Copies of the queue that share a state folder all
 read the same fields, so a field keeps its name; a new field is only ever added.
 
@@ -982,11 +1121,16 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 
 | Module | Purpose | Kind | Side effects it owns |
 | --- | --- | --- | --- |
-| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup`, `run`, `integrate`, `discard` or `worktrees`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
+| `cli.mjs` | The `dotime-queue` command: reads the command line and runs `status`, `passed`, `history`, `flaky`, `setup`, `run`, `integrate`, `discard`, `worktrees` or `schedule`. | entry point | Prints to stdout and stderr; ends the process, in one place. |
 | `run.mjs` | The `run` command in steps: plan the limit, wait for a slot (or a nested run's place), run the job. | library | Starts the job wrapper, signals the job, handles INT, TERM and HUP; writes through slots, journal and notices. |
 | `worktree.mjs` | Isolated runs: the checks before one, the worktree, branch, links and state file, and the commit after a pass. | library | Runs `git` that adds worktrees, branches and commits in them; writes `worktrees/`; makes links. |
 | `integrate.mjs` | The `integrate`, `discard` and `worktrees` commands. | library | Runs `git` that merges in a temporary worktree, fast-forwards your branch, removes worktrees and branches; removes `worktrees/` files. |
 | `job-wrapper.mjs` | Starts the job in a process group of its own and ends the way the job ended. | entry point | Starts the job, signals its own process group, writes to file descriptor 3. |
+| `schedule.mjs` | The `schedule` commands: add, list, remove, enable and disable, and the hand-over to the tick and to install. | library | Reads the journal; writes `schedule.json` through `timetable.mjs`. |
+| `timetable.mjs` | The scheduled jobs in `schedule.json`, the checks on a stored job, and the lock. | library | Reads and writes `schedule.json` and `schedule.lock`. |
+| `cron.mjs` | When a scheduled job is due: `every` steps, the five cron fields, next and due times on a wall clock. | library | None. |
+| `tick.mjs` | `schedule tick`: what is due, missed or busy, starting the run, and the notices for a schedule it cannot use. | library | Starts `dotime-queue run` processes; appends to the journal; writes `schedule-runs/`, `schedule-notes.json` and `schedule.json`. |
+| `tick-install.mjs` | `schedule install` and `uninstall`: the LaunchAgent, the systemd user timer or the crontab line. | library | Writes and removes the LaunchAgent or timer files; runs `launchctl`, `systemctl` and `crontab -l`. |
 | `reaper.mjs` | One reaper run: idle dev servers, stray test runs, idle slots, overload, low disk. | entry point | Stops idle dev-server groups, writes `reaper-state.json`, prunes `slots/`, `line/`, `nested/` and `places/`. |
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
 | `setup.mjs` | The queue instruction block and where `setup` puts it in a project's agent files; the MCP settings it prints. | library | Reads and, with `--write`, writes `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the project folder. |

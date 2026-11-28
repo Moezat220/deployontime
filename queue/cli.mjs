@@ -2,10 +2,10 @@
 // The dotime-queue command. `run` waits for a slot and runs one job under a run limit; `status` shows slots, line
 // and gate; `passed` looks up a pass stamp; `history` sums up the journal; `flaky` lists the checks that passed and
 // failed on one commit; `setup` puts the queue instruction into a project's agent files; `integrate`, `discard` and
-// `worktrees` handle the worktrees of isolated runs. queue/README.md describes each in full.
+// `worktrees` handle the worktrees of isolated runs; `schedule` adds, lists and changes scheduled jobs, starts the ones
+// that are due on each tick, and installs that tick. queue/README.md describes each in full.
 import { isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 import { minutesSince } from "./clock.mjs";
-import { snapshot } from "./slots.mjs";
 import { gateReason } from "./gate.mjs";
 import { cachedHealth, healthVerdict, readHealth, savedCpuTimes } from "./health.mjs";
 import { gitState, isRepository, repoTop } from "./git.mjs";
@@ -20,6 +20,15 @@ import { EXIT, jobFolder, realDeps, runCommand } from "./run.mjs";
 import { cmdDiscard, cmdIntegrate, cmdWorktrees } from "./integrate.mjs";
 import { afterMinutes } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
+import { spawn as spawnProcess } from "node:child_process";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { localWall, localZone } from "./cron.mjs";
+import { cmdSchedule, newId } from "./schedule.mjs";
+import { BORN, processGone, snapshot } from "./slots.mjs";
+import { makeLog, runProgram, tickEnv, tickInstalled } from "./tick-install.mjs";
+
+const CLI_FILE = fileURLToPath(import.meta.url);
 
 // A nested run belongs to a job only when it names that job's slot or note, pid and start time: a later job in the
 // same slot is another job.
@@ -68,12 +77,14 @@ function nestedLines(parent, nested, now, depth, lines, shown = new Set()) {
 }
 
 /** One line of `history` for a project's totals. Skipped jobs are named only when there are any, with the run time
- *  of the passing runs they relied on as the time saved. flaky: the number of flaky checks in the range. */
+ *  of the passing runs they relied on as the time saved. flaky: the number of flaky checks in the range. scheduled:
+ *  the jobs the schedule tick started; the tick's missed and busy lines are named only when there are any. */
 export function historyRow(name, t, flaky = 0) {
     const gates = Object.entries(t.waitBy).map(([gate, min]) => `${gate} ${min} min`).join(", ") || "nothing";
     const skipped = t.skipped ? `, skipped ${t.skipped} (saved ${t.savedMin} min)` : "";
+    const tick = `${t.missed ? `, missed ${t.missed}` : ""}${t.busy ? `, busy ${t.busy}` : ""}`;
     return `${name}: jobs ${t.jobs}, failed ${t.failed}, stopped ${t.stopped}, timed out ${t.timedOut}, `
-        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}, flaky ${flaky}; `
+        + `refused ${t.refused}, gave up ${t.gaveUp}${skipped}, flaky ${flaky}, scheduled ${t.scheduled ?? 0}${tick}; `
         + `waited: jobs ${t.waited}, sum ${t.waitMinTotal} min, clock ${t.waitWallMin} min, `
         + `clock with no job running ${t.blockedOnlyMin} min, `
         + `median ${t.waitMedian} min, p90 ${t.waitP90} min; held by: ${gates}`;
@@ -86,7 +97,7 @@ export function historyLines(lines, range) {
     const { all, byProject } = summarize(lines, range.from, range.to);
     const flaky = flakyCounts(flakyChecks(lines, { from: range.from, now: range.to }));
     const out = [`history: ${range.title}, jobs ${all.jobs}`];
-    if (!all.jobs) return { all, byProject, lines: out };
+    if (!all.jobs && !all.missed && !all.busy) return { all, byProject, lines: out };
     out.push(historyRow("all projects", all, flaky.all));
     for (const [name, t] of Object.entries(byProject)) out.push(historyRow(name, t, flaky.byProject[name] ?? 0));
     return { all, byProject, lines: out };
@@ -204,7 +215,8 @@ export async function main(args = process.argv.slice(2)) {
     }
     const command = args.length ? args[0] : "status";
     // integrate and discard take a job id first, and read their own flags.
-    const ownFlags = ["run", "integrate", "discard"].includes(command);
+    // schedule reads the flags of its own sub-commands.
+    const ownFlags = ["run", "integrate", "discard", "schedule"].includes(command);
     const badFlag = ownFlags ? null : flagError([command, ...args.slice(1)]);
     if (badFlag) {
         say(badFlag);
@@ -221,6 +233,7 @@ export async function main(args = process.argv.slice(2)) {
     if (command === "history") return cmdHistory(args, ctx);
     if (command === "flaky") return cmdFlaky(args, ctx);
     if (command === "worktrees") return cmdWorktrees(ctx);
+    if (command === "schedule") return cmdSchedule(args.slice(1), ctx.files, scheduleDeps(ctx, localZone()));
     if (command === "discard") return cmdDiscard(args, ctx, { say });
     if (command === "integrate") {
         const read = jobFolder({}, { cwd: () => process.cwd() });
@@ -232,6 +245,25 @@ export async function main(args = process.argv.slice(2)) {
         return cmdIntegrate(args, { ...ctx, cwd: read.cwd }, { say, run });
     }
     return runCommand(args, ctx, runDeps(ctx));
+}
+
+/** The deps of `schedule`: the real clock, the wall clock and zone of this computer, this process as the owner of
+ *  the lock, the started runs as `node cli.mjs run`, and for install the user's home folder, launchctl and systemctl.
+ *  env: the environment the runs and the tick get. */
+export function scheduleDeps({ files }, zone, env = process.env) {
+    const node = process.execPath;
+    const install = {
+        platform: process.platform, userHome: homedir(), uid: process.getuid?.(), run: runProgram, makeLog,
+        where: { node, cli: CLI_FILE, env: tickEnv(env, files.home), log: files.tickLog },
+    };
+    return {
+        now: Date.now, wall: localWall, zone, uid: process.getuid?.(), owner: { pid: process.pid, born: BORN },
+        isGone: (entry) => processGone(entry),
+        pause: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), newId,
+        cwd: () => process.cwd(), print: console.log, say, spawn: spawnProcess, env, node, cli: CLI_FILE,
+        notify: (title, message) => notify(title, message, { env, logFile: files.notifyLog }),
+        installed: () => tickInstalled(install.where, install), install,
+    };
 }
 
 /** The deps `run` uses. Its health reading is shared between jobs that wait at the same time, one per poll, and is

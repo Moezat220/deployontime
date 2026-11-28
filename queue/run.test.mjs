@@ -1029,3 +1029,35 @@ test("run: a done notice that fails, throws or hangs changes no exit code and ho
     assert.deepEqual(journal(box).map((line) => [line.outcome, line.exit]), [["ran", 3], ["ran", 3], ["ran", 0]]);
     assert.deepEqual(doneLines(box).map(([, message]) => message), ["failed, exit 3, ran 8 min", "failed, exit 3, ran 8 min"]);
 });
+
+// ---- scheduled runs ----
+
+test("run: a run started by the schedule tick names its job in scheduled; a manual run's line has no such field", async () => {
+    const box = sandbox(), job = countingJob(), label = "docs-site: nightly job";
+    assert.equal((await runAt(box, job.args(label))).code, 0);
+    assert.equal((await runAt(box, job.args(label), { env: { DOTIME_SCHEDULED: "0a1b2c3d" } })).code, 0);
+    assert.equal((await runAt(box, job.args(label), { env: { DOTIME_SCHEDULED: "not-an-id" } })).code, 0);
+    const [manual, scheduled, odd] = journal(box);
+    assert.equal("scheduled" in manual, false);
+    assert.equal(scheduled.scheduled, "0a1b2c3d");
+    assert.equal("scheduled" in odd, false, "anything but 8 hex digits is no id");
+    const { scheduled: id, ...rest } = scheduled;
+    assert.deepEqual(Object.keys(rest), Object.keys(manual), "the field is the only difference");
+    assert.equal(id, "0a1b2c3d");
+});
+
+test("run: a refused scheduled run keeps scheduled, and the job of a scheduled run does not get DOTIME_SCHEDULED", async () => {
+    const box = sandbox(), job = countingJob(), label = "docs-site: nightly job";
+    job.failWith(1);
+    for (let n = 0; n < 2; n++) assert.equal((await runAt(box, job.args(label), { env: { DOTIME_SCHEDULED: "0a1b2c3d" } })).code, 1);
+    assert.equal((await runAt(box, job.args(label), { env: { DOTIME_SCHEDULED: "0a1b2c3d" } })).code, EXIT.refused);
+    assert.deepEqual(journal(box).map((line) => [line.outcome, line.scheduled]), [["ran", "0a1b2c3d"], ["ran", "0a1b2c3d"], ["refused", "0a1b2c3d"]]);
+    const seen = join(tempDir("run-scheduled"), "seen");
+    const args = ["run", "--label", "docs-site: env", "--", NODE, "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.env.DOTIME_SCHEDULED ?? "none")`];
+    process.env.DOTIME_SCHEDULED = "0a1b2c3d";
+    try {
+        assert.equal((await runAt(box, args, { env: { DOTIME_SCHEDULED: "0a1b2c3d" } })).code, 0);
+    } finally { delete process.env.DOTIME_SCHEDULED; }
+    assert.equal(readFileSync(seen, "utf8"), "none", "a run nested in it would count as scheduled too");
+});

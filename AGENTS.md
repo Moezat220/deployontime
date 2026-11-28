@@ -7,6 +7,7 @@ This file is for coding agents that open this repository.
 DeployOnTime is an open-source software factory for building with coding agents, published one part at a time. The
 part that works today is the machine queue, `dotime-queue`: one waiting line that lets several agents share one
 computer without running too many heavy jobs at once. An MCP server, `dotime-mcp`, offers the same queue as tools.
+`dotime-queue schedule` runs jobs on a schedule through the same queue, from a tick the system starts every minute.
 
 ## Install
 

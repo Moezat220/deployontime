@@ -47,7 +47,8 @@ export const isFailedRun = (row) => row.outcome === "ran" && row.exit !== 0 && !
 export const isSkipped = (row) => row.outcome === "skipped";
 
 const isoOrNull = (ms) => (ms ? new Date(ms).toISOString() : null);
-/** Builds a journal line. outcome: ran, stopped, timed-out, refused, skipped, gave-up, left or could-not-start. */
+/** Builds a journal line. outcome: ran, stopped, timed-out, refused, skipped, gave-up, left or could-not-start, and
+ *  for lines the schedule tick writes, missed and busy. */
 export function record(job) {
     const { label, project, cwd, priority, queuedAt, startedAt, endedAt, outcome, exit, tally } = job;
     const { cmd, head, clean, extra } = job;
@@ -175,9 +176,15 @@ export function clockMinutes(waits, runs = []) {
     return { waitWallMin: minutes(wall), blockedOnlyMin: minutes(blocked) };
 }
 
-function totals(rows, until) {
-    // A skipped job never waited, so it is left out of the wait percentiles.
-    const waits = rows.filter((row) => !isSkipped(row)).map((row) => row.waitMin);
+/** A line the schedule tick wrote for a time it did not start a run: missed while the tick did not run, or busy
+ *  because the last run still went. It is no job. */
+export const isTickNote = (row) => row.outcome === "missed" || row.outcome === "busy";
+
+function totals(all, until) {
+    const rows = all.filter((row) => !isTickNote(row));
+    // A skipped job never waited, nor did a job the schedule tick could not start (byTick), so both are left out of
+    // the wait percentiles.
+    const waits = rows.filter((row) => !isSkipped(row) && !row.byTick).map((row) => row.waitMin);
     const waitBy = {};
     for (const row of rows) {
         for (const [gate, min] of Object.entries(row.waitBy ?? {})) {
@@ -199,11 +206,15 @@ function totals(rows, until) {
         skipped: count(isSkipped),
         // The run time of the passing run each skipped job relied on: about the time the skip saved.
         savedMin: oneDecimal(rows.filter(isSkipped).reduce((sum, row) => sum + (row.stamp?.runMin ?? 0), 0)),
+        // Jobs the schedule tick started, and its lines for gaps and for runs it did not start.
+        scheduled: count((row) => typeof row.scheduled === "string"),
+        missed: all.filter((row) => row.outcome === "missed").length,
+        busy: all.filter((row) => row.outcome === "busy").length,
         waitBy,
     };
 }
 /** Returns { all, byProject } for jobs whose queue time lies in [since, until); the project that waited longest
- *  comes first. */
+ *  comes first. The lines of isTickNote() are counted as missed and busy, and in nothing else. */
 export function summarize(lines, since = 0, until = Infinity) {
     const inRange = (row) => Date.parse(row.queuedAt) >= since && Date.parse(row.queuedAt) < until;
     const rows = parseLines(lines).filter(inRange);

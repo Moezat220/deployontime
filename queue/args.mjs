@@ -21,6 +21,19 @@ export const USAGE = [
     "  dotime-queue passed [--match <text>] [--cwd <dir>]",
     "  dotime-queue history [--days <n> | --day <YYYY-MM-DD>]",
     "  dotime-queue flaky [--days <n>]",
+    '  dotime-queue schedule add --label "<project>: <task>" (--every <step> | --cron "<expr>") [options] -- <command>',
+    "      --every <step>       run every so long, from now on: 15m, 2h, 1d; at least 1m",
+    '      --cron "<expr>"      run at the times of a 5-field cron expression, in this computer\'s time zone',
+    "      --isolate            run each time in a git worktree of its own, as run --isolate",
+    "      --no-skip            run each time, also when the check already passed on the commit, as run --no-skip",
+    "      --cwd <dir>          the folder to run in, in place of the current one",
+    "  dotime-queue schedule list",
+    "  dotime-queue schedule remove <id>",
+    "  dotime-queue schedule enable <id>",
+    "  dotime-queue schedule disable <id>",
+    "  dotime-queue schedule tick",
+    "  dotime-queue schedule install [--dry]",
+    "  dotime-queue schedule uninstall [--dry]",
     "  dotime-queue setup [--write] [--cwd <dir>] [--mcp]",
     "      --write              add the queue instruction to the agent files (without it: only show)",
     "      --cwd <dir>          the project folder, in place of the top of the git repository",
@@ -47,6 +60,19 @@ export const FLAGS = Object.freeze({
     worktrees: { values: [], switches: [] },
 });
 
+/** Per `schedule` sub-command, as FLAGS; command: the words behind "--" are the job's command and are not looked at.
+ *  remove, enable and disable take the job id in front of their flags. */
+export const SCHEDULE_FLAGS = Object.freeze({
+    add: { values: ["--label", "--every", "--cron", "--cwd"], switches: ["--isolate", "--no-skip"], command: true },
+    list: { values: [], switches: [] },
+    remove: { values: [], switches: [] },
+    enable: { values: [], switches: [] },
+    disable: { values: [], switches: [] },
+    tick: { values: [], switches: [] },
+    install: { values: [], switches: ["--dry"] },
+    uninstall: { values: [], switches: ["--dry"] },
+});
+
 /** The flags of the two scripts that run beside the queue, which take switches only. */
 export const SCRIPT_FLAGS = Object.freeze({
     "reaper": { values: [], switches: ["--dry"] },
@@ -57,14 +83,16 @@ export const SCRIPT_FLAGS = Object.freeze({
 export const USAGE_EXIT = 2;
 
 /** null when every word fits the subcommand's flags, else the message to print. args[0] is the subcommand; for
- *  `run` and `integrate` only the words in front of "--" are looked at. A value may not be empty, and no flag may be given twice.
+ *  `run`, `integrate` and a table entry with command: true only the words in front of "--" are looked at. A value
+ *  may not be empty, and no flag may be given twice.
  *  A value that starts with "--" is taken only in the --name=value spelling: in the other one it is read as the
  *  next flag, and the message says how to write it. */
 export function flagError(args, table = FLAGS) {
     const allowed = table[args[0]];
     if (!allowed) return null;
     const cut = args.indexOf("--");
-    const words = args.slice(1, ["run", "integrate"].includes(args[0]) && cut >= 0 ? cut : args.length);
+    const commandAfter = ["run", "integrate"].includes(args[0]) || allowed.command;
+    const words = args.slice(1, commandAfter && cut >= 0 ? cut : args.length);
     const seen = new Set();
     for (let i = 0; i < words.length; i++) {
         const word = words[i];

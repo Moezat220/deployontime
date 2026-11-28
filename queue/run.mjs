@@ -34,6 +34,7 @@ import { folderProject, jobProject } from "./project.mjs";
 import { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
+import { SCHEDULED_MARKER } from "./tick.mjs";
 import { finishIsolate, journalFacts, makeWorktree, prepareIsolate } from "./worktree.mjs";
 
 /** The exit codes of dotime-queue itself; a job that ran passes its own code on. */
@@ -277,6 +278,8 @@ export function runJob(job, slot, deps) {
     // Only this job's own --no-skip, or the one it was handed as a nested run, reaches the runs nested in it.
     delete env[NO_SKIP_MARKER];
     if (job.noSkip) env[NO_SKIP_MARKER] = "1";
+    // The runs nested in a scheduled job were not started by the tick themselves.
+    delete env[SCHEDULED_MARKER];
     const where = runIn ? { cwd: runIn } : {};
     const child = deps.spawn(process.execPath, [WRAPPER, String(pid), ...job.cmd], { stdio, detached: true, env, ...where });
     updateSlot(slot, pid, { pgid: child.pid, startedAt });
@@ -470,7 +473,9 @@ export function jobFolder(ctx, deps) {
  *  (see worktree.mjs) the folder must be a clean git checkout, else exit 2 before anything is journalled; the job is
  *  never skipped, its worktree is made once it holds its slot, so a job that is refused, gives up or leaves the line
  *  leaves none, and the command runs there. The check stays the one of the folder the run was started in, so the
- *  repeated-failure stop and the flaky flag see isolated runs as runs of that folder. */
+ *  repeated-failure stop and the flaky flag see isolated runs as runs of that folder. A run that the schedule tick started
+ *  (see tick.mjs) finds its job id in deps.env and keeps it as `scheduled` in its journal line; nothing else about it
+ *  differs. */
 export async function runCommand(args, ctx, deps) {
     const { settings, files, tz } = ctx;
     const { say, signals } = deps;
@@ -505,7 +510,10 @@ export async function runCommand(args, ctx, deps) {
     const pid = process.pid;
     const markers = deps.env?.[PARENT_MARKER] || deps.env?.[JOB_MARKER];
     const outer = markers ? parentJob({ env: deps.env, pid, ...snapshot({ dirs: files }) }) : null;
-    const details = outer ? { ...plan.details, nested: true } : plan.details;
+    // A run that `schedule tick` started names its job; a run started any other way gets no such field.
+    const scheduled = scheduledBy(deps.env);
+    const ownDetails = scheduled ? { ...plan.details, scheduled } : plan.details;
+    const details = outer ? { ...ownDetails, nested: true } : ownDetails;
     const journal = journalWriter({
         label, folder, cwd, priority, queuedAt, command, details, file: files.journal, now: deps.now, pid,
     });
@@ -573,7 +581,7 @@ export async function runCommand(args, ctx, deps) {
         if (!nested.parentGone) return nested.exit;
         say(`parent gone: "${outer.label}", pid ${outer.pid}, ended while this run waited for a nested place; `
             + "joins the line as a normal run");
-        journal.note({ details: plan.details });
+        journal.note({ details: ownDetails });
         return runInLine({ ...job, waitFrom: nested.waitFrom, tally: nested.tally }, waitDeps, deps);
     };
     try {
@@ -589,6 +597,13 @@ export async function runCommand(args, ctx, deps) {
     } finally {
         watch.drop();
     }
+}
+
+/** The id of the scheduled job that started this run, from SCHEDULED_MARKER, or null; anything but 8 hex digits is
+ *  no id. */
+export function scheduledBy(env) {
+    const id = env?.[SCHEDULED_MARKER];
+    return typeof id === "string" && /^[0-9a-f]{8}$/.test(id) ? id : null;
 }
 
 /** Sends the done notice of a job that ran at least minMin minutes, once its journal line is written. A notice that

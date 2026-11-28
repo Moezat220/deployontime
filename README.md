@@ -78,6 +78,10 @@ When a check fails that both passed and failed before on the same commit from a 
 saying the failure may not come from the change; it is advice only and changes no exit code. Timeouts, stops and runs
 with uncommitted changes never count, and `dotime-queue flaky` lists the flaky checks.
 
+Scheduled jobs, such as the full suite every night or a lint every hour, go through the same `run`:
+`dotime-queue schedule add --label "shop-api: suite" --cron "0 2 * * *" --no-skip -- npm test`. One small system entry runs
+`dotime-queue schedule tick` every minute, which starts what is due, reports a missed run and catches up only once.
+
 Only commands started through the queue are queued. A command an agent runs directly, such as a plain `npm test`, is
 not. The queue never edits your repository; it keeps its state in `~/.dotime`.
 
@@ -216,6 +220,13 @@ older tasks API of revision 2025-11-25 is not offered.
 <summary><strong>How do I know a long job has finished?</strong></summary>
 
 A job that ran 5 minutes or more sends a done notice, and MCP clients with tasks support get the result by themselves.
+</details>
+
+<details>
+<summary><strong>Can it run a job on a schedule?</strong></summary>
+
+Yes: `dotime-queue schedule add` with `--every 1h` or `--cron "0 2 * * *"`, then `dotime-queue schedule install`; see
+[Scheduled jobs](queue/README.md#scheduled-jobs).
 </details>
 
 <details>

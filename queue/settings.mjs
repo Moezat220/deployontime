@@ -76,6 +76,11 @@ export function paths(env = process.env) {
         healthCache: join(home, "health.json"),
         scheduleRules: join(home, "schedule-check.json"),
         scheduleLog: join(home, "schedule-check.jsonl"),
+        schedule: join(home, "schedule.json"),
+        scheduleLock: join(home, "schedule.lock"),
+        scheduleRuns: join(home, "schedule-runs"),
+        tickLog: join(home, "schedule.log"),
+        tickNotes: join(home, "schedule-notes.json"),
     };
 }
 

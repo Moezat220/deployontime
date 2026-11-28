@@ -11,7 +11,7 @@ import { dropOldTemp, readJson, tempName, writeJsonAtomic } from "./files.mjs";
 
 // When this process started (wall clock, ms). Its own entries carry it, so a reader can tell this process from a newer
 // one that was given the same pid after it ended without cleaning up.
-const BORN = Math.round(Date.now() - process.uptime() * 1000);
+export const BORN = Math.round(Date.now() - process.uptime() * 1000);
 const SAME_START_MS = 5000;
 const bornOf = (pid) => (pid === process.pid ? { born: BORN } : {});
 
@@ -26,6 +26,12 @@ function makeDirs(dirs) {
 // An entry whose pid now belongs to a process that started later than the entry says.
 function pidReused(data, seconds, now) {
     return seconds !== undefined && Math.abs(now - seconds * 1000 - data.born) > SAME_START_MS;
+}
+/** True when the process an entry ({ pid, born }) names has ended, or its pid now names a process that started at
+ *  another time. */
+export function processGone(entry, { isAlive = alive, ages = processAges, now = Date.now() } = {}) {
+    if (!isAlive(entry.pid)) return true;
+    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now);
 }
 const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at - b.at || a.pid - b.pid;
 

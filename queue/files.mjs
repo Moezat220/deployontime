@@ -48,12 +48,14 @@ export function readJson(file, fallback = null, problem = null) {
 }
 
 /** Writes JSON under a temporary name and then moves it into place, creating the folder first. Throws when the
- *  file cannot be written; the temporary file is removed again in that case. */
-export function writeJsonAtomic(file, value, space = undefined) {
+ *  file cannot be written; the temporary file is removed again in that case. mode: the permissions of the new file,
+ *  by default those the umask leaves. */
+export function writeJsonAtomic(file, value, space = undefined, mode = undefined) {
     mkdirSync(dirname(file), { recursive: true });
     const temp = tempName(file);
     try {
-        writeFileSync(temp, JSON.stringify(value, null, space));
+        rmSync(temp, { force: true });
+        writeFileSync(temp, JSON.stringify(value, null, space), mode === undefined ? undefined : { mode });
         renameSync(temp, file);
     } catch (e) {
         rmSync(temp, { force: true });

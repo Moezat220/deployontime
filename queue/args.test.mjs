@@ -1,7 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FLAGS, flagError, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRunArgs, shellWord, USAGE } from "./args.mjs";
+import { FLAGS, flagError, SCHEDULE_FLAGS, SCRIPT_FLAGS, opt, parseMaxRun, parseMaxWait, parseRunArgs, shellWord, USAGE } from "./args.mjs";
 import { DEFAULTS } from "./settings.mjs";
 
 test("flagError: accepts each subcommand's own flags in both spellings", () => {
@@ -197,8 +197,29 @@ test("USAGE: names every subcommand and flag that FLAGS accepts, and no other fl
         assert.equal(USAGE.includes(`dotime-queue ${command}`), true, command);
         for (const flag of [...values, ...switches]) assert.equal(new RegExp(`${flag}(?![\\w-])`).test(USAGE), true, flag);
     }
-    const known = new Set(Object.values(FLAGS).flatMap(({ values, switches }) => [...values, ...switches]));
+    const known = new Set([...Object.values(FLAGS), ...Object.values(SCHEDULE_FLAGS)].flatMap(({ values, switches }) => [...values, ...switches]));
     for (const flag of USAGE.match(/--[\w-]+/g)) assert.equal(known.has(flag), true, flag);
+});
+
+test("SCHEDULE_FLAGS: one usage line per schedule sub-command, naming each of its flags", () => {
+    assert.deepEqual(Object.keys(SCHEDULE_FLAGS), ["add", "list", "remove", "enable", "disable", "tick", "install", "uninstall"]);
+    for (const [sub, { values, switches }] of Object.entries(SCHEDULE_FLAGS)) {
+        const line = USAGE.split("\n").find((l) => l.startsWith(`  dotime-queue schedule ${sub}`));
+        assert.ok(line, sub);
+        for (const flag of [...values, ...switches]) assert.equal(new RegExp(`${flag}(?![\\w-])`).test(sub === "add" ? USAGE : line), true, flag);
+    }
+});
+
+test("flagError: schedule add looks only in front of the --; the others take their own switches only", () => {
+    const add = ["add", "--label", "shop-api: lint", "--every", "1h", "--isolate", "--cwd", "/srv/shop-api", "--", "npm", "run", "lint", "--fix"];
+    assert.equal(flagError(add, SCHEDULE_FLAGS), null);
+    assert.equal(flagError(["add", "--evry", "1h", "--", "make"], SCHEDULE_FLAGS), "unknown option --evry");
+    assert.equal(flagError(["add", "--cron", "--", "make"], SCHEDULE_FLAGS), "option --cron needs a value");
+    assert.equal(flagError(["add", "--every", "1h", "--every", "2h", "--", "make"], SCHEDULE_FLAGS), "option --every is given twice");
+    assert.equal(flagError(["install", "--dry"], SCHEDULE_FLAGS), null);
+    assert.equal(flagError(["tick", "--dry"], SCHEDULE_FLAGS), "unknown option --dry");
+    assert.equal(flagError(["list", "extra"], SCHEDULE_FLAGS), 'unexpected word "extra"');
+    assert.equal(flagError(["tick", "--", "make"], SCHEDULE_FLAGS), "unknown option --");
 });
 
 test("flagError: the scripts beside the queue accept their own switches and nothing else", () => {

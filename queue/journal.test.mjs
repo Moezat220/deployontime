@@ -6,7 +6,7 @@ import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("journal");
 const {
-    addWait, append, clockMinutes, cmdString, findStamp, historyWindow, isFailedRun, isStopped, jobEnd,
+    addWait, append, clockMinutes, cmdString, findStamp, historyWindow, isFailedRun, isStopped, isTickNote, jobEnd,
     lineProject, parseLines, readLines, record, skipStamp, summarize,
 } = await import("./journal.mjs");
 
@@ -279,4 +279,21 @@ test("summarize: skipped jobs never waited, so they are left out of the wait med
     for (let i = 0; i < 3; i++) lines.push(skippedLine({ queuedAt: iso(10 + i), endedAt: iso(10 + i) }));
     const { all } = summarize(lines, START, START + 60 * MINUTE);
     assert.deepEqual([all.jobs, all.skipped, all.waitMedian, all.waitP90, all.waitMinTotal], [6, 3, 6, 8, 18]);
+});
+
+test("summarize: scheduled runs are counted as jobs and as scheduled; the tick's missed and busy lines only as such", () => {
+    const at = "2031-03-14T10:00:00.000Z";
+    const base = { v: 1, label: "shop-api: lint", project: "shop-api", queuedAt: at, startedAt: at, endedAt: at, waitMin: 0, runMin: 1 };
+    const row = (more) => JSON.stringify({ ...base, ...more });
+    const lines = [
+        row({ outcome: "ran", exit: 0 }), row({ outcome: "ran", exit: 1, scheduled: "0a1b2c3d" }),
+        row({ outcome: "refused", exit: 3, scheduled: "0a1b2c3d", startedAt: null }),
+        row({ outcome: "missed", exit: null, scheduled: "0a1b2c3d", missed: 4, startedAt: null, runMin: 0, waitMin: 30 }),
+        row({ outcome: "busy", exit: null, scheduled: "0a1b2c3d", startedAt: null, runMin: 0 }),
+        JSON.stringify({ v: 1, label: "docs-site: build", queuedAt: at, outcome: "missed", scheduled: "4e5f6a7b", missed: 1 }),
+    ];
+    const { all, byProject } = summarize(lines);
+    assert.deepEqual([all.jobs, all.failed, all.refused, all.scheduled, all.missed, all.busy, all.waitMinTotal], [3, 1, 1, 2, 2, 1, 0]);
+    assert.deepEqual([byProject["shop-api"].jobs, byProject["shop-api"].missed, byProject["docs-site"].jobs, byProject["docs-site"].missed], [3, 1, 0, 1]);
+    assert.equal(isTickNote({ outcome: "missed" }) && isTickNote({ outcome: "busy" }) && !isTickNote({ outcome: "ran" }), true);
 });
