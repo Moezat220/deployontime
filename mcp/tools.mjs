@@ -4,7 +4,7 @@
 // the job keeps its own process group, waits under the queue's slot and line rules, and outlives the server. No text
 // is ever handed to a shell: the command is an array of words, passed on as separate arguments.
 import { spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { planFields } from "../queue/capacity.mjs";
@@ -17,7 +17,7 @@ import { isLost, LOST_TEXT } from "../queue/lost.mjs";
 import { folderProject } from "../queue/project.mjs";
 import { snapshot } from "../queue/slots.mjs";
 import {
-    activeJobs, claimRerun, createJob, JOB_ID_RE, jobIds, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess,
+    activeJobs, claimRerun, createJob, JOB_ID_RE, jobFiles, jobIds, jobsDir, KEEP_DAYS, newJobId, pruneJobs, readJob, runnerActive, sameProcess,
     START_GRACE_MS, tailLines,
 } from "./jobs.mjs";
 
@@ -312,31 +312,51 @@ function flakyOf(row, journal, { settings }) {
 
 /** What is known of a lost job: { lostAt, rerunAs, text }. lostAt is the end time of the lost journal line of its
  *  queue process, or null when none was written (the run had not started its command); rerunAs the id of the job
- *  that started it again, or null; text the sentence that says so. rows: the parsed journal, read when not given. */
+ *  that started it again, or null; text the sentence that says so, and why it was not started again when it asked
+ *  to be and was not. rows: the parsed journal, read when not given. */
 export function lostFacts(job, ctx, rows = parseLines(readLines(ctx.files.journal))) {
     const row = journalLine(job.request, job.pid, rows);
     const lostAt = isLost(row) ? row.endedAt : null;
     const rerunAs = typeof job.rerun?.id === "string" ? job.rerun.id : null;
-    const text = `${LOST_TEXT}${lostAt ? `; journalled as lost at ${lostAt}` : ""}${rerunAs ? `; started again as job ${rerunAs}` : ""}`;
+    const notStarted = typeof job.rerun?.notStarted === "string" ? job.rerun.notStarted : null;
+    const text = `${LOST_TEXT}${lostAt ? `; journalled as lost at ${lostAt}` : ""}${rerunAs ? `; started again as job ${rerunAs}` : ""}`
+        + `${notStarted ? `; not started again: ${notStarted}` : ""}`;
     return { lostAt, rerunAs, text };
 }
 
 /** Starts again, once, each lost job in this server's job folder whose request asked for it with rerunIfLost: as a
- *  new job with the same request, a new id and rerunOf naming the old one, which is noted in the old job's .rerun
- *  file before anything starts, so two servers never both start it. A job counts as lost here only when its queue
- *  process is gone too. A re-run is never started again itself. Returns the new ids. */
-export function rerunLost(ctx, now = Date.now()) {
+ *  new job with the same request, a new id and rerunOf naming the old one. The new job is written first and then
+ *  noted in the old job's .rerun file, which only one server can create; a server that loses removes its new job
+ *  before it starts. A job counts as lost here only when its runner wrote a pid file, its runner and queue process
+ *  are gone, and the journal has no line of that queue process but a lost one. A job without a pid file is never
+ *  started again: its first copy may still be running. When mcpMaxJobs jobs started here are still running, the
+ *  job is not started again, and its .rerun file says why. A re-run is never started again itself. make: writes the
+ *  new job, createJob by default. Returns the new ids. */
+export function rerunLost(ctx, now = Date.now(), { make = createJob } = {}) {
     const dir = jobsDir(ctx.files.home);
     const started = [];
+    let rows = null;
     for (const id of jobIds(dir)) {
         const job = readJob(dir, id);
         const { request } = job;
-        if (!request?.rerunIfLost || request.rerunOf || job.rerun || job.exit || runnerActive(job, now, ctx.sameProcess)) continue;
-        if (job.pid && ctx.sameProcess(job.pid.queuePid, job.pid.startedAt)) continue;
+        if (!request?.rerunIfLost || request.rerunOf || job.rerun || job.exit || !job.pid) continue;
+        if (runnerActive(job, now, ctx.sameProcess)) continue;
+        if (ctx.sameProcess(job.pid.queuePid, job.pid.startedAt, { group: job.pid.runnerPid })) continue;
+        rows ??= parseLines(readLines(ctx.files.journal));
+        const line = journalLine(request, job.pid, rows);
+        if (line && !isLost(line)) continue;
+        const active = activeJobs(dir, { now, check: ctx.sameProcess }).length;
+        if (active >= ctx.settings.mcpMaxJobs) {
+            claimRerun(dir, id, null, now, `${active} ${active === 1 ? "job" : "jobs"} running`);
+            continue;
+        }
         const next = newJobId();
-        if (!claimRerun(dir, id, next, now)) continue;
         const { rerunIfLost: _asked, ...same } = request;
-        createJob(dir, next, { ...same, id: next, createdAt: now, rerunOf: id });
+        try { make(dir, next, { ...same, id: next, createdAt: now, rerunOf: id }); } catch { continue; }
+        if (!claimRerun(dir, id, next, now)) {
+            for (const file of Object.values(jobFiles(dir, next))) rmSync(file, { force: true });
+            continue;
+        }
         ctx.startRunner(dir, next, request.cwd, ctx.files.home);
         started.push(next);
     }

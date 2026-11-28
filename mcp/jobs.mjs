@@ -49,11 +49,13 @@ export function readJob(dir, id) {
     return { files, request: readJson(files.request), pid: readJson(files.pid), exit: readJson(files.exit), rerun: readJson(files.rerun) };
 }
 
-/** Notes that the lost job id is started again as the job next. Only one caller ever wins: the file is created only
- *  when there is none. Returns true for the winner. */
-export function claimRerun(dir, id, next, now = Date.now()) {
+/** Notes that the lost job id is started again as the job next, or with next null that it is not started again and
+ *  why (notStarted). Only one caller ever wins: the file is created only when there is none. Returns true for the
+ *  winner. */
+export function claimRerun(dir, id, next, now = Date.now(), notStarted = null) {
     try {
-        writeFileSync(jobFiles(dir, id).rerun, JSON.stringify({ id: next, at: now }), { flag: "wx" });
+        const note = next ? { id: next, at: now } : { notStarted, at: now };
+        writeFileSync(jobFiles(dir, id).rerun, JSON.stringify(note), { flag: "wx" });
         return true;
     } catch {
         return false;
@@ -64,7 +66,8 @@ export function claimRerun(dir, id, next, now = Date.now()) {
  *  START_GRACE_MS and its runner has not written a pid file yet. */
 export function runnerActive(job, now = Date.now(), check = sameProcess) {
     if (job.exit) return false;
-    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt);
+    // The runner leads a process group of its own, so its group is its pid.
+    if (job.pid) return check(job.pid.runnerPid, job.pid.runnerStartedAt, { group: job.pid.runnerPid });
     return now - (Number(job.request?.createdAt) || 0) < START_GRACE_MS;
 }
 

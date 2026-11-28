@@ -4,14 +4,15 @@
 import { cleanEnv, isolateProcess, pause, tempDir, track, until } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 isolateProcess("lost");
-const { claimPending, finishAbandoned, isLost, lostRow, recordLost, rerunOfEnv } = await import("./lost.mjs");
-const { snapshot } = await import("./slots.mjs");
+const { claimPending, finishAbandoned, freeBroken, isLost, lostRow, recordLost, rerunOfEnv } = await import("./lost.mjs");
+const { processGone, snapshot } = await import("./slots.mjs");
+const { sameProcess } = await import("./proctree.mjs");
 const { paths, DEFAULTS } = await import("./settings.mjs");
 const { failStop } = await import("./failstop.mjs");
 const { flakyChecks } = await import("./flaky.mjs");
@@ -75,7 +76,7 @@ test("recordLost: no line for a holder that never started, nor for a run that ha
     assert.equal(rowsOf(files.journal).length, 1);
 });
 
-test("recordLost: a slot taken again by a newer holder between the read and the claim is given back to it", () => {
+test("recordLost: a slot taken again by a newer holder between the read and the claim is left to it", () => {
     const files = home();
     const old = putSlot(files, 0, 4245);
     const newer = putSlot(files, 0, 4246);
@@ -97,6 +98,135 @@ test("finishAbandoned: a claim left by a claimer that died is finished once it i
     assert.equal(claimPending(files, 4247), false);
     assert.deepEqual(finishAbandoned(files, Date.now() + 120_000), []);
     assert.equal(rowsOf(files.journal).length, 1);
+});
+
+test("recordLost: a claimer paused just before its line keeps its claim; a finisher never takes a done claim over", () => {
+    const files = home();
+    const { file, entry } = putSlot(files, 0, 4248);
+    let taken = null;
+    const row = recordLost(file, entry, files, T0 + 60_000, { beforeAppend: () => { taken = finishAbandoned(files, Date.now() + 61_000); } });
+    assert.deepEqual(taken, [], "the claim was done already, so the finisher left it");
+    assert.deepEqual(rowsOf(files.journal), [row]);
+    assert.deepEqual(readdirSync(files.lost), []);
+});
+
+test("recordLost: a line that could not be written keeps the claim, and the next finder writes it", () => {
+    const files = home();
+    const { file, entry } = putSlot(files, 0, 4249);
+    mkdirSync(files.journal);
+    assert.equal(recordLost(file, entry, files, T0 + 60_000), null);
+    assert.equal(existsSync(file), false, "the slot is free");
+    assert.equal(claimPending(files, 4249), true, "the claim is kept");
+    renameSync(files.journal, `${files.journal}.not`);
+    const rows = finishAbandoned(files, Date.now() + 61_000);
+    assert.deepEqual(rows.map((r) => [r.outcome, r.pid]), [["lost", 4249]]);
+    assert.deepEqual(rowsOf(files.journal), rows);
+    assert.deepEqual(readdirSync(files.lost), []);
+});
+
+test("recordLost: a finder with an old reading of a slot leaves the newer holder's file where it is, the same file", () => {
+    const files = home();
+    const dead = putSlot(files, 0, 4250);
+    assert.equal(recordLost(dead.file, dead.entry, files, T0 + 60_000)?.outcome, "lost");
+    const live = putSlot(files, 0, 4251);
+    const before = statSync(live.file).ino;
+    assert.equal(recordLost(dead.file, dead.entry, files, T0 + 61_000), null);
+    assert.equal(statSync(live.file).ino, before);
+    assert.deepEqual(readdirSync(files.lost), []);
+    assert.equal(rowsOf(files.journal).length, 1);
+});
+
+test("freeBroken: a slot file that cannot be read goes only once it is old; a young or readable one stays", () => {
+    const files = home();
+    mkdirSync(files.slots, { recursive: true });
+    const slot = join(files.slots, "slot-0.json");
+    writeFileSync(slot, "{ cut");
+    snapshot({ dirs: files, prune: true });
+    assert.equal(existsSync(slot), true, "a young file may be a holder's that was just taken");
+    const old = (Date.now() - 120_000) / 1000;
+    utimesSync(slot, old, old);
+    snapshot({ dirs: files, prune: true });
+    assert.equal(existsSync(slot), false);
+    writeFileSync(slot, JSON.stringify({ pid: process.pid, label: "shop-api: unit tests", at: 1 }));
+    utimesSync(slot, old, old);
+    freeBroken(slot, files.lost);
+    assert.equal(existsSync(slot), true, "a file that reads whole now is a holder's");
+    assert.deepEqual(readdirSync(files.lost), []);
+});
+
+test("snapshot: after the wall clock is set, a live holder whose age alone disagrees is kept while its job's group lives", () => {
+    const files = home();
+    const { entry } = putSlot(files, 0, 4252);
+    // ps says the process started an hour later than its slot says, as after the clock was set back an hour on Linux.
+    const shifted = { isAlive: () => true, ages: (pids) => new Map(pids.map((pid) => [pid, 1])), now: entry.born + 3_600_000 + 1000 };
+    const groups = [];
+    const kept = snapshot({ dirs: files, ...shifted, hasGroup: (pgid) => (groups.push(pgid), true) });
+    assert.deepEqual([kept.holders.map((h) => h.pid), groups, rowsOf(files.journal).length], [[4252], [4253], 0]);
+    assert.equal(processGone(entry, { ...shifted, hasGroup: () => true }), false);
+    assert.equal(processGone(entry, { ...shifted, hasGroup: () => false }), true);
+    const gone = snapshot({ dirs: files, ...shifted, hasGroup: () => false });
+    assert.deepEqual([gone.holders.length, rowsOf(files.journal).map((r) => r.outcome)], [0, ["lost"]], "with its group gone it was reused");
+});
+
+test("sameProcess: a live pid whose age alone disagrees is the same process while its group lives, never when strict", () => {
+    const at = Date.UTC(2031, 4, 6, 10, 0);
+    const opts = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 3_600_000 };
+    assert.equal(sameProcess(4300, at, opts), false, "no group given: reused");
+    assert.equal(sameProcess(4300, at, { ...opts, group: 4300, hasGroup: () => true }), true);
+    assert.equal(sameProcess(4300, at, { ...opts, group: 4300, hasGroup: () => false }), false);
+    assert.equal(sameProcess(4300, at, { ...opts, group: 4300, hasGroup: () => true, strict: true }), false);
+    assert.equal(sameProcess(4300, at, { ...opts, ages: () => new Map([[4300, 3600]]) }), true, "an age that agrees");
+});
+
+test("claim race: finders with old readings of dead holders, in a loop, never free the slot of a live holder", async () => {
+    const files = home();
+    mkdirSync(files.slots, { recursive: true });
+    const dead = deadPid();
+    const slot = join(files.slots, "slot-0.json");
+    const deadline = Date.now() + 2500;
+    const lostUrl = JSON.stringify(new URL("./lost.mjs", import.meta.url).href);
+    const slotsUrl = JSON.stringify(new URL("./slots.mjs", import.meta.url).href);
+    // The holder puts a dead holder's file in the slot, waits until a finder frees it, takes the slot itself and
+    // checks while it holds it that its file stays.
+    const holder = `import fs from "node:fs";
+        const slot = ${JSON.stringify(slot)}, temp = slot + ".tmp-h"; let holds = 0, stolen = 0, k = 0;
+        const put = (entry) => { fs.writeFileSync(temp, JSON.stringify(entry)); try { fs.linkSync(temp, slot); return true; }
+            catch { return false; } finally { fs.rmSync(temp, { force: true }); } };
+        while (Date.now() < ${deadline}) {
+            k++;
+            put({ pid: ${dead}, born: 1000, at: k, label: "shop-api: unit tests", ...(k % 2 ? { pgid: ${dead}, startedAt: k } : {}) });
+            const by = Date.now() + 200; while (fs.existsSync(slot) && Date.now() < by) { /* a finder frees it */ }
+            if (!put({ pid: process.pid, born: 2000, at: k, label: "shop-api: live" })) continue;
+            holds++;
+            let ino = null; try { ino = fs.statSync(slot).ino; } catch { stolen++; continue; }
+            for (let i = 0; i < 300; i++) { let now = null; try { now = fs.statSync(slot).ino; } catch {} if (now !== ino) { stolen++; break; } }
+            try { if (fs.statSync(slot).ino === ino) fs.rmSync(slot); } catch {}
+        }
+        console.log(JSON.stringify({ holds, stolen }));`;
+    // A finder takes fresh readings, as status and run do, and also tries again the dead holders it read before.
+    const finder = `import fs from "node:fs"; const { recordLost } = await import(${lostUrl}); const { snapshot } = await import(${slotsUrl});
+        const dirs = ${JSON.stringify(files)}, slot = ${JSON.stringify(slot)}; const seen = []; let claims = 0;
+        while (Date.now() < ${deadline}) {
+            let entry = null; try { entry = JSON.parse(fs.readFileSync(slot, "utf8")); } catch {}
+            if (entry?.pid === ${dead}) seen.push(entry);
+            if (seen.length) { recordLost(slot, seen[Math.floor(Math.random() * seen.length)], dirs); claims++; }
+            snapshot({ dirs, prune: true, ages: () => new Map() }); claims++;
+        }
+        console.log(JSON.stringify({ claims }));`;
+    const start = (script) => {
+        const child = track(spawn(NODE, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] }));
+        let out = "";
+        child.stdout.on("data", (chunk) => { out += chunk; });
+        return new Promise((done) => child.on("exit", () => done(JSON.parse(out))));
+    };
+    const [held, ...found] = await Promise.all([start(holder), start(finder), start(finder)]);
+    const claims = found.reduce((sum, f) => sum + f.claims, 0);
+    process.stdout.write(`# claim race: ${held.stolen} stolen of ${held.holds} live holds, ${claims} claims\n`);
+    assert.ok(held.holds > 20 && claims > 1000, JSON.stringify({ held, claims }));
+    assert.equal(held.stolen, 0);
+    const rows = rowsOf(files.journal);
+    const dup = rows.filter((r, i) => rows.findIndex((o) => o.startedAt === r.startedAt) !== i);
+    assert.deepEqual(dup, [], "one lost line per run");
 });
 
 test("snapshot: status and other readers record a lost run; the reaper's dry run, with lost false, does not", () => {
@@ -225,4 +355,20 @@ test("acceptance: four runs cut off at once and three status calls at the same m
     const rows = rowsOf(box.files.journal);
     assert.deepEqual(rows.map((r) => r.pid).sort(), runs.map((r) => r.child.pid).sort());
     assert.equal(rows.every((r) => r.outcome === "lost"), true);
+});
+
+test("acceptance: status during a live run writes no line and moves no file", async () => {
+    const box = realHome(2);
+    const run = await startSleeper(box, "unit tests");
+    const look = () => readdirSync(box.files.slots).map((n) => {
+        const file = join(box.files.slots, n);
+        return [n, statSync(file).ino, readFileSync(file, "utf8")];
+    });
+    const before = look();
+    await runStatus(box);
+    await runStatus(box);
+    assert.deepEqual(look(), before);
+    assert.deepEqual(rowsOf(box.files.journal), []);
+    assert.deepEqual(existsSync(box.files.lost) ? readdirSync(box.files.lost) : [], []);
+    cutOff(run);
 });

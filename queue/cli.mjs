@@ -118,7 +118,8 @@ const DAYS_ERROR = "--days: needs a whole number of days, 1 or more";
 /** What `status` and `queue_status` show: { holders, queue, nested, gate, capacity, lines }. ctx: { settings, files,
  *  capacity }; capacity is the plan of capacityPlan(), capacityOf(settings) when not given. read is the health
  *  reading; it is handed { limits }, as for `run`, and the CPU times saved with the shared reading as cpuSince, which
- *  status reads but never writes. Only while a job waits in line, the base slots are taken and an extra slot is left
+ *  status reads but never saves. The one thing status writes is the lost line of a run that was cut off, and it frees
+ *  that run's slot (see lost.mjs). Only while a job waits in line, the base slots are taken and an extra slot is left
  *  is it also handed liveCpu, so the live CPU reading, which can take a second, is taken only when it decides whether
  *  the next job may start. While nobody waits, no extra slot is in question, and the gate line says it is judged
  *  once a job waits. */

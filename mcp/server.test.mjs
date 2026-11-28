@@ -13,7 +13,8 @@ import { cleanEnv, isolateProcess, makeRepo, pause, tempDir, track, until } from
 
 isolateProcess("mcp");
 const { lineReader } = await import("./server.mjs");
-const { argumentProblems, queueArgs, TOOLS } = await import("./tools.mjs");
+const { argumentProblems, lostFacts, queueArgs, rerunLost, TOOLS } = await import("./tools.mjs");
+const { paths } = await import("../queue/settings.mjs");
 const { createJob, jobFiles, pruneJobs, tailLines } = await import("./jobs.mjs");
 const { alive } = await import("../queue/proctree.mjs");
 
@@ -676,6 +677,74 @@ test("lost jobs: a re-run that is cut off as well is not started a third time, a
     assert.equal(readFileSync(counter, "utf8"), "2");
     assert.deepEqual(journalOf(box).map((r) => r.outcome), ["lost", "lost", "lost"]);
     await server.close();
+});
+
+// ---- rerunLost, with the processes of the jobs stated by hand ----
+
+/** A state folder with a lost job that asked to be started again: a request a minute old, and unless pid is false,
+ *  a pid file whose runner and queue process the stated sameProcess calls gone. */
+function lostJob({ pid = true, maxJobs = 4, alive = [] } = {}) {
+    const files = paths({ DOTIME_HOME: tempDir("mcp-rerun") });
+    const dir = join(files.home, "mcp-jobs");
+    const now = Date.now();
+    const id = "0123456789abcdef01234567";
+    const request = { v: 1, id, label: "shop: unit tests", command: ["npm", "test"], cwd: files.home, createdAt: now - 60_000, queueArgs: [] };
+    createJob(dir, id, { ...request, rerunIfLost: true });
+    const pids = { runnerPid: 7001, runnerStartedAt: now - 59_000, queuePid: 7002, startedAt: now - 59_000 };
+    if (pid) writeFileSync(jobFiles(dir, id).pid, JSON.stringify(pids));
+    const started = [];
+    const ctx = {
+        files, settings: { mcpMaxJobs: maxJobs }, sameProcess: (p) => alive.includes(p),
+        startRunner: (_dir, next) => { started.push(next); },
+    };
+    const row = (outcome) => `${JSON.stringify({ pid: 7002, label: "shop: unit tests", queuedAt: new Date(now - 58_000).toISOString(), outcome })}\n`;
+    return { files, dir, id, ctx, started, now, row };
+}
+
+test("rerunLost: a lost job with a pid file and no journal line, or a lost one, is started again once", () => {
+    const box = lostJob();
+    writeFileSync(box.files.journal, box.row("lost"));
+    const ids = rerunLost(box.ctx, box.now);
+    assert.equal(ids.length, 1);
+    assert.deepEqual(box.started, ids);
+    assert.equal(JSON.parse(readFileSync(jobFiles(box.dir, ids[0]).request, "utf8")).rerunOf, box.id);
+    assert.deepEqual(rerunLost(box.ctx, box.now), [], "never twice");
+});
+
+test("rerunLost: a job without a pid file is never started again, as its first copy may still run", () => {
+    const box = lostJob({ pid: false });
+    assert.deepEqual(rerunLost(box.ctx, box.now), []);
+    assert.deepEqual(box.started, []);
+    assert.equal(existsSync(jobFiles(box.dir, box.id).rerun), false);
+});
+
+test("rerunLost: a job whose runner died after its queue process ran to the end is not started again", () => {
+    const box = lostJob();
+    writeFileSync(box.files.journal, box.row("ran"));
+    assert.deepEqual(rerunLost(box.ctx, box.now), []);
+    assert.deepEqual(box.started, []);
+});
+
+test("rerunLost: with mcpMaxJobs jobs running the lost job is not started again, and its task says why, for good", () => {
+    const box = lostJob({ maxJobs: 1, alive: [7101] });
+    const other = "fedcba9876543210fedcba98";
+    const lint = { v: 1, id: other, label: "shop: lint", command: ["npm", "run", "lint"], cwd: box.files.home, createdAt: box.now, queueArgs: [] };
+    createJob(box.dir, other, lint);
+    writeFileSync(jobFiles(box.dir, other).pid, JSON.stringify({ runnerPid: 7101, runnerStartedAt: box.now, queuePid: 7102, startedAt: box.now }));
+    assert.deepEqual(rerunLost(box.ctx, box.now), []);
+    const read = (file) => JSON.parse(readFileSync(file, "utf8"));
+    const files = jobFiles(box.dir, box.id);
+    const job = { request: read(files.request), pid: read(files.pid), rerun: read(files.rerun) };
+    assert.match(lostFacts(job, box.ctx).text, /nothing ran to the end; not started again: 1 job running$/);
+    box.ctx.sameProcess = () => false;
+    assert.deepEqual(rerunLost(box.ctx, box.now), [], "the task has answered failed already");
+});
+
+test("rerunLost: the new job is written before the old one is marked, so a failed write leaves no mark", () => {
+    const box = lostJob();
+    assert.deepEqual(rerunLost(box.ctx, box.now, { make: () => { throw new Error("disk full"); } }), []);
+    assert.equal(existsSync(jobFiles(box.dir, box.id).rerun), false);
+    assert.equal(rerunLost(box.ctx, box.now).length, 1, "the next look starts it");
 });
 
 test("tasks: tasks/cancel takes a waiting job out of the line and stops a running one", async () => {

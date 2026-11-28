@@ -216,7 +216,9 @@ A job cut off by a restart or a dead queue process is [journalled as `lost`](que
 answers `failed` with `the run was cut off: the machine restarted or the queue process died; nothing ran to the end`
 and the time of its `lost` line. With `rerunIfLost: true` (default false), the server starts it again once, as a new
 job with the same request and `rerunOf` naming the old one, on its next request; the old task then ends with `started
-again as job <new id>`. A re-run that is cut off as well is not started again.
+again as job <new id>`. A re-run that is cut off as well is not started again, nor is a job whose runner never wrote
+its pid file or whose run has a journal line that is not `lost`. When `mcpMaxJobs` jobs started here are still
+running, it is not started again and its task ends with `not started again: N jobs running`.
 
 Every other client gets the job id at once, exactly as before, and polls `queue_job` until the job is finished. The
 older tasks API of revision 2025-11-25 is not offered.

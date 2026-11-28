@@ -837,10 +837,20 @@ keeps the fields of its journal line in its slot file. The next queue command th
 gone, or whose pid now belongs to a later process (`status`, a `run` that waits, the reaper, the schedule tick, the MCP
 server), journals that run once with outcome `lost`, `exit` null, its label, project, folder, command, start and
 commit, `endedAt` set to when it was found, `reason: { "class": "lost", "source": "slot" }`, and for an isolated run
-the `isolate` fields that name the worktree it left, so it can be looked at. The slot file is first moved to `lost/`
-under a name of the finder's own; only one finder can win that move, so several of them at the same moment write one
-line. A holder that was still in line or claiming its slot writes no line, and neither does a run that wrote its own
-line before it died.
+the `isolate` fields that name the worktree it left, so it can be looked at. The slot file is first claimed with a
+hard link into `lost/`, under a name fixed by the run (its pid, its start and the start of its command); only one
+finder can make that link, so several of them at the same moment write one line, and a finder with an old reading
+never frees the slot of the job that holds it now. A holder that was still in line or claiming its slot writes no
+line, and neither does a run that wrote its own line before it died; its slot is freed through the same claim. A
+claim whose finder died is finished by the next finder after a minute, and a line that could not be written stays
+claimed for it.
+
+An isolated run that is cut off while `git worktree add` makes its worktree gets no line: its command never started.
+Its worktree may remain under `$DOTIME_HOME/worktrees`; `dotime-queue worktrees` lists it and `discard` removes it.
+
+On Linux `ps` counts the age of a process from the boot, so when the clock is set by more than a few seconds every
+live process seems to have started at another time. A holder whose pid is alive and whose age alone disagrees is
+therefore taken for gone only once its job's process group is gone too, and `status` writes nothing for a live run.
 
 A `lost` line means the machine or the queue process died, not the code. It counts in no failure rule: not for the
 [repeated-failure stop](#repeated-failures), [flaky checks](#flaky-checks), [run limits](#run-limits), pass stamps or

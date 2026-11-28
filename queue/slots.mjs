@@ -8,7 +8,7 @@ import { probeProcessAges } from "./probes.mjs";
 import { parseElapsed } from "./ps.mjs";
 import { alive } from "./proctree.mjs";
 import { dropOldTemp, readJson, tempName, writeJsonAtomic } from "./files.mjs";
-import { finishAbandoned, recordLost } from "./lost.mjs";
+import { claimHolder, finishAbandoned, freeBroken, recordLost } from "./lost.mjs";
 
 // When this process started (wall clock, ms). Its own entries carry it, so a reader can tell this process from a newer
 // one that was given the same pid after it ended without cleaning up.
@@ -24,15 +24,30 @@ function makeDirs(dirs) {
     mkdirSync(dirs.slots, { recursive: true });
     mkdirSync(dirs.waitingLine, { recursive: true });
 }
-// An entry whose pid now belongs to a process that started later than the entry says.
-function pidReused(data, seconds, now) {
-    return seconds !== undefined && Math.abs(now - seconds * 1000 - data.born) > SAME_START_MS;
+/** True while a process group with this id has a member. */
+export const groupAlive = (pgid) => alive(-pgid);
+// An entry whose pid now belongs to a process that started at another time than the entry says. On Linux `ps` counts
+// a process's age from the boot, so after the wall clock is set by more than a few seconds every live process seems
+// to have started at another time: an entry of a job that started its command (it has the job's process group, pgid)
+// counts as reused only once that group is gone too.
+function pidReused(data, seconds, now, hasGroup = groupAlive) {
+    if (seconds === undefined || Math.abs(now - seconds * 1000 - data.born) <= SAME_START_MS) return false;
+    return !(Number.isInteger(data.pgid) && data.pgid > 1 && hasGroup(data.pgid));
 }
-/** True when the process an entry ({ pid, born }) names has ended, or its pid now names a process that started at
- *  another time. */
-export function processGone(entry, { isAlive = alive, ages = processAges, now = Date.now() } = {}) {
+/** True when the process an entry ({ pid, born, pgid? }) names has ended, or its pid now names a process that
+ *  started at another time (see pidReused). */
+export function processGone(entry, { isAlive = alive, ages = processAges, now = Date.now(), hasGroup = groupAlive } = {}) {
     if (!isAlive(entry.pid)) return true;
-    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now);
+    return Number.isFinite(entry.born) && pidReused(entry, ages([entry.pid]).get(entry.pid), now, hasGroup);
+}
+// Frees the file of a holder that is gone through the same claim as a lost run (lost.mjs), so a reader with an old
+// reading never removes the file of a newer holder; a file that could not be read is freed by freeBroken(). Without a
+// claims folder the file is just removed.
+function freeHolder(file, data, dirs, now) {
+    if (!dirs.lost) return rmSync(file, { force: true });
+    if (!data) return freeBroken(file, dirs.lost, now);
+    const won = claimHolder(file, data, dirs.lost);
+    if (won) rmSync(won.claim, { force: true });
 }
 const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at - b.at || a.pid - b.pid;
 
@@ -43,9 +58,11 @@ const lineOrder = (a, b) => Number(!!b.priority) - Number(!!a.priority) || a.at 
  *  abandoned temporary files, deleted and the slot and line folders created: a job that waits for a slot prunes, so
  *  the slot of a dead job comes free; `status` and other readers change nothing else. The one exception is a slot
  *  whose holder is gone after its command had started: with lost (by default when dirs names the lost and journal
- *  files, as paths() does) its run is recorded as lost, once, and its slot file goes (see lost.mjs). */
+ *  files, as paths() does) its run is recorded as lost, once, and its slot file goes (see lost.mjs). Slot and place
+ *  files are freed through the same claim, so an old reading never frees the file of a newer holder. hasGroup: whether
+ *  a process group still has a member (see pidReused). */
 export function snapshot({
-    dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false, lost = !!(dirs.lost && dirs.journal),
+    dirs, isAlive = alive, ages = processAges, now = Date.now(), prune = false, lost = !!(dirs.lost && dirs.journal), hasGroup = groupAlive,
 }) {
     if (prune) makeDirs(dirs);
     if (lost) finishAbandoned(dirs, now);
@@ -68,12 +85,11 @@ export function snapshot({
         const entries = [];
         for (const { file, data, ok } of found) {
             const seconds = ok && Number.isFinite(data.born) ? known.get(data.pid) : undefined;
-            if (ok && !pidReused(data, seconds, now)) entries.push({ file, ...data });
-            else if (lost && dir === dirs.slots && Number.isFinite(data?.startedAt)) {
-                recordLost(file, data, dirs, now);
-                // Still there only when the claim could not be made; a newer holder's file is left alone.
-                if (prune && JSON.stringify(readJson(file)) === JSON.stringify(data)) rmSync(file, { force: true });
-            } else if (prune) rmSync(file, { force: true });
+            if (ok && !pidReused(data, seconds, now, hasGroup)) entries.push({ file, ...data });
+            else if (lost && dir === dirs.slots && Number.isFinite(data?.startedAt)) recordLost(file, data, dirs, now);
+            // A slot and a place are taken again under the same name, so they are freed through a claim.
+            else if (prune && (dir === dirs.slots || dir === dirs.places)) freeHolder(file, data, dirs, now);
+            else if (prune) rmSync(file, { force: true });
         }
         return entries;
     };
