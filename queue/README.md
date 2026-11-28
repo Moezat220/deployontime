@@ -776,11 +776,12 @@ count from that moment, so the time it was disabled is not reported as missed.
 `schedule.lock`, exits 0 at once; so a slow tick never runs twice at the same time. For each enabled job it looks at
 the due times since the last one it handled:
 
-- the newest one within the last 2 minutes: the job is started, once;
-- one or more older than that, because the computer slept or the tick was not installed: one journal line with
-  outcome `missed`, the number of missed times and the oldest and newest of them, and one notice, `dotime: missed
-  <label>` / `<n> runs missed while the tick did not run; running once now`. Then the job runs **once** to catch up,
-  never once per missed time, and goes on at its normal times;
+- the newest one: the job is started, once, even when it is late;
+- every one before the newest, because the computer slept, the tick was not installed or a tick came late: one
+  journal line with outcome `missed`, the number of missed times and the oldest and newest of them, and one notice,
+  `dotime: missed <label>` / `<n> runs missed while the tick did not run; running once now`. Then the job runs
+  **once** to catch up, never once per missed time, and goes on at its normal times. Each due time is either started
+  or counted as missed; none is dropped without a word;
 - its last scheduled run still waits or runs (its process is alive and is the one that was started, checked the way
   slots are): no second start, and one journal line with outcome `busy` for that due time. Runs never pile up. A run
   whose pid could not be saved counts as still going until a journal line of the job from its start on comes, for at

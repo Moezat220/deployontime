@@ -3,7 +3,15 @@
 What changed in each release of the `deployontime` package (`dotime-queue` and `dotime-mcp`). The full manual is
 [queue/README.md](queue/README.md).
 
-## 0.3.1
+## 0.3.2
+
+- **No missed due time is dropped without a word** ([#36](https://github.com/Moezat220/deployontime/pull/36)). When
+  the schedule tick comes back after a gap, every due time before the newest is now counted as missed: before, due
+  times from the last 2 minutes other than the newest were neither started nor reported. A single late due time just
+  starts, and is no longer also reported as missed. Found by a real launchd test on macOS.
+- Everything in 0.3.1, which was tagged but not published to npm.
+
+## 0.3.1 (tagged, not published)
 
 - **CPU-aware slots** ([#31](https://github.com/Moezat220/deployontime/pull/31)). The base `slots` (2) always stay.
   On a computer with more than 5 cores, a job may take an extra slot, up to half the cores, but only while the live

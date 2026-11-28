@@ -1,7 +1,7 @@
 // The one-minute step of scheduled jobs, `dotime-queue schedule tick`. A system entry starts it every minute; it
 // reads schedule.json, starts each job that is due as a `dotime-queue run` of its own, and returns at once, so it never
-// waits for a slot. A due time older than GRACE_MS means the tick did not run for a while: that is journalled and
-// sent as one notice, and the job runs once to catch up, never once per missed time. A job whose last scheduled run
+// waits for a slot. Due times that passed before the newest one mean the tick did not run for a while: they are
+// journalled and sent as one notice, and the job runs once to catch up, never once per missed time. A job whose last scheduled run
 // still waits or runs is not started again; that is journalled too. A last run that was cut off by a restart with no
 // journal line of its own gets a lost line, and the job counts as free. Nothing here decides how a job runs: the run it
 // starts goes through the gate, slots, refusals, skips, limits, journal and notices like any other.
@@ -35,15 +35,16 @@ export const NO_PID_MS = 24 * 60 * MINUTE;
 const iso = (ms) => new Date(ms).toISOString();
 
 /** What one tick does for a job, from its stored times alone: null when nothing is due, else { due, missed }, where
- *  due is the newest due time and missed is { count, oldest, newest } for the due times older than GRACE_MS, or null.
- *  Due times count from lastDue, or from createdAt for a job that was never due. */
+ *  due is the newest due time, the one that starts now, and missed is { count, oldest, newest } for every due time
+ *  before it, or null: a due time is either started or reported, never dropped without a word. Due times count from
+ *  lastDue, or from createdAt for a job that was never due. */
 export function planTick(job, now, wall) {
     if (!job.enabled) return null;
     const from = Date.parse(job.lastDue ?? job.createdAt);
     const due = dueBetween(job, from, now, wall);
     if (!due.count) return null;
-    const late = dueBetween(job, from, now - GRACE_MS - 1, wall);
-    return { due: due.newest, missed: late.count ? late : null };
+    const before = due.count > 1 ? dueBetween(job, from, due.newest - 1, wall) : null;
+    return { due: due.newest, missed: before?.count ? before : null };
 }
 
 /** Why a job's lastDue cannot be counted from, or null: it is not a time, or it lies further ahead than GRACE_MS. */
