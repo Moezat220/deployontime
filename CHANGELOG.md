@@ -14,7 +14,7 @@ What changed in each release of the `deployontime` package (`dotime-queue` and `
   `extraSlotSettleSec`.
 - **Failure reasons** ([#32](https://github.com/Moezat220/deployontime/pull/32),
   [#33](https://github.com/Moezat220/deployontime/pull/33)). A failed run's journal line gets a reason class (port,
-  network, disk, files, memory, test, build, run-limit, signal, lost or unknown), read back from the file its output
+  network, disk, files, memory, test, build, run-limit, signal or unknown), read back from the file its output
   went to. Only a fixed token such as `EADDRINUSE` is stored, never output text; the job's own output is untouched.
   New command `dotime-queue reasons [--days N] [--json]`, and `queue_job` carries `reason`. Nothing is retried: this
   only measures.
