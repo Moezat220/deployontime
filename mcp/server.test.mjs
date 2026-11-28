@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -236,15 +237,34 @@ test("lineReader: lines split across chunks are joined, and a line over the limi
 // ---- the tools ----
 
 test("queue_status: the status lines, with the counts as fields", async () => {
-    const box = sandbox();
+    const box = sandbox({ slots: 2 });
     const server = startServer(box);
     const status = await server.call("queue_status", {});
     assert.equal(status.isError, false);
-    assert.equal(status.content[0].text, "slots: 0 of 2 taken, 0 waiting\ngate: open");
+    const lines = ["slots: 0 of 2 taken, 0 waiting; 2, set in settings", "gate: open"];
+    assert.equal(status.content[0].text, lines.join("\n"));
     assert.deepEqual(status.structuredContent, {
-        slots: 2, taken: 0, waiting: 0, gateOpen: true, gate: null, running: [], line: [], lines: ["slots: 0 of 2 taken, 0 waiting", "gate: open"],
+        slots: 2, base: 2, max: 2, source: "slots", taken: 0, waiting: 0, gateOpen: true, gate: null, running: [], line: [], lines,
     });
     await server.close();
+});
+
+test("queue_status: base, max and source follow the settings file, and the cores when it sets neither", async () => {
+    const cores = availableParallelism();
+    const auto = Math.max(2, Math.floor(cores / 2));
+    const cases = [
+        [{ slots: 3, maxSlots: 6 }, { base: 3, max: 6, source: "maxSlots" }, "up to 6 while the CPU has room (maxSlots set in settings)"],
+        [{}, { base: 2, max: auto, source: "cores" },
+            auto > 2 ? `up to ${auto} while the CPU has room (half of ${cores} cores)` : `2, this computer has ${cores} core${cores === 1 ? "" : "s"}`],
+    ];
+    for (const [config, fields, reason] of cases) {
+        const box = sandbox(config);
+        const server = startServer(box);
+        const { structuredContent: got } = await server.call("queue_status", {});
+        assert.deepEqual({ base: got.base, max: got.max, source: got.source }, fields, JSON.stringify(config));
+        assert.equal(got.lines[0], `slots: 0 of ${fields.base} taken, 0 waiting; ${reason}`);
+        await server.close();
+    }
 });
 
 test("queue_run: a check runs, the same check on the same commit is skipped, and queue_passed and queue_history see both", async () => {

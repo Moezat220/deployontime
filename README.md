@@ -46,7 +46,7 @@ was never broken. Each agent sees only its own run, so neither you nor the agent
 
 | | Without a queue | With `dotime-queue` |
 | --- | --- | --- |
-| **Several agents start test suites** | They all run at once | At most 2 run together (`slots`); the rest wait their turn |
+| **Several agents start test suites** | They all run at once | At most 2 run together, more on a computer with many cores while the CPU has room; the rest wait their turn |
 | **The computer is already busy** | New jobs pile on | Jobs wait while CPU, memory or disk is short, or the battery is low |
 | **A job hangs** | It can run until someone notices | It is stopped at its time limit, with everything it started (exit 124) |
 | **A check keeps failing on the same code** | An agent may keep re-running it | A third try is blocked for up to 6 hours (exit 3) until the code changes or `--after-fix` is given |
@@ -62,7 +62,8 @@ The queue is a command that agents put in front of their heavy commands:
 dotime-queue run --label "shop-api: unit tests" -- npm test
 ```
 
-1. **Turn.** The job takes the next free slot, or waits its turn.
+1. **Turn.** The job takes the next free slot, or waits its turn. A computer with 5 cores or fewer has 2 slots; a larger
+   one gets more, up to half its cores, but only while the CPU has room. A slot count set in the settings is used as is.
 2. **Health.** Has the computer room for it? Before it starts, the queue looks at CPU load, free memory, free disk
    and, on battery, the charge.
 3. **Limit.** It runs under a time limit learned from earlier passed runs: first the command's own, then those of its
@@ -89,10 +90,10 @@ not. The queue never edits your repository; it keeps its state in `~/.dotime`.
 
 On a Mac, 4 agents start the same test suite at the same moment. Each suite runs 5 threads (100 timed tests) and holds 2
 GB, and the Mac has half as many cores as the 4 suites have busy threads, so started together they ask for twice the CPU
-there is; through the queue at most 2 suites run together (its default of 2 slots). A test fails when it takes more than
-1.6 times as long as when one suite runs by itself, so this setup shows what doubling the load does; a looser timeout or
-a lighter load would narrow the gap. After a failure an agent waits 5 to 30 s (the same random waits both ways) and runs
-the suite again, up to 8 runs in all. Three runs each way:
+there is; through the queue at most 2 suites run together (its 2 base slots; with this load the CPU has no room for
+an extra one). A test fails when it takes more than 1.6 times as long as when one suite runs by itself, so this setup
+shows what doubling the load does; a looser timeout or a lighter load would narrow the gap. After a failure an agent
+waits 5 to 30 s (the same random waits both ways) and runs the suite again, up to 8 runs in all. Three runs each way:
 
 | | Started directly | Through `dotime-queue` |
 | --- | --- | --- |
@@ -186,7 +187,7 @@ folder the server starts in, and its jobs are handed that absolute path.
 
 | Tool | Arguments | What it gives |
 | --- | --- | --- |
-| `queue_status` | none | The lines of `dotime-queue status`, with the slot and line counts as fields |
+| `queue_status` | none | The lines of `dotime-queue status`, with the slot and line counts as fields, and `base`, `max` and `source` for how many slots the computer has and why |
 | `queue_passed` | `match`, `cwd` | The stamp or no-stamp line of `dotime-queue passed`, with `stamp` as `true` or `false` |
 | `queue_history` | `days` (1 to 365, default 7) | The lines of `dotime-queue history` |
 | `queue_run` | `label`, `command` (a list of words), `cwd`, `kind`, `maxRunMin`, `noSkip`, `afterFix`, `isolate` | Starts `dotime-queue run` in the background and returns a job id at once |
@@ -227,6 +228,13 @@ A job that ran 5 minutes or more sends a done notice, and MCP clients with tasks
 
 Yes: `dotime-queue schedule add` with `--every 1h` or `--cron "0 2 * * *"`, then `dotime-queue schedule install`; see
 [Scheduled jobs](queue/README.md#scheduled-jobs).
+</details>
+
+<details>
+<summary><strong>How many jobs run at once?</strong></summary>
+
+Two on a computer with 5 cores or fewer; on a larger one up to half the cores while the CPU has room, and the number
+in your settings when you set one; see [Extra slots](queue/README.md#extra-slots).
 </details>
 
 <details>

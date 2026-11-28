@@ -11,8 +11,9 @@ typecheck of a few files finishes quickly and does not need the queue.
 
 What the queue does for every job started through it:
 
-1. **Line.** Jobs queue up first come, first served. Only a set number hold a slot at the same time (2 by
-   default, and a few more while the CPU has room; see [Extra slots](#extra-slots)).
+1. **Line.** Jobs queue up first come, first served. Only a set number hold a slot at the same time: 2 by
+   default, and on a computer with more than 5 cores up to half the cores while the CPU has room; a slot count you
+   set yourself is used as is. See [Extra slots](#extra-slots).
 2. **Gate.** The first in line starts only when a slot is free and the computer has room: load, free memory, free
    disk, and the battery when the computer runs on it. See [Health gate](#health-gate).
 3. **Limit.** The job runs under a time limit. At the limit, the job and everything it started are stopped.
@@ -297,12 +298,18 @@ and a nested run inside a nested run one step further in; it holds no slot and i
 that waits for a place under its parent says `waiting for a nested place` and names the parent. Its `min so far`
 counts from when it began to wait, and once it runs, from when it started to run.
 
+The first line ends with how many slots this computer has and why: `2, this computer has 4 cores` on a computer with 5
+cores or fewer, `up to 8 while the CPU has room (half of 16 cores)` on a larger one, and `3, set in settings` or
+`up to 6 while the CPU has room (maxSlots set in settings)` when the settings file sets the number; see
+[Extra slots](#extra-slots). For example `slots: 1 of 2 taken, 0 waiting; 2, this computer has 4 cores`.
+
 While jobs hold [extra slots](#extra-slots), the first line counts them apart, for example
-`slots: 3 taken (2 + 1 extra while the CPU has room), 1 waiting`, and each job in an extra slot says `extra slot`.
+`slots: 3 taken (2 + 1 extra while the CPU has room), 1 waiting; up to 8 while the CPU has room (half of 16 cores)`,
+and each job in an extra slot says `extra slot`.
 Once the base slots are taken, the gate line also says why an extra slot is or is not given, for example
 `gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%` or
 `gate: shut; no free slot: 2 of 2 taken, by "shop-api: lint" and "docs-site: build"; no extra slot: a job started 4 s
-ago, extra slots wait 10 s after a start`.
+ago, extra slots wait 5 s after a start`.
 
 The gate is judged by the same rules as `run`, so a high load with an idle CPU shows as open. `run` judges on the
 reading it shares with the other waiting jobs; `status` takes a reading of its own each time. When the load is above
@@ -822,14 +829,28 @@ cannot be measured, a load above its limit holds the job as the load alone would
 
 ### Extra slots
 
-The `slots` base slots are always there. Beyond them, the first job in line may take an extra slot, up to
-`maxSlots` slots in all, but only when at that moment:
+The `slots` base slots are always there. Beyond them, the first job in line may take an extra slot, up to the most
+slots the computer has, but only when at that moment:
 
 - the live CPU reading, the same one the load check above takes and shares between waiting jobs, is below
   `extraSlotCpuPct` percent busy; and
 - no job has started in the last `extraSlotSettleSec` seconds, so a job that just started has time to show its real
   load before another one joins. Every start counts: in a base slot, in an extra slot, and of a nested run, which
   counts from the moment it starts to run.
+
+The most slots comes from one of three places, in this order:
+
+- `maxSlots` set in the settings file: that number, which must be at least `slots`.
+- `slots` set in the settings file, without `maxSlots`: exactly `slots`, so no extra slots. A slot count you chose is
+  never raised, also when it is the same number as the default.
+- Neither set: half the cores, at least 2. A computer with 5 cores or fewer therefore has exactly the 2 default slots
+  and no extra slots, and runs as if extra slots did not exist: no live CPU reading for them, no other messages.
+
+What counts is whether the file sets the key to a value that fits, not whether the value equals the default.
+`status` names the source at the end of its first line, and `queue_status` of the
+[MCP server](../README.md#use-with-an-mcp-client) gives it as `base` (the base slots), `max` (the most slots) and
+`source` (`maxSlots`, `slots` or `cores`). The rules live in `capacity.mjs`, which is handed only numbers, so the
+same answer holds for any computer.
 
 The base slots are the slot files numbered 0 to `slots` − 1, and the others are the extra slots. A base slot that
 frees while jobs hold extra slots is taken again at once, without the CPU check, as any base slot is. A job that took
@@ -842,16 +863,20 @@ back and waits on when another job took a slot first inside the settle time.
 
 When the CPU reading is unknown, no extra slot is given. The health gate applies to a job in an extra slot exactly as
 to one in a base slot, and the line keeps its order: an extra slot goes to the first job in line. A job that holds an
-extra slot keeps it until it ends, also when the CPU gets busy later. `maxSlots` set to the same number as `slots`
-turns extra slots off.
+extra slot keeps it until it ends, also when the CPU gets busy later. `maxSlots` set to the same number as `slots`,
+or `slots` set on its own, turns extra slots off. Isolated runs and the runs the schedule tick starts take extra slots
+like any other job: they wait in the same line.
 
-Why the number follows the CPU and is not simply set higher: one run of `node bench/slots.mjs` on a Mac, with a light
-workload whose busy threads fit the cores easily (6 agents whose suites use 1 thread each) and a heavy one that asks
-for twice the cores (4 agents with 5 threads each), took 64 s for the light work with 2 slots, with the CPU at most
-37 % busy, and 36 s with 6 slots. The heavy work took 58 s with no failed tests with 2 slots, but 115 to 154 s with
-3, 4 or 6 slots, with 225 to 340 of 400 tests failing because they were slowed past their limit. A fixed higher
-count makes heavy work 2 to 2.7 times slower, and a fixed 2 leaves cores idle with light work.
-`node bench/slots.mjs --slots 2,6,auto` runs the same comparison with extra slots as well.
+Why the number follows the CPU and is not simply set higher: runs of `node bench/slots.mjs` on one many-core
+computer, with a light workload whose busy threads fit the cores easily (6 agents whose suites use 1 thread each)
+and a heavy one that asks for twice the cores (4 agents with 5 threads each), took 64 s for the light work with 2
+slots and 36 s with 6 slots. The heavy work took 55 to 58 s with no failed tests with 2 slots, but 115 to 173 s with
+3, 4 or 6 slots, with 225 to 340 of 400 tests failing because they were slowed past their limit. A fixed higher count
+makes heavy work 2 to 3 times slower, and a fixed 2 leaves cores idle with light work. With the automatic plan the
+light work took 41 s, with 3 jobs in extra slots, and the heavy work 56 s with no failed tests and no extra slot,
+the same in three runs. A settle time of 10 s held the light work to 54 s: every start, base slots included, held
+the next extra slot back, so no more than 3 jobs ran at once. `node bench/slots.mjs --slots 2,6,auto` runs the
+same comparison.
 
 When a value cannot be read, such as on a computer with no battery or when a tool does not answer, that check is
 left out and never holds a job, so it protects nothing until it can be read again. A reading of 0, such as a full
@@ -1050,10 +1075,10 @@ default. Only a missing file is silent.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `slots` | 2 | Jobs that may run at once: the base slots, always there. At least 1; a fraction is rounded down. |
-| `maxSlots` | half the cores, at least `slots` | Jobs that may run at once with [extra slots](#extra-slots). The same number as `slots` turns extra slots off. A whole number, at least `slots`. |
+| `slots` | 2 | Jobs that may run at once: the base slots, always there. Set in this file without `maxSlots`, it is the exact number: no extra slots. At least 1; a fraction is rounded down. |
+| `maxSlots` | not set | The most jobs that may run at once, [extra slots](#extra-slots) included. Not set, it is half the cores, at least 2, while `slots` is not set either, and exactly `slots` when it is. The same number as `slots` turns extra slots off. A whole number, at least `slots`. |
 | `extraSlotCpuPct` | 60 | An extra slot is given only while the live CPU reading is below this percent busy. From 1 to 100. |
-| `extraSlotSettleSec` | 10 | An extra slot is given only when no job has started in this many seconds. |
+| `extraSlotSettleSec` | 5 | An extra slot is given only when no job has started in this many seconds. |
 | `nestedPerJob` | 2 | Nested runs that one job may run at once; a further one waits for a place under that job. A whole number, at least 1. See nested runs under [`run`](#run). |
 | `mcpMaxJobs` | 20 | Jobs started by `dotime-mcp` that may wait or run at once; `queue_run` refuses a further one with a tool error. Each costs two Node processes while it waits. A whole number, at least 1. |
 | `flakyWindowDays` | 14 | How many days back the [flaky flag](#flaky-checks) and `dotime-queue flaky` read the journal. A whole number, at least 1. |
@@ -1185,10 +1210,11 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `schedule-check.mjs` | The report on scheduled jobs in `~/Library/LaunchAgents`, macOS only. | entry point | Reads job files, appends to `schedule-check.jsonl`. |
 | `setup.mjs` | The queue instruction block and where `setup` puts it in a project's agent files; the MCP settings it prints. | library | Reads and, with `--write`, writes `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the project folder. |
 | `args.mjs` | The flags each command accepts, their values, and the usage text. | library | None. |
-| `settings.mjs` | Defaults, `config.json`, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks. |
+| `settings.mjs` | Defaults, `config.json`, which slot settings the user set, and the file names in the state folder. | library | Reads `config.json` and the `DOTIME_` variables, when an entry point asks; reads the core count for the capacity plan. |
 | `slots.mjs` | Slot, waiting-line, nested-run and place files: snapshot, join, take, release, update. | library | Reads and writes `slots/`, `line/`, `nested/` and `places/`; runs `ps` for process ages. |
 | `nested.mjs` | Nested runs: the marker a job is given, the check that a marker is genuine, and the key of a parent's places. | library | Runs `ps` when no listing is given. |
-| `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up. | library | None. |
+| `capacity.mjs` | How many slots a computer has, from its core count and the settings the user set, and whether one more job may take an extra slot. Pure: it is handed numbers, so it holds for any computer. | library | None. |
+| `gate.mjs` | Who may take a free slot, what keeps a job out, when a waiting job gives up; asks `capacity.mjs` about extra slots. | library | None. |
 | `health.mjs` | The health gate: judges a reading, takes one, shares it for up to `pollMs` and at most 5 s. | library | Runs the health probes; reads and writes `health.json` and removes its abandoned temporary files. |
 | `limits.mjs` | Run limits from the journal history. | library | None. |
 | `kinds.mjs` | Job kinds and command stems. | library | None. |

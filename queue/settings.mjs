@@ -5,18 +5,16 @@ import { realpathSync } from "node:fs";
 import { availableParallelism, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { capacityPlan } from "./capacity.mjs";
 import { readJson } from "./files.mjs";
 import { MAX_TIMER_MS } from "./timer.mjs";
 
-/** The default of maxSlots: half the cores, at least the default of slots. loadSettings() raises it to slots when
- *  slots is set higher. */
-export const defaultMaxSlots = (cores = availableParallelism()) => Math.max(2, Math.floor(cores / 2));
-
 export const DEFAULTS = Object.freeze({
     slots: 2,
-    maxSlots: defaultMaxSlots(),
+    // null: not set, so capacity.mjs picks the most slots from the cores and whether slots is set.
+    maxSlots: null,
     extraSlotCpuPct: 60,
-    extraSlotSettleSec: 10,
+    extraSlotSettleSec: 5,
     nestedPerJob: 2,
     mcpMaxJobs: 20,
     flakyWindowDays: 14,
@@ -113,7 +111,7 @@ const insidePath = (x) => typeof x === "string" && x !== "" && !x.startsWith("/"
     && x.split("/").every((step) => step !== "" && step !== "." && step !== "..") && x.split("/")[0] !== ".git";
 /** null when the value fits the setting, else a few words on what the setting needs. */
 function misfit(name, fallback, value) {
-    if (typeof fallback === "number") {
+    if (typeof fallback === "number" || name === "maxSlots") {
         const [fits, needs] = NUMBER_RULES[name] ?? from0;
         // A longer timer would fire at once.
         if (name.endsWith("Ms") && value > MAX_TIMER_MS) return `${needs} and at most ${MAX_TIMER_MS}`;
@@ -129,21 +127,23 @@ function misfit(name, fallback, value) {
     if (typeof value !== "string" || value === "") return "a regular expression as text";
     try { new RegExp(value); return null; } catch { return "a valid regular expression"; }
 }
-function overlay(defaults, given, prefix, warn) {
+/** The settings of defaults, each replaced by the one in given when it fits. accepted gets the name of each one. */
+function overlay(defaults, given, prefix, warn, accepted = new Set()) {
     const out = {};
     for (const [key, fallback] of Object.entries(defaults)) {
         const name = prefix + key;
         const value = given[key];
         if (isPlain(fallback)) {
             if (value !== undefined && !isPlain(value)) warn(`setting ignored: ${name} needs an object, defaults kept`);
-            out[key] = overlay(fallback, isPlain(value) ? value : {}, `${name}.`, warn);
+            out[key] = overlay(fallback, isPlain(value) ? value : {}, `${name}.`, warn, accepted);
             continue;
         }
         const needs = value === undefined ? null : misfit(name, fallback, value);
         if (needs) {
-            const kept = `default ${JSON.stringify(fallback)} kept`;
+            const kept = fallback === null ? "not set" : `default ${JSON.stringify(fallback)} kept`;
             warn(`setting ignored: ${name} is ${JSON.stringify(value)}, needs ${needs}, ${kept}`);
         }
+        if (value !== undefined && !needs) accepted.add(name);
         out[key] = structuredClone(value === undefined || needs ? fallback : value);
     }
     for (const key of Object.keys(given)) {
@@ -152,7 +152,10 @@ function overlay(defaults, given, prefix, warn) {
     return out;
 }
 
-/** The settings in force. A value that does not fit is replaced by its default, with one warning per process. */
+/** The settings in force. A value that does not fit is replaced by its default, with one warning per process. The
+ *  settings also carry userSet, { slots, maxSlots }, true for each of the two that the settings file sets to a value
+ *  that fits, so capacityOf() can tell a slot count the user chose from the default. It is not enumerable, so the
+ *  settings still compare equal to DEFAULTS when the file sets nothing. */
 export function loadSettings(env = process.env, { configText, warn = warnOnce } = {}) {
     const problem = (kind, code) => warn(kind === "invalid"
         ? "config.json ignored: it is not valid JSON"
@@ -162,16 +165,20 @@ export function loadSettings(env = process.env, { configText, warn = warnOnce } 
         warn("config.json ignored: it needs one JSON object");
         given = {};
     }
-    const settings = overlay(DEFAULTS, given, "", warn);
+    const accepted = new Set();
+    const settings = overlay(DEFAULTS, given, "", warn, accepted);
     settings.slots = Math.floor(settings.slots);
-    if (settings.maxSlots < settings.slots) {
-        // A maxSlots that was set but is below slots is reported; the default only follows slots up.
-        const fallback = Math.max(DEFAULTS.maxSlots, settings.slots);
-        if (given.maxSlots !== undefined && settings.maxSlots === given.maxSlots) {
-            warn(`setting ignored: maxSlots is ${given.maxSlots}, needs a whole number of at least slots `
-                + `(${settings.slots}), ${fallback} kept`);
-        }
-        settings.maxSlots = fallback;
+    if (settings.maxSlots !== null && settings.maxSlots < settings.slots) {
+        warn(`setting ignored: maxSlots is ${settings.maxSlots}, needs a whole number of at least slots (${settings.slots}), not set`);
+        settings.maxSlots = null;
+        accepted.delete("maxSlots");
     }
+    const userSet = { slots: accepted.has("slots"), maxSlots: accepted.has("maxSlots") };
+    Object.defineProperty(settings, "userSet", { value: userSet, enumerable: false });
     return settings;
 }
+
+/** The capacity plan for these settings on a computer with this many cores, as capacityPlan() makes it. Settings
+ *  without userSet, such as ones built by hand, count as setting neither slots nor maxSlots. */
+export const capacityOf = (settings, cores = availableParallelism()) =>
+    capacityPlan({ settings, userSet: settings.userSet ?? {}, cores });

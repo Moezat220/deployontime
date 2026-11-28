@@ -7,11 +7,11 @@ import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { historyLines, statusLines } from "../queue/cli.mjs";
+import { planFields } from "../queue/capacity.mjs";
+import { historyLines, statusView } from "../queue/cli.mjs";
 import { flakyFor } from "../queue/flaky.mjs";
-import { gateReason } from "../queue/gate.mjs";
 import { gitState, isRepository } from "../queue/git.mjs";
-import { healthVerdict, readHealth, savedCpuTimes } from "../queue/health.mjs";
+import { readHealth } from "../queue/health.mjs";
 import { cmdString, findStamp, historyWindow, isFailedRun, lineProject, parseLines, readLines } from "../queue/journal.mjs";
 import { folderProject } from "../queue/project.mjs";
 import { snapshot } from "../queue/slots.mjs";
@@ -36,7 +36,8 @@ export const TOOLS = Object.freeze([
         name: "queue_status",
         title: "Queue status",
         description: "Shows the queue: taken and free slots, running and waiting jobs, and whether the health gate is "
-            + "open. The same lines as `dotime-queue status`.",
+            + "open. The same lines as `dotime-queue status`; base, max and source say how many slots this computer "
+            + "has and where the number comes from.",
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
         annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -190,18 +191,14 @@ function folderOf(given, ctx) {
 const result = (lines, structured) => ({ text: lines.join("\n"), structured });
 
 function queueStatus(_args, ctx) {
-    const { settings, files } = ctx;
-    const { holders, queue, nested } = snapshot({ dirs: files });
-    const health = healthVerdict(ctx.readHealth({ limits: settings.health, cpuSince: savedCpuTimes(files.healthCache) }), settings.health);
-    const gate = gateReason({ holders, health }, settings.slots);
-    const lines = statusLines({ holders, queue, nested, gate, max: settings.slots });
+    const { holders, queue, gate, capacity, lines } = statusView(ctx, ctx.readHealth);
     const now = Date.now();
     const job = (entry) => ({
         label: entry.label, pid: entry.pid, minutes: Math.max(0, Math.round((now - (entry.startedAt ?? entry.at)) / 60_000)),
         ...(entry.kind ? { kind: entry.kind } : {}),
     });
     return result(lines, {
-        slots: settings.slots, taken: holders.length, waiting: queue.length, gateOpen: !gate, gate: gate || null,
+        slots: capacity.base, ...planFields(capacity), taken: holders.length, waiting: queue.length, gateOpen: !gate, gate: gate || null,
         running: holders.map(job), line: queue.map(job), lines,
     });
 }

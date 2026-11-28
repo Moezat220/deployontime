@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { cleanEnv, git, isolateProcess, makeRepo, tempDir, track } from "./testkit.mjs";
+import { cleanEnv, feedCpuReading, git, isolateProcess, makeRepo, tempDir, track } from "./testkit.mjs";
 
 isolateProcess("worktree");
 const { labelSlug, makeWorktree, prepareIsolate, readState } = await import("./worktree.mjs");
@@ -172,6 +172,17 @@ test("run --isolate: a pass in a worktree is no pass stamp for the checkout", as
     assert.equal((await start(box, ["run", "--isolate", ...check])).code, 0);
     const plain = await start(box, ["run", ...check]);
     assert.deepEqual([plain.code, plain.stdout], [0, "ran\n"]);
+});
+
+test("run --isolate: an isolated job takes an extra slot like any job, and is journalled with extraSlot", async (t) => {
+    const box = sandbox({ config: { slots: 1, maxSlots: 2, extraSlotSettleSec: 0 } });
+    t.after(feedCpuReading(box.home, 12));
+    takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - 60_000 }, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
+    const ran = await start(box, ["run", "--isolate", "--label", "shop-api: rename", "--", ...editLine(1, "uno")]);
+    assert.equal(ran.code, 0, ran.stderr);
+    assert.equal(ran.stderr.includes("dotime-queue: extra slot: starts beyond the 1 base slots while the CPU has room\n"), true, ran.stderr);
+    const [line] = journal(box);
+    assert.deepEqual([line.outcome, line.extraSlot, typeof line.isolate?.branch], ["ran", true, "string"]);
 });
 
 test("run --isolate: isolateLinks links ignored paths of the checkout; the links are never committed", async () => {

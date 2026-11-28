@@ -33,6 +33,7 @@ import {
 } from "./nested.mjs";
 import { killTree, signalGroup } from "./proctree.mjs";
 import { folderProject, jobProject } from "./project.mjs";
+import { capacityOf } from "./settings.mjs";
 import { addNested, enqueue, releaseSlot, slotNumber, snapshot, takePlace, takeSlot, updateSlot } from "./slots.mjs";
 import { afterMs, MAX_TIMER_MS, wakeableSleep } from "./timer.mjs";
 import { MINUTE } from "./units.mjs";
@@ -116,9 +117,10 @@ export function lowRoomHint(blocks, configFile) {
         + `${low.map((b) => keys[b.gate]).join(" and ")} in ${configFile}`;
 }
 
-/** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, files, waitFrom,
- *  tally }; waitFrom and tally, when given, carry on an earlier wait, so the wait limit counts from its start and the
- *  time is booked with it. Priority plays no part in here: it is in the job's ticket, which orders the line, and in
+/** Waits in line until this job holds a slot. job: { pid, label, maxWait, slotMeta, settings, capacity, files,
+ *  waitFrom, tally }; capacity is the plan of capacityPlan(), capacityOf(settings) when not given. waitFrom and
+ *  tally, when given, carry on an earlier wait, so the wait limit counts from its start and the time is booked with
+ *  it. Priority plays no part in here: it is in the job's ticket, which orders the line, and in
  *  slotMeta. Once the base slots are taken, the first in line may take an extra slot as slotRoom() allows, judged on
  *  the live CPU reading of the same health reading; the health gate applies to it as to any slot. Only then is the
  *  health reading asked for the live CPU reading, which can take a second; a job that finds a base slot free never
@@ -130,7 +132,8 @@ export function lowRoomHint(blocks, configFile) {
  *  time per gate in ms, and extra is true when the slot is an extra one. */
 export async function waitForSlot(job, deps) {
     const { pid, label, maxWait, settings, files } = job;
-    const base = settings.slots;
+    const plan = job.capacity ?? capacityOf(settings);
+    const base = plan.base;
     const tally = { ...job.tally };
     const waitFrom = job.waitFrom ?? deps.now();
     let shownPosition = 0;
@@ -143,12 +146,12 @@ export async function waitForSlot(job, deps) {
         // One reading per poll, taken only when something needs it; the extra-slot rule and the message reuse it.
         let reading = null;
         let verdict = null;
-        const extraNext = extraInQuestion(snap.holders, settings);
+        const extraNext = extraInQuestion(snap.holders, plan);
         const liveCpu = extraNext && decide(snap, pid, Infinity).go ? { liveCpu: true } : {};
         const read = () => (reading ??= deps.readHealth(liveCpu));
         const health = () => (verdict ??= healthVerdict(read(), settings.health));
         const busyCpuPct = extraNext ? read().busyCpuPct : null;
-        const room = slotRoom({ holders: snap.holders, nested: snap.nested, busyCpuPct, now: deps.now() }, settings);
+        const room = slotRoom({ holders: snap.holders, nested: snap.nested, busyCpuPct, now: deps.now() }, plan);
         const max = room.max;
         const turn = decide(snap, pid, max);
         const ahead = turn.position - 1;
@@ -159,7 +162,7 @@ export async function waitForSlot(job, deps) {
             const meta = (n) => (n >= base ? { ...job.slotMeta, extra: true } : job.slotMeta);
             const slot = takeSlot(pid, label, room.limit ?? max, meta, files);
             const crowded = slot && room.extra
-                && startCrowded({ ...snapshot({ dirs: files }), mine: slot, now: deps.now() }, settings);
+                && startCrowded({ ...snapshot({ dirs: files }), mine: slot, now: deps.now() }, plan);
             if (crowded) releaseSlot(slot, pid);
             else if (slot) return { slot, tally, waitFrom, ...(slotNumber(slot) >= base ? { extra: true } : {}) };
         }
@@ -482,7 +485,8 @@ export function jobFolder(ctx, deps) {
     }
 }
 
-/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd, runIn }; without
+/** Runs `dotime-queue run <args>` and resolves with its exit code. ctx: { settings, files, tz, cwd, runIn, capacity };
+ *  capacity is the plan of capacityPlan(), capacityOf(settings) when not given; without
  *  cwd the current folder is read, and only after the arguments were found valid, so a usage error is reported the
  *  same way in a folder that was removed; runIn, when given, is the folder the command starts in, when that is not
  *  the current one. A signal while the job waits takes it out of the line and resolves with 130
@@ -580,6 +584,7 @@ export async function runCommand(args, ctx, deps) {
         // need what its steps make.
         noSkip: noSkip || !canSkip(skipCheck),
         ...(ctx.runIn ? { runIn: ctx.runIn } : {}),
+        ...(ctx.capacity ? { capacity: ctx.capacity } : {}),
     };
     let made = null;
     if (isolated) {
@@ -701,7 +706,8 @@ async function runInLine(job, waitDeps, deps) {
     };
     try {
         const { waitFrom, tally } = job;
-        const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, files, waitFrom, tally }, waitDeps);
+        const { capacity } = job;
+        const waited = await waitForSlot({ pid, label, maxWait, slotMeta, settings, capacity, files, waitFrom, tally }, waitDeps);
         slot = waited.slot ?? null;
         const ended = endOfWait(waited, journal, waitDeps.leaving());
         if (ended !== null) return ended;

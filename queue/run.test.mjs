@@ -13,7 +13,8 @@ isolateProcess("run");
 const { EXIT, journalWriter, lowRoomHint, planJob, realDeps, runCommand, runJob, waitForSlot } = await import("./run.mjs");
 const { cmdStatus, runDeps } = await import("./cli.mjs");
 const { readHealth } = await import("./health.mjs");
-const { DEFAULTS, defaultMaxSlots, paths } = await import("./settings.mjs");
+const { DEFAULTS, paths } = await import("./settings.mjs");
+const { capacityPlan } = await import("./capacity.mjs");
 const { alive } = await import("./proctree.mjs");
 const { enqueue, takePlace, takeSlot } = await import("./slots.mjs");
 const { placeKey } = await import("./nested.mjs");
@@ -39,15 +40,19 @@ const withChild = (file) => "const c = require(\"node:child_process\")"
 const pidIn = (file) => Number(readFileSync(file, "utf8"));
 const count = (lines, part) => lines.filter((line) => line.includes(part)).length;
 
-/** A state folder and a work folder, with the settings the e2e tests use: short polls and a short kill grace. Extra
- *  slots are off unless config sets maxSlots, so the tests of the base slots do not depend on the cores. */
-function sandbox(config = {}) {
+/** A state folder and a work folder, with the settings the e2e tests use: short polls and a short kill grace. The
+ *  capacity plan counts slots as set by the user, and maxSlots when config gives it, so extra slots are off unless
+ *  config sets maxSlots and the tests of the base slots do not depend on the cores. plan: { userSet, cores } for
+ *  another plan. */
+function sandbox(config = {}, plan = {}) {
     const home = tempDir("run-home"), work = tempDir("run-work");
     const settings = {
-        ...DEFAULTS, pollMs: 60, maxSlots: config.slots ?? DEFAULTS.slots, ...config,
+        ...DEFAULTS, pollMs: 60, ...config,
         health: { ...DEFAULTS.health, ...config.health }, limits: { ...DEFAULTS.limits, killGraceMs: 250, ...config.limits },
     };
-    return { home, work, ctx: { settings, files: paths({ DOTIME_HOME: home }), tz: "UTC", cwd: work } };
+    const { userSet = { slots: true, maxSlots: config.maxSlots !== undefined }, cores = 8 } = plan;
+    const capacity = capacityPlan({ settings, userSet, cores });
+    return { home, work, ctx: { settings, capacity, files: paths({ DOTIME_HOME: home }), tz: "UTC", cwd: work } };
 }
 const journal = (box) => {
     try {
@@ -143,7 +148,7 @@ test("planJob: refuses a check that failed twice on unchanged code, unless --aft
 
 const waiter = (box, fields = {}) => ({
     pid: process.pid, label: "shop-api: lint", maxWait: 60, slotMeta: { kind: "lint" },
-    settings: box.ctx.settings, files: box.ctx.files, ...fields,
+    settings: box.ctx.settings, capacity: box.ctx.capacity, files: box.ctx.files, ...fields,
 });
 
 test("waitForSlot: takes a free slot at once when the gate is open", async () => {
@@ -228,7 +233,7 @@ test("waitForSlot: takes an extra slot once the base slots are taken, while the 
 test("waitForSlot: no extra slot while the CPU is busy, while a job just started, or with no CPU reading", async () => {
     const cases = [
         [{ ...CALM, busyCpuPct: 80 }, MINUTE, "no extra slot: CPU 80% busy now, extra slots only below 60%"],
-        [{ ...CALM, busyCpuPct: 20 }, 3000, "no extra slot: a job started 3 s ago, extra slots wait 10 s after a start"],
+        [{ ...CALM, busyCpuPct: 20 }, 3000, "no extra slot: a job started 3 s ago, extra slots wait 5 s after a start"],
         [CALM, MINUTE, "no extra slot: the live CPU reading is unknown"],
     ];
     for (const [reading, ago, why] of cases) {
@@ -265,7 +270,8 @@ test("run and status: a job in an extra slot is journalled with extraSlot, and s
     const printed = [], asked = [];
     cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return { ...roomy, busyCpuPct: 70 }; }, print: (t) => printed.push(t) });
     assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null }], "with every extra slot taken, no CPU reading is asked for");
-    assert.equal(printed[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting");
+    assert.equal(printed[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting; "
+        + "up to 2 while the CPU has room (maxSlots set in settings)");
     assert.match(printed[2], /^running "shop-api: lint": pid \d+, extra slot, kind lint, /);
     assert.equal(printed.at(-1), 'gate: shut; no free slot: 2 taken (1 + 1 extra while the CPU has room), by '
         + `${slots(box).map((s) => `"${s.label}"`).join(" and ")}; no extra slot: all 2 slots taken, extra ones included`);
@@ -289,12 +295,14 @@ test("status: with extra slots on, an open gate says why an extra slot is free",
     cmdStatus(box.ctx, { readHealth: (options) => { asked.push(options); return { ...CALM, busyCpuPct: 31 }; }, print: (t) => printed.push(t) });
     assert.deepEqual(asked, [{ limits: box.ctx.settings.health, cpuSince: null, liveCpu: true }]);
     assert.deepEqual([printed[0], printed.at(-1)], [
-        "slots: 1 of 1 taken, 0 waiting", "gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%",
+        "slots: 1 of 1 taken, 0 waiting; up to 3 while the CPU has room (maxSlots set in settings)",
+        "gate: open; extra slot free while the CPU has room: CPU 31% busy now, below 60%",
     ]);
 });
 
-// The default settings as a computer of 8 cores or more has them, so extra slots are on whatever this computer is.
-const DEFAULT_SLOTS = { slots: DEFAULTS.slots, maxSlots: Math.max(DEFAULTS.maxSlots, defaultMaxSlots(8)) };
+// The default settings, with nothing set by the user, on a computer of 8 cores, so extra slots are on whatever this
+// computer is.
+const DEFAULT_PLAN = { userSet: { slots: false, maxSlots: false }, cores: 8 };
 /** The probes of a calm computer, on a CPU clock that moves only while a reading waits. waits: each wait in ms. */
 function calmProbes() {
     const m = { waits: [], cpuMs: 0 };
@@ -307,7 +315,7 @@ function calmProbes() {
 }
 
 test("run: with the default settings, a job that finds a base slot free takes no live CPU reading and does not wait for one", async () => {
-    const box = sandbox(DEFAULT_SLOTS), m = calmProbes(), asked = [];
+    const box = sandbox({}, DEFAULT_PLAN), m = calmProbes(), asked = [];
     const read = (options) => { asked.push(options); return readHealth({ ...options, probes: m.probes }); };
     const d = makeDeps(box, { readHealth: runDeps(box.ctx, read).readHealth });
     assert.equal(await runCommand(["run", "--label", "docs-site: build", "--", NODE, "-e", "process.exit(0)"], box.ctx, d.deps), 0);
@@ -315,7 +323,7 @@ test("run: with the default settings, a job that finds a base slot free takes no
 });
 
 test("status: with the default settings and a base slot free, it takes no live CPU reading and does not wait for one", () => {
-    const box = sandbox(DEFAULT_SLOTS), m = calmProbes(), asked = [], printed = [];
+    const box = sandbox({}, DEFAULT_PLAN), m = calmProbes(), asked = [], printed = [];
     takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - MINUTE }, box.ctx.files);
     const read = (options) => { asked.push(options); return readHealth({ ...options, probes: m.probes }); };
     cmdStatus(box.ctx, { readHealth: read, print: (t) => printed.push(t) });
@@ -364,7 +372,7 @@ test("waitForSlot: a base slot freed while a job holds an extra slot is taken at
 });
 
 test("waitForSlot: held back only by the settle time, the first in line looks again as soon as it has passed", async () => {
-    const box = sandbox({ slots: 2, maxSlots: 3, pollMs: 3000 }), clock = fakeClock(), naps = [];
+    const box = sandbox({ slots: 2, maxSlots: 3, pollMs: 3000, extraSlotSettleSec: 10 }), clock = fakeClock(), naps = [];
     takeSlot(process.pid, "docs-site: build", 2, { startedAt: NOW - MINUTE }, box.ctx.files);
     takeSlot(process.pid, "mobile-app: bundle", 2, { startedAt: NOW - 8500 }, box.ctx.files);
     enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
@@ -374,7 +382,7 @@ test("waitForSlot: held back only by the settle time, the first in line looks ag
 });
 
 test("waitForSlot: a job that took an extra slot gives it back when another job took a base slot first inside the settle time", async () => {
-    const box = sandbox({ slots: 2, maxSlots: 3, pollMs: 3000 }), clock = fakeClock(), naps = [], held = [];
+    const box = sandbox({ slots: 2, maxSlots: 3, pollMs: 3000, extraSlotSettleSec: 10 }), clock = fakeClock(), naps = [], held = [];
     const first = takeSlot(process.pid, "docs-site: build", 2, { startedAt: NOW - MINUTE }, box.ctx.files);
     takeSlot(process.pid, "mobile-app: bundle", 2, { startedAt: NOW - MINUTE }, box.ctx.files);
     enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
@@ -391,6 +399,70 @@ test("waitForSlot: a job that took an extra slot gives it back when another job 
     const got = await waitForSlot(waiter(box), { now: clock.now, sleep, readHealth, say: () => {} });
     assert.deepEqual(held[0], ["docs-site: hotfix", "mobile-app: bundle"], "the extra slot was given back");
     assert.deepEqual([got.extra, naps.reduce((a, b) => a + b, 0) >= 10_000], [true, true], "it waited the settle time");
+});
+
+// ---- the capacity plan ----
+
+test("small computer: with 1 to 5 cores and nothing set, no extra slot, no live CPU reading, and today's lines", async () => {
+    for (const cores of [1, 2, 3, 4, 5]) {
+        const box = sandbox({ pollMs: 3000 }, { userSet: { slots: false, maxSlots: false }, cores }), clock = fakeClock(), said = [], asked = [];
+        assert.deepEqual([box.ctx.capacity.base, box.ctx.capacity.max, box.ctx.capacity.source], [2, 2, "cores"]);
+        for (const label of ["docs-site: build", "mobile-app: bundle"]) takeSlot(process.pid, label, 2, { startedAt: NOW - 5 * MINUTE }, box.ctx.files);
+        enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+        const readHealth = (options) => { asked.push(options); return { ...CALM, busyCpuPct: 3 }; };
+        const naps = [];
+        const sleep = async (ms) => { naps.push(ms); await clock.sleep(ms); };
+        const got = await waitForSlot(waiter(box, { maxWait: 0.1 }), { now: clock.now, sleep, readHealth, say: (t) => said.push(t) });
+        assert.equal(got.gaveUp, true, `${cores} cores`);
+        assert.deepEqual([...new Set(asked.map((o) => JSON.stringify(o)))], ["{}"], "never asks for the live CPU reading");
+        assert.deepEqual([...new Set(naps)], [3000], "polls at pollMs, with no settle-time nap");
+        const full = 'no free slot: 2 of 2 taken, by "docs-site: build" and "mobile-app: bundle"';
+        assert.deepEqual(said, [`in line: position 1, 0 min waited, wait limit 0.1 min; ${full}`,
+            `gave up: exit 75, position 1, 0 min waited; ${full}; hint: --max-wait 0 waits without limit`]);
+        assert.equal(slots(box).some((slot) => "extra" in slot), false);
+        const printed = [];
+        cmdStatus(box.ctx, { readHealth: () => ({ ...CALM, busyCpuPct: 3 }), print: (t) => printed.push(t) });
+        assert.deepEqual([printed[0], printed.at(-1)], [
+            `slots: 2 of 2 taken, 1 waiting; 2, this computer has ${cores} core${cores === 1 ? "" : "s"}`, `gate: shut; ${full}`,
+        ]);
+    }
+});
+
+test("capacity: slots set by the user without maxSlots is exactly that many on a many-core computer", async () => {
+    const box = sandbox({ slots: 2 }, { userSet: { slots: true, maxSlots: false }, cores: 32 }), clock = fakeClock(), said = [];
+    for (const label of ["docs-site: build", "mobile-app: bundle"]) takeSlot(process.pid, label, 2, { startedAt: NOW - 5 * MINUTE }, box.ctx.files);
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+    const got = await waitForSlot(waiter(box, { maxWait: 0.0001 }), { ...clock, readHealth: () => ({ ...CALM, busyCpuPct: 3 }), say: (t) => said.push(t) });
+    assert.equal(got.gaveUp, true);
+    assert.equal(said.at(-1), 'gave up: exit 75, position 1, 0 min waited; no free slot: 2 of 2 taken, by "docs-site: build" and '
+        + '"mobile-app: bundle"; hint: --max-wait 0 waits without limit');
+});
+
+test("capacity: with the default settle time, an extra slot may start 5 s after the last start, a base refill included", async () => {
+    // A light job that started in a base slot 6 s ago: with a settle time of 10 s every start, base refills included,
+    // held the next extra slot back so long that light work never got more than one extra slot at a time.
+    const box = sandbox({}, { userSet: { slots: false, maxSlots: false }, cores: 12 }), clock = fakeClock();
+    takeSlot(process.pid, "docs-site: lint", 2, { startedAt: NOW - MINUTE }, box.ctx.files);
+    takeSlot(process.pid, "mobile-app: lint", 2, { startedAt: NOW - 6000 }, box.ctx.files);
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+    const got = await waitForSlot(waiter(box, { maxWait: 0.0001 }), { ...clock, readHealth: () => ({ ...CALM, busyCpuPct: 20 }), say: () => {} });
+    assert.equal(got.extra, true);
+});
+
+test("capacity: with nothing set on a many-core computer, the next job takes an extra slot up to half the cores", async () => {
+    const box = sandbox({}, { userSet: { slots: false, maxSlots: false }, cores: 12 }), clock = fakeClock();
+    assert.deepEqual([box.ctx.capacity.max, box.ctx.capacity.reason], [6, "up to 6 while the CPU has room (half of 12 cores)"]);
+    const labels = ["docs-site: build", "mobile-app: bundle", "shop-api: e2e", "shop-api: unit tests", "docs-site: lint", "mobile-app: lint"];
+    for (const [n, label] of labels.entries()) takeSlot(process.pid, label, n + 1, { startedAt: NOW - 5 * MINUTE }, box.ctx.files);
+    assert.equal(slots(box).length, 6);
+    enqueue(process.pid, "shop-api: lint", false, box.ctx.files);
+    const said = [];
+    const full = await waitForSlot(waiter(box, { maxWait: 0.0001 }), { ...clock, readHealth: () => ({ ...CALM, busyCpuPct: 3 }), say: (t) => said.push(t) });
+    assert.equal(full.gaveUp, true);
+    assert.match(said.at(-1), /no extra slot: all 6 slots taken, extra ones included; hint:/);
+    rmSync(join(box.home, "slots", "slot-4.json"));
+    const got = await waitForSlot(waiter(box), { ...clock, readHealth: () => ({ ...CALM, busyCpuPct: 3 }), say: () => {} });
+    assert.deepEqual([got.extra, got.slot.endsWith("slot-4.json")], [true, true]);
 });
 
 // ---- realDeps ----
@@ -631,7 +703,7 @@ test("run: when the wait limit runs out, exit 75 names each health reading that 
     assert.deepEqual(readdirSync(join(box.home, "line")), []);
     const printed = [];
     assert.equal(cmdStatus(box.ctx, { readHealth: () => reading, print: (text) => printed.push(text) }), 0);
-    assert.equal(`${printed.join("\n")}\n`, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: shut; ${why}\n`);
+    assert.equal(`${printed.join("\n")}\n`, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting; ${DEFAULTS.slots}, set in settings\ngate: shut; ${why}\n`);
 });
 
 test("run and status: a high load with an idle CPU starts the job, with a busy CPU it waits, both judged alike", async () => {

@@ -1,7 +1,7 @@
 // The schedule tick. Most tests drive it in this process with a clock that moves only when the test moves it and a
 // stand-in for starting a run; the last ones start real runs of the real cli.mjs through the real `run` path, with
 // the tick's clock still moved by hand, and read the journal and `history` they leave.
-import { cleanEnv, git as testGit, isolateProcess, makeRepo, tempDir, track, until } from "./testkit.mjs";
+import { cleanEnv, feedCpuReading, git as testGit, isolateProcess, makeRepo, tempDir, track, until } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ const { readJson } = await import("./files.mjs");
 const { paths } = await import("./settings.mjs");
 const { cmdSchedule } = await import("./schedule.mjs");
 const { historyLines, scheduleDeps } = await import("./cli.mjs");
-const { BORN, processGone } = await import("./slots.mjs");
+const { BORN, processGone, takeSlot } = await import("./slots.mjs");
 
 const MINUTE = 60_000, NODE = process.execPath;
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -334,10 +334,10 @@ test("startRun: a missing folder gives an error and starts nothing", () => {
 // ---- real runs through the real `run` path ----
 
 /** A state folder whose config lets any reading of this computer through, and the deps of the real command with the
- *  tick's clock in the test's hand. */
-function realBench() {
+ *  tick's clock in the test's hand. config: more settings for its config.json. */
+function realBench(config = {}) {
     const home = tempDir("tick-real-home");
-    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, health: WIDE_OPEN, limits: { killGraceMs: 250, orphanCheckMs: 80 } }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, ...config, health: WIDE_OPEN, limits: { killGraceMs: 250, orphanCheckMs: 80 } }));
     const env = cleanEnv(home);
     const files = paths({ DOTIME_HOME: home });
     const clock = { now: Date.now() };
@@ -389,6 +389,18 @@ test("acceptance: a job every minute runs through the real run path, history cou
     const manual = r.cli(["run", "--label", "docs-site: link check", "--", NODE, "-e", "0"], work);
     assert.equal(manual.status, 0, manual.stderr);
     assert.equal("scheduled" in r.journal().at(-1), false, "a manual run's line has no scheduled field");
+});
+
+test("acceptance: a run the tick started takes an extra slot like any job, and is journalled with extraSlot and scheduled", async (t) => {
+    const r = realBench({ slots: 1, maxSlots: 2, extraSlotSettleSec: 0 }), work = tempDir("tick-real-work");
+    t.after(feedCpuReading(r.home, 12));
+    takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() - MINUTE }, r.files);
+    const j = addJob(r, ["--label", "docs-site: link check", "--every", "1m", "--", NODE, "-e", "console.log('links ok')"], work);
+    r.clock.now = Date.parse(j.createdAt) + MINUTE + 1000;
+    assert.equal(cmdSchedule(["tick"], r.files, r.deps), 0);
+    await runFinished(r, j.id, 1);
+    const [line] = rowsOf(r, j.id);
+    assert.deepEqual([line.outcome, line.exit, line.scheduled, line.extraSlot], ["ran", 0, j.id, true]);
 });
 
 test("acceptance: two failed scheduled runs, and the third scheduled start is refused with exit 3, journalled with scheduled", async () => {

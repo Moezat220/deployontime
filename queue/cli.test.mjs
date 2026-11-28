@@ -4,13 +4,13 @@
 // run the same command in this process instead, in run.test.mjs. Signals are sent only to processes started here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-    asPlatform, cleanEnv, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until,
+    asPlatform, cleanEnv, feedCpuReading, git as testGit, isolateProcess, makeRepo, settingEnv, tempDir, track, until,
 } from "./testkit.mjs";
 
 isolateProcess("cli");
@@ -28,8 +28,9 @@ const WIDE_OPEN = { loadPerCore: 1000, minFreeMemPct: 0, minFreeDiskGB: 0, minBa
 function sandbox({ config = {}, env = {} } = {}) {
     const home = tempDir("cli-home"), work = tempDir("cli-work");
     const limits = { killGraceMs: 250, orphanCheckMs: 80, ...config.limits };
-    const maxSlots = config.slots ?? DEFAULTS.slots;
-    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, maxSlots, ...config, health: { ...WIDE_OPEN, ...config.health }, limits }));
+    // slots is always set, so the slot count is exactly that and does not depend on the cores of this computer.
+    const slots = config.slots ?? DEFAULTS.slots;
+    writeFileSync(join(home, "config.json"), JSON.stringify({ pollMs: 60, slots, ...config, health: { ...WIDE_OPEN, ...config.health }, limits }));
     return { home, work, env: cleanEnv(home, env) };
 }
 function start(box, args, { cwd = box.work, env = box.env } = {}) {
@@ -271,7 +272,7 @@ test("run: with the only slot taken, the next job waits, says why, and starts wh
     const first = start(box, ["run", "--label", "docs-site: build", "--", NODE, "-e", untilFile(release)]);
     await until(() => slots(box)[0]?.pgid);
     const status = await cli(box, ["status"]);
-    assert.equal(status.stdout.startsWith('slots: 1 of 1 taken, 0 waiting\nrunning "docs-site: build": pid '), true);
+    assert.equal(status.stdout.startsWith('slots: 1 of 1 taken, 0 waiting; 1, set in settings\nrunning "docs-site: build": pid '), true);
     assert.equal(status.stdout.endsWith('gate: shut; no free slot: 1 of 1 taken, by "docs-site: build"\n'), true);
     const second = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", "process.exit(0)"]);
     await until(() => second.seen.stderr.includes("in line"));
@@ -300,17 +301,6 @@ test("run: a caller's environment cannot raise the slot count", async () => {
 
 // ---- extra slots ----
 
-/** Keeps a made-up shared health reading with the given live CPU reading in the state folder, fresh enough that every
- *  waiting job takes it instead of reading this computer. Written under a temporary name and moved into place, as the
- *  queue writes it. Returns a function that stops it. */
-function feedCpuReading(box, busyCpuPct) {
-    const file = join(box.home, "health.json"), temp = join(box.home, "health.json.feed");
-    const reading = { load: 0, cores: 8, busyCpuPct, freePct: 90, diskGB: 500, battery: null };
-    const write = () => { writeFileSync(temp, JSON.stringify({ at: Date.now(), reading })); renameSync(temp, file); };
-    write();
-    const timer = setInterval(write, 40);
-    return () => clearInterval(timer);
-}
 // A slot a while ago taken by this test process, so it counts as a running job that started long ago.
 const oldSlot = (box, label) => takeSlot(process.pid, label, 1, { startedAt: Date.now() - 5 * MINUTE },
     { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
@@ -318,12 +308,13 @@ const EXTRA = { slots: 1, maxSlots: 2, pollMs: 1000, extraSlotSettleSec: 5 };
 
 test("run: with the base slot taken and the CPU reading low, the next job starts in an extra slot", async (t) => {
     const box = sandbox({ config: EXTRA }), release = join(box.work, "release");
-    t.after(feedCpuReading(box, 12));
+    t.after(feedCpuReading(box.home, 12));
     oldSlot(box, "docs-site: build");
     const job = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", untilFile(release)]);
     await until(() => slots(box).some((s) => s.extra && s.pgid));
     const status = (await cli(box, ["status"])).stdout.split("\n");
-    assert.equal(status[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting");
+    assert.equal(status[0], "slots: 2 taken (1 + 1 extra while the CPU has room), 0 waiting; "
+        + "up to 2 while the CPU has room (maxSlots set in settings)");
     assert.match(status.find((line) => line.startsWith('running "shop-api: lint"')), /: pid \d+, extra slot, kind lint, /);
     writeFileSync(release, "");
     assert.equal((await job.done).code, 0);
@@ -333,7 +324,7 @@ test("run: with the base slot taken and the CPU reading low, the next job starts
 
 test("run: with the base slot taken and the CPU reading high, the next job waits and says why", async (t) => {
     const box = sandbox({ config: EXTRA });
-    t.after(feedCpuReading(box, 95));
+    t.after(feedCpuReading(box.home, 95));
     oldSlot(box, "docs-site: build");
     const job = start(box, ["run", "--label", "shop-api: lint", "--max-wait", "0.05", "--", NODE, "-e", "console.log('started')"]);
     const result = await job.done;
@@ -346,7 +337,7 @@ test("run: with the base slot taken and the CPU reading high, the next job waits
 test("run: right after a job started, the next one waits for the settle time before it takes an extra slot", async (t) => {
     // A settle time of 4 s leaves the new job time to start and say why it waits, also on a busy computer.
     const box = sandbox({ config: { ...EXTRA, pollMs: 200, extraSlotSettleSec: 4 } }), release = join(box.work, "release");
-    t.after(feedCpuReading(box, 12));
+    t.after(feedCpuReading(box.home, 12));
     takeSlot(process.pid, "docs-site: build", 1, { startedAt: Date.now() }, { slots: join(box.home, "slots"), waitingLine: join(box.home, "line") });
     const job = start(box, ["run", "--label", "shop-api: lint", "--", NODE, "-e", untilFile(release)]);
     await until(() => job.seen.stderr.includes("in line"));
@@ -359,7 +350,7 @@ test("run: right after a job started, the next one waits for the settle time bef
 
 test("run: six light jobs at once fill the base slots, then extra slots one settle time apart, and refill a freed base slot at once", async (t) => {
     const box = sandbox({ config: { slots: 2, maxSlots: 4, pollMs: 100, extraSlotSettleSec: 1.5 } });
-    let stopFeed = feedCpuReading(box, 12);
+    let stopFeed = feedCpuReading(box.home, 12);
     t.after(() => stopFeed());
     const labels = [1, 2, 3, 4, 5, 6].map((n) => `bench: light agent ${n}`);
     const release = (label) => join(box.work, label.replaceAll(/\W+/g, "-"));
@@ -372,7 +363,7 @@ test("run: six light jobs at once fill the base slots, then extra slots one sett
     assert.equal(held[3].at - held[2].startedAt >= 1500, true, "the second extra slot waits the settle time after the first");
     // With the CPU now busy, no extra slot is given, but the base slot a job frees is taken at once.
     stopFeed();
-    stopFeed = feedCpuReading(box, 95);
+    stopFeed = feedCpuReading(box.home, 95);
     const baseHolder = JSON.parse(readFileSync(join(box.home, "slots", "slot-0.json"), "utf8"));
     writeFileSync(release(baseHolder.label), "");
     await until(() => started().length === 4 && slots(box).every((s) => s.label !== baseHolder.label), 10_000);
@@ -415,7 +406,7 @@ test("status: a nested run shows under its outer job while it runs, and the slot
         if (!shown[2]?.includes("waiting for a nested place")) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    assert.equal(shown[0], "slots: 1 of 1 taken, 0 waiting");
+    assert.equal(shown[0], "slots: 1 of 1 taken, 0 waiting; 1, set in settings");
     assert.equal(shown[1].startsWith('running "docs-site: test suite": pid '), true, shown[1]);
     assert.match(shown[2], /^ {2}nested "docs-site: unit tests": pid \d+, 0 min so far, no slot of its own$/);
     assert.equal(shown[3], 'gate: shut; no free slot: 1 of 1 taken, by "docs-site: test suite"');
@@ -579,7 +570,7 @@ test("run: when the queue process is killed, its job is stopped", async () => {
     run.child.kill("SIGKILL");
     assert.equal((await run.done).signal, "SIGKILL");
     await until(() => !alive(job) && !alive(wrapper), 5000);
-    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: open\n`);
+    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting; ${DEFAULTS.slots}, set in settings\ngate: open\n`);
 });
 
 test("run: the same check is refused after failing twice, unless --after-fix is given", async () => {
@@ -873,7 +864,7 @@ test("status: changes nothing in the state folder, also with the slot file of a 
     assert.deepEqual(readdirSync(box.home), ["config.json"]);
     mkdirSync(join(box.home, "slots"));
     writeFileSync(slot, JSON.stringify({ pid: 2 ** 30 + 7, label: "docs-site: build", at: Date.now() }));
-    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting\ngate: open\n`);
+    assert.equal((await cli(box, ["status"])).stdout, `slots: 0 of ${DEFAULTS.slots} taken, 0 waiting; ${DEFAULTS.slots}, set in settings\ngate: open\n`);
     assert.deepEqual([readdirSync(box.home).sort(), existsSync(slot)], [["config.json", "slots"], true]);
 });
 
@@ -942,7 +933,7 @@ test("status: the same lines with the macOS and the Linux readings, also where /
         const ran = spawnSync(NODE, [...asPlatform(platform), CLI, "status"], {
             cwd: box.work, env: box.env, encoding: "utf8", timeout: 60_000,
         });
-        const lines = "slots: 0 of 2 taken, 0 waiting\ngate: open\n";
+        const lines = "slots: 0 of 2 taken, 0 waiting; 2, set in settings\ngate: open\n";
         assert.deepEqual([ran.status, ran.stdout, ran.stderr], [0, lines, ""], platform);
     }
 });

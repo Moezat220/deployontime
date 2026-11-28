@@ -1,7 +1,7 @@
 import "../queue/testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AUTO, busyShare, queuedRun, readOptions, roundConfig, summary } from "./slots.mjs";
+import { AUTO, busyShare, extraRuns, queuedRun, readOptions, roundConfig, summary } from "./slots.mjs";
 
 test("readOptions: the defaults with no options", () => {
     const { opts } = readOptions([]);
@@ -54,7 +54,7 @@ test("readOptions: takes auto in the slot list, once", () => {
 });
 
 test("roundConfig: a slot count is fixed, auto keeps the queue's defaults", () => {
-    assert.deepEqual(roundConfig(6), { slots: 6, maxSlots: 6 });
+    assert.deepEqual(roundConfig(6), { slots: 6 });
     assert.deepEqual(roundConfig(AUTO), {});
 });
 
@@ -81,4 +81,11 @@ test("queuedRun: every queued run passes --no-skip, and a retry also --after-fix
     assert.equal(first.includes("--after-fix"), false);
     const retry = queuedRun(light, 3, 2, ["suite.mjs", "1"]);
     assert.deepEqual([retry.includes("--no-skip"), retry[retry.indexOf("--after-fix") + 1]], [true, "benchmark retry on unchanged code"]);
+});
+
+test("extraRuns: counts the journal lines that ran in an extra slot, passing over lines that are not JSON", () => {
+    const text = [{ outcome: "ran", extraSlot: true }, { outcome: "ran" }, { outcome: "ran", extraSlot: true }]
+        .map((line) => JSON.stringify(line)).join("\n");
+    assert.equal(extraRuns(`${text}\n{"half\n`), 2);
+    assert.equal(extraRuns(""), 0);
 });

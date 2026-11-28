@@ -1,17 +1,19 @@
 // The gate policy: who may take a free slot, what keeps a waiting job out, and when a waiting job gives up. It only
 // judges the slots, the line and a health verdict it is handed; slots.mjs keeps the files. max is the slot count.
-// slotRoom() says how many slots may be filled right now: the base slots always, and an extra one while the CPU has
-// room for it. The base slots are the slot files numbered below settings.slots; the others are extra slots.
+// slotRoom() says how many slots may be filled right now, as capacity.mjs decides from the plan: the base slots
+// always, and an extra one while the CPU has room for it. The base slots are the slot files numbered below
+// plan.base; the others are extra slots.
+import { extraInQuestion as extraAsked, extraSlotVerdict, tooSoonAfter } from "./capacity.mjs";
 import { slotNumber } from "./slots.mjs";
 import { MINUTE } from "./units.mjs";
 
 /** How many holders are in base slots. A holder without a slot file name counts as one in a base slot. */
-export const baseTaken = (holders, slots) => holders.filter((h) => !(slotNumber(h.file) >= slots)).length;
+export const baseTaken = (holders, base) => holders.filter((h) => !(slotNumber(h.file) >= base)).length;
 
 /** True when the base slots are all taken and an extra slot is left, so the live CPU reading decides. holders: the
- *  slot holders as snapshot() gives them. settings: { slots, maxSlots }. */
-export const extraInQuestion = (holders, { slots, maxSlots }) =>
-    baseTaken(holders, slots) >= slots && holders.length < maxSlots;
+ *  slot holders as snapshot() gives them. plan: from capacityPlan(). */
+export const extraInQuestion = (holders, plan) =>
+    extraAsked({ plan, taken: holders.length, baseTaken: baseTaken(holders, plan.base) });
 
 /** The newest start among the slot holders and the running nested runs, in ms, or null when there is none. */
 function lastStart(holders, nested) {
@@ -22,47 +24,39 @@ function lastStart(holders, nested) {
 
 /** How many slots may be filled now. Returns { max, extra, why }: max is the slot count for decide() and gateBlocks();
  *  extra is true when the next slot to be taken is an extra one; why says why an extra slot is or is not given, or is
- *  null while a base slot is free or extra slots are turned off. An extra slot, beyond settings.slots and up to
- *  settings.maxSlots, is given only while the live CPU reading (busyCpuPct) is known and below
- *  settings.extraSlotCpuPct, and no job has started in the last settings.extraSlotSettleSec seconds. The health gate
- *  is judged apart from this and applies to every slot. A base slot that is free while jobs hold extra slots is
- *  taken as a base slot: the answer then also carries limit, the number of slots takeSlot() may look at, so only a
- *  base slot is claimed. While only the settle time holds an extra slot back, the answer carries waitMs, the time
- *  until it has passed. */
-export function slotRoom({ holders, nested = [], busyCpuPct = null, now }, settings) {
-    const { slots, maxSlots, extraSlotCpuPct: cpuPct, extraSlotSettleSec: settleSec } = settings;
+ *  null while a base slot is free or the plan has no extra slots. extraSlotVerdict() decides on an extra slot, from
+ *  the live CPU reading (busyCpuPct) and the newest start among the holders and nested runs. The health gate is
+ *  judged apart from this and applies to every slot. A base slot that is free while jobs hold extra slots is taken
+ *  as a base slot: the answer then also carries limit, the number of slots takeSlot() may look at, so only a base
+ *  slot is claimed. While only the settle time holds an extra slot back, the answer carries waitMs, the time until
+ *  it has passed. plan: from capacityPlan(). */
+export function slotRoom({ holders, nested = [], busyCpuPct = null, now }, plan) {
+    const { base } = plan;
     const taken = holders.length;
-    const refuse = (why, more = {}) => ({ max: Math.min(taken, maxSlots), extra: false, why: `no extra slot: ${why}`, ...more });
-    if (taken < slots || maxSlots <= slots) return { max: slots, extra: false, why: null };
-    if (baseTaken(holders, slots) < slots) return { max: taken + 1, limit: slots, extra: false, why: null };
-    if (taken >= maxSlots) return refuse(`all ${maxSlots} slots taken, extra ones included`);
-    if (!Number.isFinite(busyCpuPct)) return refuse("the live CPU reading is unknown");
-    const cpu = `CPU ${Math.round(busyCpuPct)}% busy now`;
-    if (busyCpuPct >= cpuPct) return refuse(`${cpu}, extra slots only below ${cpuPct}%`);
-    const last = lastStart(holders, nested);
-    const since = last === null ? Infinity : (now - last) / 1000;
-    if (since < settleSec) {
-        const why = `a job started ${Math.max(0, Math.floor(since))} s ago, extra slots wait ${settleSec} s after a start`;
-        return refuse(why, { waitMs: Math.ceil((settleSec - since) * 1000) });
+    if (taken < base || plan.max <= base) return { max: base, extra: false, why: null };
+    if (baseTaken(holders, base) < base) return { max: taken + 1, limit: base, extra: false, why: null };
+    const verdict = extraSlotVerdict({ plan, taken, cpuBusyPct: busyCpuPct, lastStartMs: lastStart(holders, nested), now });
+    if (!verdict.allowed) {
+        const wait = verdict.waitMs ? { waitMs: verdict.waitMs } : {};
+        return { max: Math.min(taken, plan.max), extra: false, why: verdict.reason, ...wait };
     }
-    return { max: taken + 1, extra: true, why: `extra slot free while the CPU has room: ${cpu}, below ${cpuPct}%` };
+    return { max: taken + 1, extra: true, why: verdict.reason };
 }
 
-/** True when a job that just took an extra slot, one numbered settings.slots or higher, must give it back: another
- *  job started within settings.extraSlotSettleSec seconds and not after it. That other job is a slot holder that
- *  claimed its slot first, or a nested run that started first. So two jobs that waited at the same moment, such as
- *  a --priority job that took a base slot as one freed and a job that took an extra slot, never both start inside
- *  the settle time with one of them beyond the base slots: the one in the extra slot waits. state: { holders, nested,
- *  mine, now }, holders and nested as snapshot() gives them, mine the file of the slot just taken. A tie on the
- *  claim time goes to the lower slot number. */
-export function startCrowded({ holders, nested = [], mine, now }, { slots, extraSlotSettleSec: settleSec }) {
+/** True when a job that just took an extra slot, one numbered plan.base or higher, must give it back: another job
+ *  started within the settle time of the plan and not after it. That other job is a slot holder that claimed its
+ *  slot first, or a nested run that started first. So two jobs that waited at the same moment, such as a --priority
+ *  job that took a base slot as one freed and a job that took an extra slot, never both start inside the settle
+ *  time with one of them beyond the base slots: the one in the extra slot waits. state: { holders, nested, mine,
+ *  now }, holders and nested as snapshot() gives them, mine the file of the slot just taken. A tie on the claim time
+ *  goes to the lower slot number. */
+export function startCrowded({ holders, nested = [], mine, now }, plan) {
     const own = holders.find((h) => h.file === mine);
-    if (!own || !(slotNumber(own.file) >= slots)) return false;
+    if (!own || !(slotNumber(own.file) >= plan.base)) return false;
     const first = (h) => h.at < own.at || (h.at === own.at && slotNumber(h.file) < slotNumber(own.file));
     const before = holders.filter((h) => h !== own && first(h));
     const nestedBefore = nested.filter((n) => !n.waiting && n.startedAt <= own.at);
-    const last = lastStart(before, nestedBefore);
-    return last !== null && (now - last) / 1000 < settleSec;
+    return tooSoonAfter({ plan, lastStartMs: lastStart(before, nestedBefore), now });
 }
 
 /** Returns { go, position }: go when this pid is first in line and a slot is free. */

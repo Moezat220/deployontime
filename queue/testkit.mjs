@@ -3,7 +3,7 @@
 // configuration and hooks of whoever runs the tests. Every test file imports this module before the modules under
 // test. Importing it already points DOTIME_HOME at a fresh temp folder and sends notices to the log file only, so a
 // test that forgets isolateProcess() still never touches the real state folder.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -161,6 +161,18 @@ export function settingEnv(defaults, value, prefix = "DOTIME") {
 export function asPlatform(platform) {
     const preload = `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });`;
     return ["--import", `data:text/javascript,${encodeURIComponent(preload)}`];
+}
+
+/** Keeps a made-up shared health reading with the given live CPU reading in the state folder home, fresh enough that
+ *  every waiting job takes it instead of reading this computer. Written under a temporary name and moved into place,
+ *  as the queue writes it. Returns a function that stops it. */
+export function feedCpuReading(home, busyCpuPct) {
+    const file = join(home, "health.json"), temp = join(home, "health.json.feed");
+    const reading = { load: 0, cores: 8, busyCpuPct, freePct: 90, diskGB: 500, battery: null };
+    const write = () => { writeFileSync(temp, JSON.stringify({ at: Date.now(), reading })); renameSync(temp, file); };
+    write();
+    const timer = setInterval(write, 40);
+    return () => clearInterval(timer);
 }
 
 export const pause = (ms) => new Promise((done) => setTimeout(done, ms));

@@ -4,7 +4,8 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { settingEnv, tempDir } from "./testkit.mjs";
-import { DEFAULTS, defaultHome, defaultMaxSlots, homeDir, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
+import { planFields } from "./capacity.mjs";
+import { capacityOf, DEFAULTS, defaultHome, homeDir, isMainModule, loadSettings, paths, timeZone } from "./settings.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const collect = () => { const seen = []; return { seen, warn: (text) => seen.push(text) }; };
@@ -212,9 +213,11 @@ test("DEFAULTS: output folders and dev-server pattern cover the common tools", (
 
 test("README settings table: every number setting has a row, and each row's marking is what the code enforces", async () => {
     const { readFileSync } = await import("node:fs");
-    const row = /^\| `([\w.]+)` \| ([\d.]+|half the cores[^|]*) \| (.*) \|$/;
+    // A setting starts with a small letter; the environment variables in other tables do not.
+    const row = /^\| `([a-z][\w.]*)` \| ([\d.]+|not set) \| (.*) \|$/;
     const rows = readFileSync(join(HERE, "README.md"), "utf8").split("\n").map((l) => row.exec(l)).filter(Boolean);
-    const numberKeys = Object.entries(DEFAULTS).flatMap(([k, v]) => (typeof v === "number"
+    // A number setting whose default is null is not set until the file sets it.
+    const numberKeys = Object.entries(DEFAULTS).flatMap(([k, v]) => (typeof v === "number" || v === null
         ? [k]
         : v && typeof v === "object" && !Array.isArray(v)
             ? Object.entries(v).filter(([, x]) => typeof x === "number").map(([n]) => `${k}.${n}`)
@@ -252,27 +255,43 @@ test("loadSettings: isolateLinks is a list of relative paths inside the reposito
     }
 });
 
-test("defaultMaxSlots: half the cores, at least 2", () => {
-    assert.deepEqual([1, 2, 3, 4, 5, 10, 16].map((cores) => defaultMaxSlots(cores)), [2, 2, 2, 2, 2, 5, 8]);
-    assert.equal(DEFAULTS.maxSlots, defaultMaxSlots());
-    assert.deepEqual([DEFAULTS.extraSlotCpuPct, DEFAULTS.extraSlotSettleSec], [60, 10]);
+test("DEFAULTS: maxSlots is not set, and the extra-slot rules", () => {
+    assert.equal(DEFAULTS.maxSlots, null);
+    assert.deepEqual([DEFAULTS.extraSlotCpuPct, DEFAULTS.extraSlotSettleSec], [60, 5]);
 });
 
-test("loadSettings: maxSlots needs a whole number of at least slots, and its default follows slots up", () => {
+test("loadSettings: userSet names slots and maxSlots only when the file sets them to a value that fits", () => {
+    const userSet = (config) => ({ ...load(config).settings.userSet });
+    assert.deepEqual(userSet({}), { slots: false, maxSlots: false });
+    assert.deepEqual(userSet({ slots: 2 }), { slots: true, maxSlots: false }, "the default value, but set in the file");
+    assert.deepEqual(userSet({ slots: 3, maxSlots: 6 }), { slots: true, maxSlots: true });
+    assert.deepEqual(userSet({ maxSlots: 6 }), { slots: false, maxSlots: true });
+    assert.deepEqual(userSet({ slots: 0, maxSlots: 2.5 }), { slots: false, maxSlots: false }, "values that do not fit are not set");
+    assert.deepEqual(load({ slots: 3 }).settings, { ...DEFAULTS, slots: 3 }, "userSet is not enumerable");
+    assert.deepEqual(Object.keys(loadSettings({ DOTIME_HOME: tempDir("settings") }, { warn: () => {} })).includes("userSet"), false);
+});
+
+test("loadSettings: maxSlots needs a whole number of at least slots, else it is not set", () => {
     assert.deepEqual(load({ slots: 3, maxSlots: 3 }), { settings: { ...DEFAULTS, slots: 3, maxSlots: 3 }, warnings: [] });
     assert.equal(load({ slots: 2, maxSlots: 7 }).settings.maxSlots, 7);
-    const high = Math.max(DEFAULTS.maxSlots + 3, 12);
-    assert.deepEqual(load({ slots: high }), { settings: { ...DEFAULTS, slots: high, maxSlots: high }, warnings: [] });
+    assert.deepEqual(load({ slots: 12 }), { settings: { ...DEFAULTS, slots: 12 }, warnings: [] });
     const below = load({ slots: 4, maxSlots: 3 });
-    const kept = Math.max(DEFAULTS.maxSlots, 4);
-    assert.equal(below.settings.maxSlots, kept);
-    assert.deepEqual(below.warnings, [`setting ignored: maxSlots is 3, needs a whole number of at least slots (4), ${kept} kept`]);
+    assert.deepEqual([below.settings.maxSlots, below.settings.userSet.maxSlots], [null, false]);
+    assert.deepEqual(below.warnings, ["setting ignored: maxSlots is 3, needs a whole number of at least slots (4), not set"]);
     for (const bad of [0, 2.5, -1, "4", null]) {
         const { settings, warnings } = load({ maxSlots: bad });
-        assert.equal(settings.maxSlots, DEFAULTS.maxSlots, String(bad));
-        assert.equal(warnings.length, 1, String(bad));
-        assert.match(warnings[0], /^setting ignored: maxSlots is .*, needs a whole number of 1 or more, default \d+ kept$/);
+        assert.equal(settings.maxSlots, null, String(bad));
+        assert.equal(settings.userSet.maxSlots, false, String(bad));
+        assert.deepEqual(warnings, [`setting ignored: maxSlots is ${JSON.stringify(bad)}, needs a whole number of 1 or more, not set`]);
     }
+});
+
+test("capacityOf: the plan of the loaded settings for a core count", () => {
+    assert.deepEqual(planFields(capacityOf(load({}).settings, 10)), { base: 2, max: 5, source: "cores" });
+    assert.deepEqual(planFields(capacityOf(load({ slots: 2 }).settings, 10)), { base: 2, max: 2, source: "slots" });
+    assert.deepEqual(planFields(capacityOf(load({ maxSlots: 7 }).settings, 10)), { base: 2, max: 7, source: "maxSlots" });
+    assert.deepEqual(planFields(capacityOf({ ...DEFAULTS, slots: 3 }, 4)), { base: 3, max: 3, source: "cores" },
+        "settings built by hand set neither");
 });
 
 test("loadSettings: extraSlotCpuPct needs a number from 1 to 100, extraSlotSettleSec one of 0 or more", () => {
@@ -285,7 +304,7 @@ test("loadSettings: extraSlotCpuPct needs a number from 1 to 100, extraSlotSettl
     }
     for (const bad of [-1, "10", Infinity]) {
         const { settings, warnings } = load({ extraSlotSettleSec: bad });
-        assert.equal(settings.extraSlotSettleSec, 10, String(bad));
+        assert.equal(settings.extraSlotSettleSec, 5, String(bad));
         assert.equal(warnings.length, 1, String(bad));
     }
 });

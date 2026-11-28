@@ -1,9 +1,9 @@
 // Importing testkit alone, without isolateProcess(), already gives the test file a state folder of its own.
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { asPlatform, readNotices, tempDir } from "./testkit.mjs";
+import { asPlatform, feedCpuReading, pause, readNotices, tempDir } from "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -34,4 +34,18 @@ test("asPlatform: a started script sees the platform it is given, and nothing el
         });
         assert.deepEqual([ran.status, ran.stdout, ran.stderr], [0, `${platform} 42\n`, ""]);
     }
+});
+
+test("feedCpuReading: keeps a fresh shared reading with the given CPU value until it is stopped", async () => {
+    const home = tempDir("testkit-feed");
+    const stop = feedCpuReading(home, 12);
+    const read = () => JSON.parse(readFileSync(join(home, "health.json"), "utf8"));
+    const first = read();
+    assert.equal(first.reading.busyCpuPct, 12);
+    await pause(120);
+    assert.equal(read().at > first.at, true, "written again");
+    stop();
+    const last = read().at;
+    await pause(120);
+    assert.equal(read().at, last, "not written after the stop");
 });

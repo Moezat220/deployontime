@@ -9,10 +9,10 @@
 // between tries. For each round it reports the time until every agent is green, the suite runs, the tests that
 // failed in the first runs and the highest share of the cores that was busy (sampled every second).
 //
-// Each round uses a state folder of its own. A slot count sets `slots` and `maxSlots` to that number, so the count
-// is fixed; the entry `auto` writes an empty config.json, so the queue runs with its defaults: the base slots and
-// extra slots while the CPU has room. The health gate keeps its defaults. It is heavy on purpose. Run it on an
-// otherwise quiet computer.
+// Each round uses a state folder of its own. A slot count sets `slots` to that number, and a slot count the user set
+// is exact, so the count is fixed; the entry `auto` writes an empty config.json, so the queue runs with its defaults:
+// the base slots and extra slots while the CPU has room. The health gate keeps its defaults. It is heavy on
+// purpose. Run it on an otherwise quiet computer.
 //
 // usage: node bench/slots.mjs [--repeat 1] [--slots 2,3,4,6] [--light-agents 6] [--light-threads 1]
 //                             [--heavy-agents 4] [--heavy-threads 5] [--tests 20] [--mem 400] [--tries 8]
@@ -20,7 +20,7 @@
 // --mem is megabytes per thread, --work the CPU work per test, --slack how much slower than alone a test may get.
 // --slots also takes `auto` among the counts, for example --slots 2,6,auto; it is not in the list by default.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,7 @@ const CLI = join(here, "..", "queue", "cli.mjs");
 export const AUTO = "auto";
 
 /** The config.json of a round: a fixed slot count, or the defaults for AUTO. */
-export const roundConfig = (slots) => (slots === AUTO ? {} : { slots, maxSlots: slots });
+export const roundConfig = (slots) => (slots === AUTO ? {} : { slots });
 
 const defaults = {
     repeat: 1, slots: [2, 3, 4, 6], "light-agents": 6, "light-threads": 1, "heavy-agents": 4, "heavy-threads": 5,
@@ -71,6 +71,13 @@ export function readOptions(argv) {
         opts[name] = value;
     }
     return { opts };
+}
+
+/** How many lines of a journal's text ran in an extra slot. A line that is not JSON is passed over. */
+export function extraRuns(text) {
+    return text.split("\n").filter((line) => {
+        try { return JSON.parse(line).extraSlot === true; } catch { return false; }
+    }).length;
 }
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
@@ -185,6 +192,7 @@ async function round(home, load, slots, deadline, repo, repeat, opts) {
             firstFailed: agents.reduce((sum, a) => sum + (a.firstFailed ?? 0), 0),
             neverGreen: agents.filter((a) => !a.green).length,
             peakPct: Math.round(peak * 100),
+            extra: (() => { try { return extraRuns(readFileSync(join(state, "journal.jsonl"), "utf8")); } catch { return 0; } })(),
         };
     } finally {
         clearInterval(sampler);
@@ -251,7 +259,7 @@ async function main(opts) {
                         : `all green after ${result.seconds} s`;
                     console.log(`run ${r} slots ${slots} ${load.name}: ${end}, ${result.runs} suite runs, ` +
                         `${result.firstFailed} of ${load.agents * load.threads * opts.tests} tests failed ` +
-                        `in the first runs, peak CPU ${result.peakPct}%` +
+                        `in the first runs, peak CPU ${result.peakPct}%, ${result.extra} runs in an extra slot` +
                         (result.errors ? `, ${result.errors} tries ended without a result` : ""));
                 }
             }

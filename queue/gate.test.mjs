@@ -1,6 +1,7 @@
 import "./testkit.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { capacityPlan } from "./capacity.mjs";
 import {
     baseTaken, blockReason, blockText, decide, extraInQuestion, gateBlocks, gateReason, shouldGiveUp, slotRoom, startCrowded,
     takenText,
@@ -69,7 +70,12 @@ test("shouldGiveUp: true from the limit on, never with a limit of 0", () => {
 
 // ---- extra slots ----
 
-const ROOMY = { slots: 2, maxSlots: 4, extraSlotCpuPct: 60, extraSlotSettleSec: 10 };
+// The plan of a settings file that sets slots 2 and maxSlots 4, with the default extra-slot rules.
+const planOf = (more = {}) => capacityPlan({
+    settings: { slots: 2, maxSlots: 4, extraSlotCpuPct: 60, extraSlotSettleSec: 10, ...more },
+    userSet: { slots: true, maxSlots: true }, cores: 8,
+});
+const ROOMY = planOf();
 const NOW = 50 * MINUTE;
 const ran = (secondsAgo, label = "shop-api: lint") => ({ label, at: NOW - secondsAgo * 1000 - 500, startedAt: NOW - secondsAgo * 1000 });
 
@@ -79,7 +85,7 @@ test("slotRoom: gives an extra slot while the CPU is below the threshold and no 
         max: 3, extra: true, why: "extra slot free while the CPU has room: CPU 31% busy now, below 60%",
     });
     assert.equal(slotRoom({ holders: [...holders, ran(12)], busyCpuPct: 59.9, now: NOW }, ROOMY).max, 4, "one more extra slot");
-    assert.equal(slotRoom({ holders, busyCpuPct: 31, now: NOW }, { ...ROOMY, extraSlotSettleSec: 0 }).extra, true);
+    assert.equal(slotRoom({ holders, busyCpuPct: 31, now: NOW }, planOf({ extraSlotSettleSec: 0 })).extra, true);
 });
 
 test("slotRoom: refuses an extra slot while the CPU is at or above the threshold", () => {
@@ -121,13 +127,13 @@ test("slotRoom: the base slots do not depend on the CPU, and maxSlots equal to s
         assert.deepEqual(slotRoom({ holders: [ran(1)], busyCpuPct, now: NOW }, ROOMY), { max: 2, extra: false, why: null });
         assert.deepEqual(slotRoom({ holders: [], busyCpuPct, now: NOW }, ROOMY), { max: 2, extra: false, why: null });
     }
-    assert.deepEqual(slotRoom({ holders: [ran(90), ran(80)], busyCpuPct: 5, now: NOW }, { ...ROOMY, maxSlots: 2 }), { max: 2, extra: false, why: null });
+    assert.deepEqual(slotRoom({ holders: [ran(90), ran(80)], busyCpuPct: 5, now: NOW }, planOf({ maxSlots: 2 })), { max: 2, extra: false, why: null });
 });
 
 test("extraInQuestion: only once the base slots are taken and maxSlots is not reached", () => {
     const jobs = (n) => Array.from({ length: n }, () => ran(40));
     assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => extraInQuestion(jobs(n), ROOMY)), [false, false, true, true, false, false]);
-    assert.equal(extraInQuestion(jobs(2), { slots: 2, maxSlots: 2 }), false);
+    assert.equal(extraInQuestion(jobs(2), planOf({ maxSlots: 2 })), false);
 });
 
 // A holder in the slot file of the given number.
