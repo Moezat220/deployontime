@@ -10,7 +10,6 @@ import { cronMatches, dueBetween, nextCron, nextDue, parseCron, parseEvery, time
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
 const UTC = zoneWall("UTC");
 const NEW_YORK = zoneWall("America/New_York");
-const VANCOUVER = zoneWall("America/Vancouver");
 const at = (text) => Date.parse(text);
 const iso = (ms) => (ms === null ? null : new Date(ms).toISOString());
 const sorted = (set) => [...set].sort((a, b) => a - b);
@@ -102,33 +101,33 @@ test("nextCron: read on the zone's wall clock, across the shifts of the clock", 
 });
 
 test("nextCron: a fixed time the clock skips in spring is due once, right after the jump, as in cronie", () => {
-    // In Vancouver the clock jumps from 02:00 to 03:00 at 10:00 UTC on the day of the spring shift.
-    assert.equal(next("30 2 * * *", "2031-03-08T20:00:00Z", VANCOUVER), "2031-03-09T10:00:00.000Z", "at 03:00, once");
-    assert.equal(next("30 2 * * *", "2031-03-09T10:00:00Z", VANCOUVER), "2031-03-10T09:30:00.000Z", "then 02:30 as usual");
-    assert.equal(next("0,30 2 * * *", "2031-03-09T09:00:00Z", VANCOUVER), "2031-03-09T10:00:00.000Z");
-    assert.deepEqual(dueBetween({ cron: "0,30 2 * * *" }, at("2031-03-09T08:00:00Z"), at("2031-03-09T12:00:00Z"), VANCOUVER),
-        { count: 1, oldest: at("2031-03-09T10:00:00Z"), newest: at("2031-03-09T10:00:00Z") }, "two skipped times, one run");
-    assert.equal(next("0 3 * * *", "2031-03-09T09:00:00Z", VANCOUVER), "2031-03-09T10:00:00.000Z", "03:00 itself, once");
-    assert.equal(next("0 3 * * *", "2031-03-09T10:00:00Z", VANCOUVER), "2031-03-10T10:00:00.000Z");
+    // In New York the clock jumps from 02:00 to 03:00 at 07:00 UTC on the day of the spring shift.
+    assert.equal(next("30 2 * * *", "2031-03-08T17:00:00Z", NEW_YORK), "2031-03-09T07:00:00.000Z", "at 03:00, once");
+    assert.equal(next("30 2 * * *", "2031-03-09T07:00:00Z", NEW_YORK), "2031-03-10T06:30:00.000Z", "then 02:30 as usual");
+    assert.equal(next("0,30 2 * * *", "2031-03-09T06:00:00Z", NEW_YORK), "2031-03-09T07:00:00.000Z");
+    assert.deepEqual(dueBetween({ cron: "0,30 2 * * *" }, at("2031-03-09T05:00:00Z"), at("2031-03-09T09:00:00Z"), NEW_YORK),
+        { count: 1, oldest: at("2031-03-09T07:00:00Z"), newest: at("2031-03-09T07:00:00Z") }, "two skipped times, one run");
+    assert.equal(next("0 3 * * *", "2031-03-09T06:00:00Z", NEW_YORK), "2031-03-09T07:00:00.000Z", "03:00 itself, once");
+    assert.equal(next("0 3 * * *", "2031-03-09T07:00:00Z", NEW_YORK), "2031-03-10T07:00:00.000Z");
     // A star in the minute or hour field follows the wall clock: the skipped 02:xx times do not come that day.
-    assert.equal(next("*/30 2 * * *", "2031-03-09T08:00:00Z", VANCOUVER), "2031-03-10T09:00:00.000Z");
-    assert.equal(next("30 * * * *", "2031-03-09T09:00:00Z", VANCOUVER), "2031-03-09T09:30:00.000Z");
-    assert.equal(next("30 * * * *", "2031-03-09T09:30:00Z", VANCOUVER), "2031-03-09T10:30:00.000Z", "03:30, no catch-up");
+    assert.equal(next("*/30 2 * * *", "2031-03-09T05:00:00Z", NEW_YORK), "2031-03-10T06:00:00.000Z");
+    assert.equal(next("30 * * * *", "2031-03-09T06:00:00Z", NEW_YORK), "2031-03-09T06:30:00.000Z");
+    assert.equal(next("30 * * * *", "2031-03-09T06:30:00Z", NEW_YORK), "2031-03-09T07:30:00.000Z", "03:30, no catch-up");
     assert.equal(next("30 2 * * *", "2031-03-08T17:00:00Z", NEW_YORK), "2031-03-09T07:00:00.000Z", "New York, 03:00 after the jump");
 });
 
 test("nextCron: a fixed time the clock repeats in autumn is due once, the first time, as in cronie", () => {
-    // In Vancouver the clock goes back from 02:00 to 01:00 at 09:00 UTC on the day of the autumn shift.
+    // In New York the clock goes back from 02:00 to 01:00 at 06:00 UTC on the day of the autumn shift.
     const once = parseCron("30 1 * * *");
-    const first = nextCron(once, at("2031-11-01T20:00:00Z"), VANCOUVER);
-    assert.equal(iso(first), "2031-11-02T08:30:00.000Z");
-    assert.equal(iso(nextCron(once, first, VANCOUVER)), "2031-11-03T09:30:00.000Z", "not again at 09:30 UTC");
-    const window = [at("2031-11-02T07:00:00Z"), at("2031-11-02T11:00:00Z")];
-    assert.equal(dueBetween({ cron: "0,30 1 * * *" }, ...window, VANCOUVER).count, 2);
-    assert.equal(dueBetween({ cron: "0 2 * * *" }, ...window, VANCOUVER).count, 1, "02:00 comes once in any case");
+    const first = nextCron(once, at("2031-11-01T17:00:00Z"), NEW_YORK);
+    assert.equal(iso(first), "2031-11-02T05:30:00.000Z");
+    assert.equal(iso(nextCron(once, first, NEW_YORK)), "2031-11-03T06:30:00.000Z", "not again at 06:30 UTC");
+    const window = [at("2031-11-02T04:00:00Z"), at("2031-11-02T08:00:00Z")];
+    assert.equal(dueBetween({ cron: "0,30 1 * * *" }, ...window, NEW_YORK).count, 2);
+    assert.equal(dueBetween({ cron: "0 2 * * *" }, ...window, NEW_YORK).count, 1, "02:00 comes once in any case");
     // A star in the minute or hour field follows the wall clock, so it is due in both passes of the hour.
-    assert.deepEqual(dueBetween({ cron: "*/30 1 * * *" }, ...window, VANCOUVER),
-        { count: 4, oldest: at("2031-11-02T08:00:00Z"), newest: at("2031-11-02T09:30:00Z") });
+    assert.deepEqual(dueBetween({ cron: "*/30 1 * * *" }, ...window, NEW_YORK),
+        { count: 4, oldest: at("2031-11-02T05:00:00Z"), newest: at("2031-11-02T06:30:00Z") });
     const twice = parseCron("30 1 * * *");
     assert.equal(iso(nextCron(twice, at("2031-11-01T12:00:00Z"), NEW_YORK)), "2031-11-02T05:30:00.000Z", "New York");
     assert.equal(iso(nextCron(twice, at("2031-11-02T05:30:00Z"), NEW_YORK)), "2031-11-03T06:30:00.000Z");
