@@ -708,14 +708,15 @@ more than 2 minutes ahead, is said once, and the job's due times count from now.
 
 `schedule.json`, its lock, `schedule.log`, `schedule-notes.json` and the run logs are written for their owner alone
 (mode 600). The tick runs nothing, and exits 1, while `schedule.json` belongs to another user or its group or other
-users may write it: the file names the commands it runs. `schedule add`, `remove`, `enable` and `disable` refuse
-such a file the same way, with exit 1, so they never rewrite it as yours. The tick also exits 1 when
-`schedule.json` cannot be read or is not valid; its jobs are kept as they are. It skips, with a message, a job in
-the file that is not complete. Each of these problems, and a save that fails, is sent as one notice, `dotime: schedule not run`, `dotime: schedule cannot
-be used` or `dotime: schedule tick stopped`, with the fix, such as `chmod 600 <file>`; `schedule-notes.json` keeps
-which ones were sent, so the next ticks do not send them again. A broken file is told again once it changes, and a
-problem that went away and comes back is told again. A notice is sent only once that record is saved, so it is never
-sent each minute; when even that file cannot be written, the line in `schedule.log` is all that says it.
+users may write it: the file names the commands it runs. `schedule add`, `remove`, `enable` and `disable` refuse such
+a file the same way, with exit 1, so they never rewrite it as yours. The tick also exits 1 when `schedule.json`
+cannot be read or is not valid; its jobs are kept as they are. It skips, with a message, a job in the file that is
+not complete. Each of these problems, and a save that fails, is sent as one notice, `dotime: schedule not run`,
+`dotime: schedule cannot be used` or `dotime: schedule tick stopped`, with the fix, such as `chmod 600 <file>`;
+`schedule-notes.json` keeps which ones were sent, so the next ticks do not send them again. A broken file is told
+again once it changes, and a problem that went away and comes back is told again. A notice is sent only once that
+record is saved, so it is never sent each minute; when even that file cannot be written, the line in `schedule.log`
+is all that says it.
 
 **`install`** writes the one system entry and starts it; `--dry` prints what it would write and run, and changes
 nothing. On macOS it is the LaunchAgent `~/Library/LaunchAgents/com.deployontime.schedule-tick.plist`, with

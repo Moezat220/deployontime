@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
 
 isolateProcess("tick");
 const { GRACE_MS, NO_PID_MS, planTick, runTick, SCHEDULED_MARKER, startRun, stillGoing, tickRow } = await import("./tick.mjs");
+// A run may be writing its journal line while a test reads, so a line that does not parse yet is left out, as the
+// journal reader does.
+const parse = (line) => { try { return [JSON.parse(line)]; } catch { return []; } };
 const { summarize } = await import("./journal.mjs");
 const { zoneWall } = await import("./cron.mjs");
 const { readSchedule, writeSchedule } = await import("./timetable.mjs");
@@ -52,7 +55,7 @@ function bench(jobs, { live = new Set() } = {}) {
         notify: (title, message) => seen.notices.push([title, message]),
         print: (line) => seen.printed.push(line), say: (line) => seen.said.push(line),
     };
-    const journal = () => (existsSync(files.journal) ? readFileSync(files.journal, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
+    const journal = () => (existsSync(files.journal) ? readFileSync(files.journal, "utf8").trim().split("\n").flatMap(parse) : []);
     const tick = (at) => { clock.now = at; return runTick(files, deps); };
     return { files, seen, deps, clock, journal, tick, stored: () => readSchedule(files.schedule).jobs, live };
 }
@@ -344,7 +347,7 @@ function realBench() {
         installed: () => true, newId: (() => { let n = 0; return () => `00000a0${n++}`; })(),
         spawn: (...a) => track(spawn(...a)),
     };
-    const journal = () => (existsSync(files.journal) ? readFileSync(files.journal, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
+    const journal = () => (existsSync(files.journal) ? readFileSync(files.journal, "utf8").trim().split("\n").flatMap(parse) : []);
     const cli = (args, cwd) => spawnSync(NODE, [CLI, ...args], { env, cwd: cwd ?? home, encoding: "utf8" });
     return { home, files, env, clock, deps, printed, journal, cli };
 }
