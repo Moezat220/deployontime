@@ -57,6 +57,8 @@ export function maxLogAgeMs(plist) {
     const entries = Array.isArray(calendar) ? calendar : [calendar];
     if (entries.some((e) => e.Day != null)) return 32 * DAY;
     if (entries.some((e) => e.Weekday != null)) return 8 * DAY;
+    // A key left out is a wildcard: an entry with neither Minute nor Hour fires every minute, like StartInterval 60.
+    if (entries.some((e) => e.Minute == null && e.Hour == null)) return 30 * MINUTE;
     if (entries.every((e) => e.Hour == null)) return 3 * HOUR;
     return 26 * HOUR;
 }

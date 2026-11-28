@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tempDir } from "./testkit.mjs";
 import {
-    meminfoFreePct, meminfoSwapPct, parseMeminfo, POWER_SUPPLY_DIR, readPowerSupplies, readText, supplyBattery,
+    meminfoFreePct, meminfoSwapPct, parseMeminfo, parseStartTicks, POWER_SUPPLY_DIR, readPowerSupplies, readText, startTicks,
+    supplyBattery,
 } from "./linux.mjs";
 
 const MEMINFO = [
@@ -122,4 +123,34 @@ test("supplyBattery: null on a server or desktop without a battery, or with unre
     assert.equal(supplyBattery([supply("AC", "Mains", { online: "1" })]), null);
     assert.equal(supplyBattery([supply("BAT0", "Battery", { status: "Discharging" })]), null, "no charge level");
     assert.equal(supplyBattery([supply("BAT0", "Battery", { capacity: "lots", status: "Discharging" })]), null);
+});
+
+// A /proc/<pid>/stat line: pid, (name), state, then the numbers; field 22, starttime, is 98765 here.
+const STAT_REST = "S 1 4101 4101 0 -1 4194560 2000 0 0 0 10 5 0 0 20 0 11 0 98765 1234567 2345 18446744073709551615";
+
+test("parseStartTicks: field 22 counted from after the last parenthesis, whatever the program name holds", () => {
+    assert.equal(parseStartTicks(`4101 (node) ${STAT_REST}\n`), 98765);
+    assert.equal(parseStartTicks(`4102 (my tool) (v2) ${STAT_REST}`), 98765, "a name with spaces and \") (\"");
+    assert.equal(parseStartTicks(`4103 (a)b) ${STAT_REST}`), 98765, "a name with a lone \")\"");
+    assert.equal(parseStartTicks(""), null);
+    assert.equal(parseStartTicks("4104 (node) S 1 4104"), null, "a line cut short");
+    assert.equal(parseStartTicks(`4105 node ${STAT_REST}`), null, "no parenthesis");
+    assert.equal(parseStartTicks(`4106 (node) ${STAT_REST.replace("98765", "-5")}`), null, "not a whole number");
+});
+
+test("startTicks: reads /proc/<pid>/stat on Linux only, and never for a pid that is not a whole number above 1", () => {
+    const asked = [];
+    const read = (file) => { asked.push(file); return `4101 (node) ${STAT_REST}`; };
+    assert.equal(startTicks(4101, { platform: "linux", read }), 98765);
+    assert.deepEqual(asked, ["/proc/4101/stat"]);
+    assert.equal(startTicks(4101, { platform: "darwin", read }), null);
+    for (const pid of [0, 1, -4101, 4.5, "4101", undefined]) assert.equal(startTicks(pid, { platform: "linux", read }), null, String(pid));
+    assert.equal(startTicks(4101, { platform: "linux", read: () => "" }), null, "a pid that is gone");
+    assert.equal(asked.length, 1);
+});
+
+test("startTicks: this process has a start in clock ticks that stays the same", { skip: process.platform !== "linux" && "/proc is Linux only" }, () => {
+    const first = startTicks(process.pid);
+    assert.equal(Number.isInteger(first) && first > 0, true, String(first));
+    assert.equal(startTicks(process.pid), first);
 });

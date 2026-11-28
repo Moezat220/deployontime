@@ -894,6 +894,20 @@ test("sameProcess: strict answers false when the start time or the age cannot be
     assert.equal(sameProcess(4242, Date.now() - 2000, { isAlive, ages: () => new Map([[4242, 2]]), strict: true }), true);
 });
 
+test("runnerActive: after a clock step a live runner with equal ticks is active; other ticks are a dead runner", async () => {
+    const { runnerActive, sameProcess: same } = await import("./jobs.mjs");
+    const now = Date.now();
+    const job = { request: { createdAt: now - 60_000 }, pid: { runnerPid: 4321, runnerStartedAt: now - 60_000, runnerTicks: 61_000 } };
+    for (const step of [3_600_000, -3_600_000]) {
+        const shifted = (ticks) => (pid, at, opts) => same(pid, at, {
+            ...opts, isAlive: () => true, ages: () => new Map([[4321, 60]]), now: now + step, readTicks: () => ticks,
+        });
+        assert.equal(runnerActive(job, now, shifted(61_000)), true, `step ${step}`);
+        assert.equal(runnerActive(job, now, shifted(61_999)), false, `step ${step}`);
+        assert.equal(runnerActive({ ...job, pid: { ...job.pid, runnerTicks: undefined } }, now, shifted(61_000)), false, "no ticks: the age decides");
+    }
+});
+
 test("runnerActive: a dead runner whose pid now leads some other process group is not brought back to life", async () => {
     const { runnerActive } = await import("./jobs.mjs");
     const groupOnly = (pid, born, opts) => Boolean(opts?.group);

@@ -26,7 +26,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { localWall, localZone } from "./cron.mjs";
 import { cmdSchedule, newId } from "./schedule.mjs";
-import { BORN, processGone, snapshot } from "./slots.mjs";
+import { OWNER, processGone, snapshot } from "./slots.mjs";
 import { makeLog, runProgram, stableNode, tickEnv, tickInstalled } from "./tick-install.mjs";
 
 const CLI_FILE = fileURLToPath(import.meta.url);
@@ -300,7 +300,7 @@ export function scheduleDeps({ files }, zone, env = process.env) {
         where: { node: stableNode(node, env.PATH), cli: CLI_FILE, env: tickEnv(env, files.home), log: files.tickLog },
     };
     return {
-        now: Date.now, wall: localWall, zone, uid: process.getuid?.(), owner: { pid: process.pid, born: BORN },
+        now: Date.now, wall: localWall, zone, uid: process.getuid?.(), owner: OWNER,
         isGone: (entry) => processGone(entry),
         pause: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), newId,
         cwd: () => process.cwd(), print: console.log, say, spawn: spawnProcess, env, node, cli: CLI_FILE,

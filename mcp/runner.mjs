@@ -9,14 +9,18 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { writeJsonAtomic } from "../queue/files.mjs";
+import { startTicks } from "../queue/linux.mjs";
 import { RERUN_MARKER } from "../queue/lost.mjs";
 import { isMainModule } from "../queue/settings.mjs";
 import { jobFiles, readJob } from "./jobs.mjs";
 
 const CLI = fileURLToPath(new URL("../queue/cli.mjs", import.meta.url));
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"];
-// When this process started (wall clock, ms), to tell it from a later process that is given the same pid.
+// When this process started (wall clock, ms), to tell it from a later process that is given the same pid; on Linux also
+// in clock ticks since boot, which a change of the wall clock cannot move.
 const BORN = Math.round(Date.now() - process.uptime() * 1000);
+const TICKS = startTicks(process.pid);
+const ticksField = (name, ticks) => (Number.isInteger(ticks) ? { [name]: ticks } : {});
 
 /** Runs the job and resolves with the runner's exit code: 0 once the exit file is written, 2 when the job cannot be
  *  read. Nothing in here ends the process. */
@@ -50,7 +54,12 @@ export function runJobFromRequest(dir, id) {
     const forward = FORWARDED.map((signal) => [signal, () => { try { child.kill(signal); } catch { /* gone */ } }]);
     for (const [signal, handler] of forward) process.on(signal, handler);
     try {
-        if (child.pid) writeJsonAtomic(files.pid, { runnerPid: process.pid, runnerStartedAt: BORN, queuePid: child.pid, startedAt });
+        if (child.pid) {
+            writeJsonAtomic(files.pid, {
+                runnerPid: process.pid, runnerStartedAt: BORN, ...ticksField("runnerTicks", TICKS), queuePid: child.pid, startedAt,
+                ...ticksField("queueTicks", startTicks(child.pid)),
+            });
+        }
     } catch { /* the job still runs; queue_job reports it as lost once START_GRACE_MS has passed */ }
     return new Promise((resolve) => {
         let ended = false;

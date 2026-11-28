@@ -2,6 +2,7 @@
 // Every walk over a process table and every group signal of the queue goes through here.
 import { probeProcessAges, probeProcessTree } from "./probes.mjs";
 import { parseElapsed, psRows } from "./ps.mjs";
+import { startTicks } from "./linux.mjs";
 
 // The longest chain of parents followed, so a damaged table can never keep a walk going.
 const MAX_DEPTH = 64;
@@ -16,16 +17,29 @@ export function alive(pid) {
     } catch (e) { return e.code === "EPERM"; }
 }
 
+/** Whether the process with this pid started at the given clock tick since boot (see startTicks): true or false, or
+ *  null when ticks is not given or the pid's own cannot be read, as on macOS. */
+export function sameTicks(pid, ticks, readTicks = startTicks) {
+    if (!Number.isInteger(ticks)) return null;
+    const own = readTicks(pid);
+    return Number.isInteger(own) ? own === ticks : null;
+}
+
 /** True while the process with this pid is the one that wrote startedAt (ms) when it began: a pid that a later
  *  process was given counts as gone. ages: pid to seconds run, as `ps` reports it. strict: when the start time or the
  *  age cannot be read, answer false instead of true; used before sending a signal, so a stranger is never stopped.
  *  group: the process group the process belongs to. On Linux `ps` counts an age from the boot, so after the wall
  *  clock is set by more than a few seconds every live process seems to have started at another time; without strict,
- *  a live pid whose age alone disagrees still counts as the same while its group has a member (hasGroup). */
+ *  a live pid whose age alone disagrees still counts as the same while its group has a member (hasGroup). ticks: the
+ *  start of the process in clock ticks since boot, kept on Linux (startTicks); when it is given and the pid's own can
+ *  be read (readTicks), the two alone decide, whatever the wall clock says. */
 export function sameProcess(pid, startedAt, {
     isAlive = alive, ages = (pids) => parseElapsed(probeProcessAges(pids)), strict = false, group, hasGroup = (pgid) => alive(-pgid), now = Date.now(),
+    ticks, readTicks = startTicks,
 } = {}) {
     if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return false;
+    const same = sameTicks(pid, ticks, readTicks);
+    if (same !== null) return same;
     if (!Number.isFinite(startedAt)) return !strict;
     const seconds = ages([pid]).get(pid);
     if (seconds === undefined && strict) return false;

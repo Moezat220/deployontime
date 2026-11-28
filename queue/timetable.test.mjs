@@ -9,6 +9,7 @@ import { join } from "node:path";
 isolateProcess("timetable");
 const { changeSchedule, jobProblem, readSchedule, scheduleTrust, takeLock, writeSchedule } = await import("./timetable.mjs");
 const { paths } = await import("./settings.mjs");
+const { processGone } = await import("./slots.mjs");
 
 const JOB = {
     id: "0a1b2c3d", label: "shop-api: lint", cwd: "/srv/shop-api", command: ["npm", "run", "lint"], every: "1h", enabled: true,
@@ -180,4 +181,15 @@ test("changeSchedule: writes what the change gives, writes nothing on an error, 
     assert.match(changeSchedule(paths({ DOTIME_HOME: f.home }), ME, () => assert.fail("must not run"), {
         ...lockDeps, isGone: () => true,
     }).error, /cannot be used/);
+});
+
+test("takeLock: a lock that names pid 0 or 1 has no live holder and is taken over", () => {
+    for (const pid of [0, 1]) {
+        const f = files();
+        writeFileSync(f.scheduleLock, JSON.stringify({ pid, born: NOW }));
+        const release = takeLock(f.scheduleLock, ME, { isGone: processGone, now: NOW });
+        assert.equal(typeof release, "function", `pid ${pid}`);
+        assert.equal(JSON.parse(readFileSync(f.scheduleLock, "utf8")).pid, ME.pid);
+        release();
+    }
 });

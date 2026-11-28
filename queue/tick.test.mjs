@@ -51,7 +51,7 @@ function bench(jobs, { live = new Set() } = {}) {
             return { pid, on() {}, unref() {} };
         },
         env: { PATH: "/usr/bin:/bin", DOTIME_HOME: files.home, DOTIME_JOB: "slot-0", DOTIME_PARENT: "slot-0", DOTIME_NO_SKIP: "1" },
-        node: "/opt/node/bin/node", cli: "/opt/deployontime/queue/cli.mjs",
+        node: "/opt/node/bin/node", cli: "/opt/deployontime/queue/cli.mjs", startTicks: () => null,
         notify: (title, message) => seen.notices.push([title, message]),
         print: (line) => seen.printed.push(line), say: (line) => seen.said.push(line),
     };
@@ -89,6 +89,24 @@ test("stillGoing: only the pid of the last start counts, and only while it is th
     assert.deepEqual(asked, [{ pid: 5001, born: T0 }]);
     assert.equal(processGone({ pid: process.pid, born: BORN }), false, "this process, checked the way the slots are");
     assert.equal(processGone({ pid: process.pid, born: BORN - 3_600_000 }), true, "the same pid with another start time");
+});
+
+test("stillGoing: the start in clock ticks of the last run is kept and decides, whatever the clock says", () => {
+    const b = bench([job()]);
+    b.deps.startTicks = (pid) => (pid === 5001 ? 88_000 : null);
+    assert.equal(b.tick(T0 + MINUTE), 0);
+    const [stored] = b.stored();
+    assert.deepEqual([stored.lastPid, stored.lastTicks], [5001, 88_000]);
+    const asked = [];
+    stillGoing(stored, (owner) => asked.push(owner));
+    assert.deepEqual(asked, [{ pid: 5001, born: T0 + MINUTE, ticks: 88_000 }]);
+    const stepped = (ticks) => (entry) => processGone(entry, {
+        isAlive: () => true, ages: () => new Map([[5001, 1]]), now: T0 + MINUTE + 3_600_000, readTicks: () => ticks,
+    });
+    assert.equal(stillGoing(stored, stepped(88_000)), true, "an hour's clock step, equal ticks: still going");
+    assert.equal(stillGoing(stored, stepped(88_001)), false, "other ticks: the pid was reused");
+    assert.equal(stillGoing(job({ lastPid: 0, lastBorn: T0 }), processGone), false, "pid 0 is never a run");
+    assert.equal(stillGoing(job({ lastPid: 1, lastBorn: T0 }), processGone), false, "nor pid 1");
 });
 
 test("tick: nothing due prints nothing, starts nothing, writes nothing and exits 0", () => {

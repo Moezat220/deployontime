@@ -341,7 +341,7 @@ export function rerunLost(ctx, now = Date.now(), { make = createJob } = {}) {
         const { request } = job;
         if (!request?.rerunIfLost || request.rerunOf || job.rerun || job.exit || !job.pid) continue;
         if (runnerActive(job, now, ctx.sameProcess)) continue;
-        if (ctx.sameProcess(job.pid.queuePid, job.pid.startedAt, { group: job.pid.runnerPid })) continue;
+        if (ctx.sameProcess(job.pid.queuePid, job.pid.startedAt, { group: job.pid.runnerPid, ticks: job.pid.queueTicks })) continue;
         rows ??= parseLines(readLines(ctx.files.journal));
         const line = journalLine(request, job.pid, rows);
         if (line && !isLost(line)) continue;

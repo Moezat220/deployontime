@@ -855,6 +855,8 @@ Its worktree may remain under `$DOTIME_HOME/worktrees`; `dotime-queue worktrees`
 On Linux `ps` counts the age of a process from the boot, so when the clock is set by more than a few seconds every
 live process seems to have started at another time. A holder whose pid is alive and whose age alone disagrees is
 therefore taken for gone only once its job's process group is gone too, and `status` writes nothing for a live run.
+On Linux the slot also keeps the process start in clock ticks since boot, so a clock change cannot make a live holder
+look gone; the same goes for the other files below, the schedule lock, the tick's last run and the MCP runner.
 
 A `lost` line means the machine or the queue process died, not the code. It counts in no failure rule: not for the
 [repeated-failure stop](#repeated-failures), [flaky checks](#flaky-checks), [run limits](#run-limits), pass stamps or
@@ -1282,7 +1284,9 @@ Environment variables:
 | `mcp-jobs/` | The jobs `dotime-mcp` started: per job id the request (`.json`), the runner and queue pids (`.pid`), how the queue process ended (`.exit`), its output (`.log`) and, for a lost job that was started again, the new job's id (`.rerun`). Removed by `dotime-mcp` 7 days after the job started, or sooner beyond 200 finished jobs; a job whose runner is still alive is kept. |
 
 A file in `slots/`, `line/`, `nested/` or `places/` is also removed when its pid now belongs to a process that
-started later.
+started later, and when its pid is not a whole number above 1. On Linux each of these files also keeps its process's
+start in clock ticks since boot (`ticks`); while the pid's own can be read, the two alone tell whether it is the same
+process, so a change of the wall clock cannot make a live holder look gone.
 
 Each line of `journal.jsonl` is one JSON object with `v` (the format, now 1), `label`, `project`, `projectKey`, `cwd`,
 `priority`, `queuedAt`, `startedAt`, `endedAt` (times in ISO form), `waitMin`, `runMin`, `outcome`, `exit`, `waitBy`
@@ -1355,7 +1359,7 @@ module opens a network connection; only a `DOTIME_NOTIFY_CMD` that you set can.
 | `git.mjs` | The queue's git calls, read-only and with time limits; the repository's top folder for `setup`. | library | Runs `git`. |
 | `project.mjs` | The project of a job: label prefix, repository name or folder name. | library | Runs `git` through `git.mjs`. |
 | `probes.mjs` | Readings from the operating system, one function each, with a macOS and a Linux branch where they differ. | library | Runs `ps`, on macOS also `memory_pressure`, `sysctl`, `pmset`, `osascript`, `launchctl`, `plutil`, on Linux `notify-send`; reads `/proc/meminfo` and the disk through `statfs`. |
-| `linux.mjs` | Readings Linux keeps in `/proc` and `/sys`, with their parsers. | library | Reads `/proc/meminfo` and `/sys/class/power_supply`. |
+| `linux.mjs` | Readings Linux keeps in `/proc` and `/sys`, with their parsers. | library | Reads `/proc/meminfo`, `/proc/<pid>/stat` and `/sys/class/power_supply`. |
 | `ps.mjs` | Parsers for `ps` output. | library | None. |
 | `proctree.mjs` | Process trees: descendants, ancestors, a job's pids and CPU; group signals and stops. | library | Sends signals; runs `ps` when no listing is given. |
 | `files.mjs` | JSON read with warnings, atomic JSON write, removal of abandoned temporary files, append with folder. | library | Reads, writes and removes the files it is handed. |

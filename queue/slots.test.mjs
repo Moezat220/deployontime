@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { isolateProcess, tempDir } from "./testkit.mjs";
 
 isolateProcess("slots");
-const { addNested, enqueue, releaseSlot, snapshot, takePlace, takeSlot, updateSlot } = await import("./slots.mjs");
+const { addNested, enqueue, processGone, releaseSlot, snapshot, takePlace, takeSlot, TICKS, updateSlot } = await import("./slots.mjs");
+const { startTicks } = await import("./linux.mjs");
 
 const MINUTE = 60_000;
 const newDirs = () => { const home = tempDir("slots"); return { slots: join(home, "slots"), waitingLine: join(home, "line") }; };
@@ -205,4 +206,71 @@ test("takePlace: hands out at most max places per parent, frees one only for its
     assert.deepEqual(snap.places.map((p) => p.file).sort(), [other, second].sort());
     assert.equal(existsSync(first), false, "the place of a dead run is pruned");
     assert.equal(takePlace(process.pid, "docs-site: e2e", "slot-0.6000", 2, dirs), first);
+});
+
+test("snapshot: a slot file with pid 0, 1 or one that is no number names no holder; it is freed through a claim and taken again", () => {
+    const home = tempDir("slots-bad-pid");
+    const dirs = { slots: join(home, "slots"), waitingLine: join(home, "line"), lost: join(home, "lost"), journal: join(home, "journal.jsonl") };
+    fs.mkdirSync(dirs.slots, { recursive: true });
+    const bad = [0, 1, "x"];
+    bad.forEach((pid, n) => writeFileSync(join(dirs.slots, `slot-${n}.json`), JSON.stringify({ pid, label: "docs-site: build", at: 1 })));
+    const live = takeSlot(process.pid, "docs-site: lint", 4, {}, dirs);
+    assert.equal(live, join(dirs.slots, "slot-3.json"));
+    const seen = snapshot({ dirs, now: Date.now() });
+    assert.deepEqual(seen.holders.map((h) => h.file), [live], "a reader lists only the real holder");
+    const { holders } = snapshot({ dirs, now: Date.now(), prune: true });
+    assert.deepEqual(holders.map((h) => h.pid), [process.pid], "the live holder is untouched");
+    assert.deepEqual(readdirSync(dirs.slots).sort(), ["slot-3.json"]);
+    assert.deepEqual(readdirSync(dirs.lost), [], "each claim is gone again");
+    assert.equal(existsSync(dirs.journal), false, "no run started, so no lost line");
+    assert.equal(takeSlot(process.pid, "docs-site: test suite", 4, {}, dirs), join(dirs.slots, "slot-0.json"));
+});
+
+test("processGone: a pid that is not a whole number above 1 names no process, whatever is alive", () => {
+    for (const pid of [0, 1, -1, "x", 4.5, undefined]) assert.equal(processGone({ pid, born: 1 }, { isAlive: allAlive }), true, String(pid));
+    assert.equal(processGone({ pid: process.pid }), false, "a live pid without a start time stays");
+});
+
+test("takeSlot, enqueue: on Linux this process's entries keep its start in clock ticks since boot; elsewhere none", () => {
+    const dirs = newDirs();
+    const slot = read(takeSlot(process.pid, "docs-site: build", 1, {}, dirs));
+    const ticket = read(enqueue(process.pid, "docs-site: build", false, dirs, 9_000));
+    const expected = startTicks(process.pid);
+    assert.equal(TICKS, expected);
+    assert.deepEqual([slot.ticks, ticket.ticks], expected === null ? [undefined, undefined] : [expected, expected]);
+    assert.equal(read(takeSlot(4101, "docs-site: lint", 2, {}, dirs)).ticks, undefined, "another process's entry has none");
+});
+
+// A holder that has claimed a slot but not started its command: no pgid, so before ticks only its age could tell.
+const claimed = (born, ticks) => ({ pid: 4401, label: "shop-api: e2e", at: born + 500, born, ...(ticks === undefined ? {} : { ticks }) });
+const clockStep = (entry, stepMs) => ({
+    isAlive: allAlive, now: entry.born + 10 * MINUTE + stepMs, ages: (pids) => new Map(pids.map((pid) => [pid, 600])),
+});
+
+test("snapshot, processGone: after a clock step of an hour either way, equal ticks keep a claimed holder that has not started", () => {
+    for (const step of [3_600_000, -3_600_000]) {
+        const dirs = newDirs(), born = 50_000_000;
+        fs.mkdirSync(dirs.slots, { recursive: true });
+        const entry = claimed(born, 777_000);
+        writeFileSync(join(dirs.slots, "slot-0.json"), JSON.stringify(entry));
+        const opts = { ...clockStep(entry, step), readTicks: () => 777_000 };
+        assert.equal(processGone(entry, opts), false, `step ${step}`);
+        assert.deepEqual(snapshot({ dirs, ...opts, prune: true }).holders.map((h) => h.pid), [4401], `step ${step}`);
+        assert.equal(existsSync(join(dirs.slots, "slot-0.json")), true);
+        // The same step without ticks: the age alone decides, as before.
+        assert.equal(processGone(claimed(born), opts), true, `no ticks, step ${step}`);
+    }
+});
+
+test("snapshot, processGone: other ticks are a reused pid even when the age agrees; ticks that cannot be read change nothing", () => {
+    const dirs = newDirs(), born = 50_000_000;
+    fs.mkdirSync(dirs.slots, { recursive: true });
+    const entry = claimed(born, 777_000);
+    writeFileSync(join(dirs.slots, "slot-0.json"), JSON.stringify(entry));
+    const agrees = clockStep(entry, 0);
+    assert.equal(processGone(entry, { ...agrees, readTicks: () => 777_001 }), true);
+    assert.equal(processGone(entry, { ...agrees, readTicks: () => null }), false, "unreadable: the age agrees");
+    assert.equal(processGone(entry, { ...clockStep(entry, 3_600_000), readTicks: () => null }), true, "unreadable: the age disagrees");
+    assert.deepEqual(snapshot({ dirs, ...agrees, readTicks: () => 777_001, prune: true }).holders, []);
+    assert.deepEqual(readdirSync(dirs.slots), [], "the reused pid's slot is free");
 });

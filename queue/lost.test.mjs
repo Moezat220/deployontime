@@ -178,6 +178,20 @@ test("sameProcess: a live pid whose age alone disagrees is the same process whil
     assert.equal(sameProcess(4300, at, { ...opts, ages: () => new Map([[4300, 3600]]) }), true, "an age that agrees");
 });
 
+test("sameProcess: equal ticks are the same process after a clock step either way, also when strict; other ticks never", () => {
+    const at = Date.UTC(2031, 4, 6, 10, 0);
+    for (const step of [3_600_000, -3_600_000]) {
+        const opts = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000 + step, ticks: 52_000, readTicks: () => 52_000 };
+        assert.equal(sameProcess(4300, at, opts), true, `step ${step}`);
+        assert.equal(sameProcess(4300, at, { ...opts, strict: true }), true, `strict, step ${step}`);
+    }
+    const agrees = { isAlive: () => true, ages: () => new Map([[4300, 1]]), now: at + 1000, ticks: 52_000 };
+    assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => 52_001 }), false, "other ticks, the age agrees");
+    assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => 52_001, group: 4300, hasGroup: () => true }), false, "nor its group");
+    assert.equal(sameProcess(4300, at, { ...agrees, readTicks: () => null }), true, "unreadable: the age decides");
+    assert.equal(sameProcess(4300, at, { ...agrees, isAlive: () => false, readTicks: () => 52_000 }), false, "a dead pid");
+});
+
 test("claim race: finders with old readings of dead holders, in a loop, never free the slot of a live holder", async () => {
     const files = home();
     mkdirSync(files.slots, { recursive: true });

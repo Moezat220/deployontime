@@ -80,6 +80,13 @@ test("maxLogAgeMs: a calendar job is judged by how often it fires", () => {
     assert.equal(maxLogAgeMs({ StartCalendarInterval: { Day: 15, Hour: 2 } }), 32 * DAY);
 });
 
+test("maxLogAgeMs: a calendar entry with neither Minute nor Hour fires every minute, so the half-hour minimum", () => {
+    assert.equal(maxLogAgeMs({ StartCalendarInterval: {} }), 30 * MINUTE);
+    assert.equal(maxLogAgeMs({ StartCalendarInterval: [{}] }), 30 * MINUTE);
+    assert.equal(maxLogAgeMs({ StartCalendarInterval: [{ Hour: 2 }, {}] }), 30 * MINUTE);
+    assert.equal(maxLogAgeMs({ StartCalendarInterval: { Minute: 0 } }), 3 * HOUR, "hourly, unchanged");
+});
+
 test("maxLogAgeMs: null for a job without a schedule", () => {
     assert.equal(maxLogAgeMs({ RunAtLoad: true }), null);
     assert.equal(maxLogAgeMs({ KeepAlive: { SuccessfulExit: false } }), null);

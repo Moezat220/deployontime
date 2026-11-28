@@ -9,6 +9,26 @@ export function readText(file) {
     try { return readFileSync(file, "utf8"); } catch { return ""; }
 }
 
+/** The start of a process in clock ticks since boot, field 22 (starttime) of a /proc/<pid>/stat line, or null when
+ *  the line does not have it. The fields are counted from after the last ")", because the name of the program (the
+ *  second field, in parentheses) may itself hold spaces and parentheses. */
+export function parseStartTicks(text) {
+    const line = String(text ?? "");
+    const close = line.lastIndexOf(")");
+    if (close < 0) return null;
+    // After the name come the state (field 3) and the fields after it, so starttime is the 20th.
+    const value = line.slice(close + 1).trim().split(/\s+/)[19];
+    return /^\d+$/.test(value ?? "") ? Number(value) : null;
+}
+
+/** The start of the process with this pid in clock ticks since boot, or null when not on Linux, for a pid that is not
+ *  a whole number above 1, or when /proc cannot be read. Unlike a wall-clock start time it does not move when the clock
+ *  is set, so it tells a live process from a later one with the same pid. */
+export function startTicks(pid, { platform = process.platform, read = readText } = {}) {
+    if (platform !== "linux" || !Number.isInteger(pid) || pid <= 1) return null;
+    return parseStartTicks(read(`/proc/${pid}/stat`));
+}
+
 /** Parses /proc/meminfo into a Map from field name to its value in kB. */
 export function parseMeminfo(text) {
     const fields = new Map();

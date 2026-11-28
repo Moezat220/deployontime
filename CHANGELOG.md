@@ -9,6 +9,14 @@ What changed in each release of the `deployontime` package (`dotime-queue` and `
   `StartInterval` 60, so it runs at the start of every minute as cron and the systemd timer do, does not drift, and
   runs once on wake for the minutes the Mac slept through. Run `dotime-queue schedule install` again to switch a tick
   installed by an older version.
+- **A clock change on Linux no longer makes a live job look gone.** `ps` there counts a process's age from the boot,
+  so after the wall clock was set, a job that had claimed a slot but not yet started its command could lose its slot
+  to another job. Slot, line, nested-run and place files, the schedule lock, the tick's last run and the MCP runner
+  now also keep the process start in clock ticks since boot, which the clock cannot move; macOS and files written by
+  an older version are judged as before.
+- A slot or lock file that names pid 0 or 1, or a pid that is no number, no longer holds its slot for ever: it is
+  freed like the file of a holder that is gone. `queue/schedule-check.mjs` gives a job whose calendar entry sets
+  neither `Minute` nor `Hour`, which fires every minute, the half-hour log age limit instead of three hours.
 
 ## 0.3.2
 
